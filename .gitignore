@@ -18,3 +18,6 @@ bin/
 # runtime stats + binary backups
 stats*.jsonl
 *.exe~
+
+# local model catalog + custom provider keys (regenerate: scripts/scrape_playground_models.py)
+internal/models/playground_models.json
