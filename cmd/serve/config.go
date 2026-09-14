@@ -53,6 +53,10 @@ func buildConfig(addr string) (cfg *config.Config, cfgPath string, err error) {
 	cfg.RemoteManagement.DisableAutoUpdatePanel = true
 	cfg.Plugins.Enabled = false
 	cfg.LoggingToFile = false
+	// A transient upstream error must not pull a provider out of routing:
+	// during cooldown the model would fall through to the nvidia executor
+	// and fail with "unknown playground model".
+	cfg.DisableCooling = true
 	return cfg, cfgPath, nil
 }
 

@@ -21,7 +21,7 @@ func TestNvidiaModelHookReregisters(t *testing.T) {
 	t.Cleanup(func() { reg.UnregisterClient(clientID) })
 
 	reg.UnregisterClient(clientID)
-	hook := &nvidiaModelHook{models: models}
+	hook := &nvidiaModelHook{getModels: func() []*cliproxy.ModelInfo { return models }}
 	hook.OnModelsUnregistered(context.Background(), nvidiaProvider, clientID)
 
 	got := reg.GetAvailableModelsByProvider(nvidiaProvider)

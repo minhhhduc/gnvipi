@@ -56,7 +56,7 @@ func ensureNvidiaAuth(core *coreauth.Manager) {
 
 // startNvidiaReconciler heals races with watcher model/executor registration.
 // Fast for the first 90s after startup, then a slow heartbeat forever.
-func startNvidiaReconciler(ctx context.Context, core *coreauth.Manager, exec coreauth.ProviderExecutor, models []*cliproxy.ModelInfo) {
+func startNvidiaReconciler(ctx context.Context, core *coreauth.Manager, exec coreauth.ProviderExecutor, getModels func() []*cliproxy.ModelInfo) {
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -67,8 +67,15 @@ func startNvidiaReconciler(ctx context.Context, core *coreauth.Manager, exec cor
 			case <-ctx.Done():
 				return
 			case now := <-ticker.C:
-				ensureNvidiaAuth(core)
-				bindNvidiaRuntime(core, exec, models)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("nvidia reconciler: recovered from panic: %v", r)
+						}
+					}()
+					ensureNvidiaAuth(core)
+					bindNvidiaRuntime(core, exec, getModels())
+				}()
 				if !slow && now.After(fastUntil) {
 					ticker.Reset(5 * time.Second)
 					slow = true
@@ -81,9 +88,9 @@ func startNvidiaReconciler(ctx context.Context, core *coreauth.Manager, exec cor
 // nvidiaAuthHook restores executor+models whenever cliproxy registers/updates nvidia auth.
 type nvidiaAuthHook struct {
 	coreauth.NoopHook
-	core   *coreauth.Manager
-	exec   coreauth.ProviderExecutor
-	models []*cliproxy.ModelInfo
+	core      *coreauth.Manager
+	exec      coreauth.ProviderExecutor
+	getModels func() []*cliproxy.ModelInfo
 }
 
 func (h *nvidiaAuthHook) OnAuthRegistered(_ context.Context, auth *coreauth.Auth) {
@@ -101,8 +108,11 @@ func (h *nvidiaAuthHook) rebind(auth *coreauth.Auth) {
 	if h.exec != nil && h.core != nil {
 		h.core.RegisterExecutor(h.exec)
 	}
-	if len(h.models) > 0 {
-		cliproxy.GlobalModelRegistry().RegisterClient(auth.ID, nvidiaProvider, h.models)
+	if h.getModels != nil {
+		models := h.getModels()
+		if len(models) > 0 {
+			cliproxy.GlobalModelRegistry().RegisterClient(auth.ID, nvidiaProvider, models)
+		}
 	}
 	if h.core != nil {
 		h.core.RefreshSchedulerEntry(auth.ID)
@@ -111,16 +121,16 @@ func (h *nvidiaAuthHook) rebind(auth *coreauth.Auth) {
 
 // nvidiaModelHook restores catalog when registerModelsForAuth UnregisterClient's nvidia.
 type nvidiaModelHook struct {
-	core   *coreauth.Manager
-	exec   coreauth.ProviderExecutor
-	models []*cliproxy.ModelInfo
+	core      *coreauth.Manager
+	exec      coreauth.ProviderExecutor
+	getModels func() []*cliproxy.ModelInfo
 }
 
 func (h *nvidiaModelHook) OnModelsRegistered(context.Context, string, string, []*cliproxy.ModelInfo) {
 }
 
 func (h *nvidiaModelHook) OnModelsUnregistered(_ context.Context, provider, clientID string) {
-	if h == nil || len(h.models) == 0 || clientID == "" {
+	if h == nil || h.getModels == nil || clientID == "" {
 		return
 	}
 	if provider != "" && !strings.EqualFold(provider, nvidiaProvider) {
@@ -129,7 +139,10 @@ func (h *nvidiaModelHook) OnModelsUnregistered(_ context.Context, provider, clie
 	if h.exec != nil && h.core != nil {
 		h.core.RegisterExecutor(h.exec)
 	}
-	cliproxy.GlobalModelRegistry().RegisterClient(clientID, nvidiaProvider, h.models)
+	models := h.getModels()
+	if len(models) > 0 {
+		cliproxy.GlobalModelRegistry().RegisterClient(clientID, nvidiaProvider, models)
+	}
 	if h.core != nil {
 		h.core.RefreshSchedulerEntry(clientID)
 	}
