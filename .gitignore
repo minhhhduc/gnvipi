@@ -11,3 +11,6 @@
 
 # local build output
 bin/
+
+# runtime logs
+*.log
