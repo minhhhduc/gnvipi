@@ -117,12 +117,12 @@ func TestBuildRequestRoutesPerModel(t *testing.T) {
 		endpoint string
 		fnID     string
 	}{
-		"z-ai/glm-5.2": {
-			"https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2",
-			"3b9748d8-1d85-40e8-8573-0eeaa63a4b63",
+		"deepseek-ai/deepseek-v4-flash-0731": {
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-flash-0731",
+			"281478d0-f307-49f4-9e0f-080b63b16c47",
 		},
 		"deepseek-ai/deepseek-v4-pro": {
-			"https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro",
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro",
 			"74f02205-c7ba-438f-b81a-2537955bd7ec",
 		},
 	}

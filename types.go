@@ -166,7 +166,7 @@ const (
 	DefaultModel = "z-ai/glm-5.2"
 
 	// PredictEndpoint is the reverse-engineered Playground API endpoint.
-	PredictEndpoint = "https://api.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2"
+	PredictEndpoint = "https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5.2"
 
 	// NVFunctionID is the static NVCF function identifier for GLM-5.2.
 	NVFunctionID = "3b9748d8-1d85-40e8-8573-0eeaa63a4b63"

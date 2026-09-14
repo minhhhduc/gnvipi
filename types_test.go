@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Fixtures captured from api.ngc.nvidia.com playground predict (z-ai/glm-5.2).
+// Fixtures captured from buildapi.ngc.nvidia.com playground predict (z-ai/glm-5.2).
 
 const fixtureNonStreamCold = `{
   "choices": [

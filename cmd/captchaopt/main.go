@@ -24,7 +24,7 @@ import (
 	"glm52-nvidia/internal/captcha"
 )
 
-const playgroundURL = "https://build.nvidia.com/z-ai/glm-5.2/playground"
+const playgroundURL = "https://build.nvidia.com/deepseek-ai/deepseek-v4-pro/playground"
 
 type mode int
 

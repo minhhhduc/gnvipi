@@ -15,7 +15,7 @@ import (
 
 // --- Client ---
 
-// Client is the GLM-5.2 API client.
+// Client is the NVIDIA Playground API client.
 type Client struct {
 	captchaToken string // reverse-engineered captcha token
 
@@ -62,14 +62,14 @@ func WithDefaults(maxTokens int, seed int, temp, topP float64) Option {
 	}
 }
 
-// WithThinking enables or disables GLM Thinking mode (reasoning_content).
+// WithThinking enables or disables Thinking mode (reasoning_content).
 // Matches NVIDIA Playground / NIM: chat_template_kwargs.enable_thinking.
 // Default when unset: enabled (true), clear_thinking=false.
 func WithThinking(enable bool) Option {
 	return func(c *Client) { c.thinking = &enable }
 }
 
-// New creates a new GLM-5.2 client configured with an hCaptcha token.
+// New creates a new NVIDIA Playground client configured with an hCaptcha token.
 func New(opts ...Option) *Client {
 	c := &Client{
 		httpClient: &http.Client{Timeout: requestTimeout},
