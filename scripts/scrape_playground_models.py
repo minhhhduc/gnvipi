@@ -15,10 +15,17 @@ Data source:
   "nvcfFunctionId" are reported as ok=true -- those are the ones that can
   be called via the anonymous (hCaptcha-gated) predict endpoint.
 
-Output (stdout): JSON with _meta and sorted `models` + `skipped` arrays.
+Output: JSON in the exact runtime schema internal/models/registry.go embeds:
+  {_meta, groups[{publisher, models[{model,slug,namespace,function_id}]}],
+   masks_id[], deleted_id[], providers[]}
+`providers` is preserved from any existing -o target (it holds local API keys);
+otherwise empty. Use `python scripts/scrape_playground_models.py -o out.json`
+(default: stdout). `masks_id`/`deleted_id` start empty (admin UI manages them).
 Output (stderr): summary counts.
 """
+import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -80,7 +87,7 @@ def probe_playground(publisher, slug):
     return {"ok": False, "reason": "no nvcfFunctionId in playground HTML"}
 
 
-def main():
+def main(args):
     sys.stderr.write("# Fetching models page (pageSize=200)...\n")
     slug_pub = get_models_from_page()
     sys.stderr.write(f"#   {len(slug_pub)} models found\n")
@@ -122,12 +129,45 @@ def main():
     for r in bad:
         sys.stderr.write(f"#   {r['model']}: {r.get('reason')}\n")
 
-    print(json.dumps({
-        "_meta": {"count": len(ok), "total": len(results), "namespaces": nss},
-        "models": ok,
-        "skipped": bad,
-    }, indent=2))
+    # Group by publisher into the runtime schema (see internal/models/registry.go).
+    by_pub = {}
+    for r in ok:
+        by_pub.setdefault(r["publisher"], []).append(
+            {"model": r["model"], "slug": r["slug"],
+             "namespace": r["namespace"], "function_id": r["function_id"]})
+    groups = [{"publisher": p, "models": sorted(ms, key=lambda m: m["model"])}
+              for p, ms in sorted(by_pub.items())]
+
+    # Preserve local-only state (API keys, admin toggles) from existing output.
+    keep = {"masks_id": [], "deleted_id": [], "providers": []}
+    out_path = args.out
+    if out_path and os.path.exists(out_path):
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                old = json.load(f)
+            for k in keep:
+                keep[k] = old.get(k, [])
+        except Exception:
+            pass
+
+    doc = {
+        "_meta": {"count": len(ok), "namespaces": nss},
+        "groups": groups,
+        "masks_id": keep["masks_id"],
+        "deleted_id": keep["deleted_id"],
+        "providers": keep["providers"],
+    }
+    text = json.dumps(doc, indent=2)
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+        sys.stderr.write(f"# wrote {out_path}\n")
+    else:
+        print(text)
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("-o", "--out", help="write JSON here instead of stdout")
+    main_args = ap.parse_args()
+    main(main_args)

@@ -31,6 +31,8 @@ the captcha automation, and the admin surface. Inbound gateway API keys are
 ## Quick start
 
 ```powershell
+.\init.ps1                     # one-time: create local model catalog (skips if present)
+
 # Windows (recommended): builds if needed, checks the port, starts with -auto
 .\run.ps1                      # :8080, 3 chromes, pool of 6
 .\run.ps1 -Port 8081          # test instance

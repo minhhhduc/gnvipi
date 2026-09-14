@@ -32,6 +32,8 @@ chạy trên localhost.
 
 ```powershell
 # Windows (khuyên dùng): tự build nếu cần, kiểm port, chạy với -auto
+.\init.ps1                     # 1 lần: tạo model catalog local (có rồi thì bỏ qua)
+
 .\run.ps1                      # :8080, 3 chrome, pool 6
 .\run.ps1 -Port 8081           # instance test
 .\run.ps1 -Claude              # bật gateway + mở Claude Code trỏ vào luôn
