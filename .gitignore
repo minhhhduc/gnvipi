@@ -21,3 +21,6 @@ stats*.jsonl
 
 # local model catalog + custom provider keys (regenerate: scripts/scrape_playground_models.py)
 internal/models/playground_models.json
+
+# python
+__pycache__/
