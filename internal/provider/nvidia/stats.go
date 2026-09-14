@@ -31,6 +31,7 @@ type statEntry struct {
 	requests, errors, streamed, inTok, outTok, msTotal, nMS, lastMS uint64
 	ttfbTotal, ttfbN, ttfbLast, ttfbMin, ttfbMax                    uint64
 	firstOK, lastOK                                                 time.Time
+	series                                                          []*MinuteStats // per-minute ring for this model, newest last
 }
 
 // MinuteStats is one minute of global activity for the admin charts.
@@ -54,14 +55,14 @@ const eventsKeep = 200
 // RequestEvent is one upstream call: what it cost, how long it ran, and
 // whether it failed. Newest first when read.
 type RequestEvent struct {
-	Time    time.Time `json:"time"`
-	Model   string    `json:"model"`
-	In      uint64    `json:"input_tokens"`
-	Out     uint64    `json:"output_tokens"`
-	MS      uint64    `json:"ms"`
-	TTFB    uint64    `json:"ttfb_ms"`
-	Stream  bool      `json:"streamed"`
-	Err     bool      `json:"error"`
+	Time   time.Time `json:"time"`
+	Model  string    `json:"model"`
+	In     uint64    `json:"input_tokens"`
+	Out    uint64    `json:"output_tokens"`
+	MS     uint64    `json:"ms"`
+	TTFB   uint64    `json:"ttfb_ms"`
+	Stream bool      `json:"streamed"`
+	Err    bool      `json:"error"`
 }
 
 // Stats collects per-model request counters and token usage scraped from
@@ -70,24 +71,24 @@ type RequestEvent struct {
 type Stats struct {
 	mu     sync.Mutex
 	m      map[string]*statEntry
-	series []*MinuteStats  // per-minute global ring, newest last
-	events []RequestEvent  // per-request ring, newest last
+	series []*MinuteStats // per-minute global ring, newest last
+	events []RequestEvent // per-request ring, newest last
 }
 
-// bucket returns (creating if needed) the MinuteStats for t's minute.
-// The slice is a ring capped at seriesKeep entries.
-func (s *Stats) bucket(t time.Time) *MinuteStats {
+// ringBucket returns (creating if needed) the MinuteStats for t's minute at
+// the tail of ring. Each ring is capped at seriesKeep entries.
+func ringBucket(ring *[]*MinuteStats, t time.Time) *MinuteStats {
 	min := t.Truncate(time.Minute)
-	if n := len(s.series); n > 0 && !s.series[n-1].Minute.Equal(min) {
-		s.series = append(s.series, &MinuteStats{Minute: min})
-		if len(s.series) > seriesKeep {
-			s.series = s.series[len(s.series)-seriesKeep:]
-		}
+	if n := len(*ring); n > 0 && !(*ring)[n-1].Minute.Equal(min) {
+		*ring = append(*ring, &MinuteStats{Minute: min})
 	}
-	if len(s.series) == 0 {
-		s.series = append(s.series, &MinuteStats{Minute: min})
+	if len(*ring) == 0 {
+		*ring = append(*ring, &MinuteStats{Minute: min})
 	}
-	return s.series[len(s.series)-1]
+	if len(*ring) > seriesKeep {
+		*ring = (*ring)[len(*ring)-seriesKeep:]
+	}
+	return (*ring)[len(*ring)-1]
 }
 
 // startedAt is process start, exposed so the admin surface can show uptime.
@@ -121,11 +122,15 @@ func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, s
 		s.m[model] = e
 	}
 	e.requests++
-	b := s.bucket(time.Now())
+	now := time.Now()
+	b := ringBucket(&s.series, now)
+	mb := ringBucket(&e.series, now)
 	b.Req++
+	mb.Req++
 	if isErr {
 		e.errors++
 		b.Err++
+		mb.Err++
 		return
 	}
 	if e.firstOK.IsZero() {
@@ -139,6 +144,8 @@ func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, s
 	e.outTok += out
 	b.InTok += in
 	b.OutTok += out
+	mb.InTok += in
+	mb.OutTok += out
 	e.msTotal += ms
 	e.nMS++
 	e.lastMS = ms
@@ -154,6 +161,8 @@ func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, s
 		}
 		b.TTFBSum += tms
 		b.TTFBN++
+		mb.TTFBSum += tms
+		mb.TTFBN++
 	}
 }
 
@@ -193,18 +202,16 @@ func (s *Stats) Snapshot() []ModelStats {
 	return out
 }
 
-// Series returns the last n minutes of global activity (n<=seriesKeep),
-// oldest first. Gaps between minutes are zero-filled up to n minutes.
-func (s *Stats) Series(n int) []MinuteStats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// fillSeries zero-fills ring onto the last n minutes of a now-anchored grid,
+// oldest first, and derives each bucket's TTFBAvg.
+func fillSeries(ring []*MinuteStats, n int) []MinuteStats {
 	if n > seriesKeep {
 		n = seriesKeep
 	}
 	now := time.Now().Truncate(time.Minute)
 	out := make([]MinuteStats, 0, n)
-	byMin := make(map[time.Time]MinuteStats, len(s.series))
-	for _, b := range s.series {
+	byMin := make(map[time.Time]MinuteStats, len(ring))
+	for _, b := range ring {
 		byMin[b.Minute] = *b
 	}
 	for i := n - 1; i >= 0; i-- {
@@ -216,6 +223,26 @@ func (s *Stats) Series(n int) []MinuteStats {
 		if out[i].TTFBN > 0 {
 			out[i].TTFBAvg = out[i].TTFBSum / out[i].TTFBN
 		}
+	}
+	return out
+}
+
+// Series returns the last n minutes of global activity (n<=seriesKeep),
+// oldest first. Gaps between minutes are zero-filled up to n minutes.
+func (s *Stats) Series(n int) []MinuteStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fillSeries(s.series, n)
+}
+
+// ModelSeries returns per-model Series(n) maps, keyed by model. Only models
+// with at least one observed request appear; nil-safe when there are none.
+func (s *Stats) ModelSeries(n int) map[string][]MinuteStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string][]MinuteStats, len(s.m))
+	for model, e := range s.m {
+		out[model] = fillSeries(e.series, n)
 	}
 	return out
 }

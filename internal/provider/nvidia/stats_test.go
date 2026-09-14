@@ -48,3 +48,41 @@ func TestStatsEventsRingAndTTFBAvg(t *testing.T) {
 		t.Fatalf("series ttfb avg = %+v", ser)
 	}
 }
+
+func TestModelSeries(t *testing.T) {
+	const n = 5
+	s := &Stats{m: map[string]*statEntry{}}
+	s.Observe("a", 2, 3, time.Second, 0, false, false)
+	s.Observe("a", 1, 1, time.Second, 10*time.Millisecond, true, false)
+	s.Observe("b", 4, 5, time.Second, 0, false, true) // error: still a request
+	ms := s.ModelSeries(n)
+	if len(ms) != 2 {
+		t.Fatalf("models = %d, want 2", len(ms))
+	}
+	for _, want := range []struct {
+		model string
+		req   uint64
+	}{{"a", 2}, {"b", 1}} {
+		ser, ok := ms[want.model]
+		if !ok {
+			t.Fatalf("model %q absent", want.model)
+		}
+		if len(ser) != n {
+			t.Fatalf("model %q len = %d, want %d", want.model, len(ser), n)
+		}
+		last := ser[n-1]
+		if last.Req != want.req {
+			t.Fatalf("model %q last req = %d, want %d", want.model, last.Req, want.req)
+		}
+	}
+	if a := ms["a"][n-1]; a.Err != 0 || a.InTok != 3 || a.OutTok != 4 || a.TTFBAvg != 10 {
+		t.Fatalf("model a last bucket = %+v", a)
+	}
+	if _, ok := ms["quiet"]; ok {
+		t.Fatal("unobserved model present")
+	}
+	// global series is the sum
+	if g := s.Series(n); g[n-1].Req != 3 {
+		t.Fatalf("global last req = %d, want 3", g[n-1].Req)
+	}
+}

@@ -412,11 +412,12 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"models":       nvidia.GlobalStats.Snapshot(),
-			"series":       nvidia.GlobalStats.Series(60),
-			"events":       nvidia.GlobalStats.Events(200),
-			"started_at":   nvidia.GlobalStats.StartedAt(),
-			"total_frames": nvidia.FramesCount(),
+			"models":          nvidia.GlobalStats.Snapshot(),
+			"series":          nvidia.GlobalStats.Series(60),
+			"series_by_model": nvidia.GlobalStats.ModelSeries(60),
+			"events":          nvidia.GlobalStats.Events(200),
+			"started_at":      nvidia.GlobalStats.StartedAt(),
+			"total_frames":    nvidia.FramesCount(),
 		})
 	case "/admin/models":
 		var payload prefsFile
@@ -988,6 +989,7 @@ if (PAGE === 'dashboard') {
     return '<span class=pb style="color:' + c + ';border-color:' + c + '">' + esc(p) + '</span>' + esc(m.slice(i + 1));
   }
   const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
+  const MCOLS = ['#3987e5', '#d95926', '#2da44e', '#bf4b52', '#8250df', '#1b7c83', '#e3b341', '#218bff']; // per-model chart lines
   const COLS = [
     ['model', 'model', 'model được gọi; badge màu = publisher (model playground NVIDIA) hoặc tên endpoint tự thêm ở /admin'],
     ['requests', 'req', 'số request đã gửi qua gateway (kể cả lỗi)'],
@@ -1010,7 +1012,7 @@ if (PAGE === 'dashboard') {
     ['ttfb_ms', 'TTFB', 'chờ token đầu tiên (chỉ stream)'],
     ['error', 'trạng thái', 'ok = upstream trả 2xx; lỗi = >=400 hoặc rớt kết nối'],
   ];
-  let models = [], series = [], events = [], startedAt = 0;
+  let models = [], series = [], modelSeries = {}, events = [], startedAt = 0;
   let sortKey = 'requests', sortDir = -1, logKey = 'time', logDir = -1;
 
   // Sparkline cho tile: 12 điểm cuối, line key màu series, nền không vẽ.
@@ -1028,7 +1030,7 @@ if (PAGE === 'dashboard') {
 
   // Line chart có crosshair + tooltip. defs: [{key,label,color,fmt}].
   // Một trục Y / chart (không dual-axis); tooltip hiển thị đúng series của chart.
-  let chartDefs = [];
+  let chartDefs = [], chartData = [];
   function lineChart(defs, data) {
     const W = 640, H = 150, PADL = 38, PADR = 10, PADT = 8, PADB = 20;
     if (!data) data = series;
@@ -1054,7 +1056,7 @@ if (PAGE === 'dashboard') {
       paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#171a21" stroke-width="2"/>';
       legend += '<span class=lg><svg width=14 height=8><line x1=0 y1=4 x2=14 y2=4 stroke=' + d.color + ' stroke-width=2 stroke-linecap=round/></svg>' + d.label + '</span>';
     });
-    chartDefs.push(defs);
+    chartDefs.push(defs); chartData.push(data);
     return '<div class=chartbox><div class=chhead>' + legend + '</div>' +
       '<div class=chwrap data-chart>' +
       '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:150px;display:block">' +
@@ -1070,7 +1072,7 @@ if (PAGE === 'dashboard') {
   }
 
   function drawCharts() {
-    chartDefs = [];
+    chartDefs = []; chartData = [];
     const tot = k => models.reduce((s, m) => s + (m[k] || 0), 0);
     const last = series[series.length - 1] || {};
     const reqS = series.map(p => p.requests || 0);
@@ -1099,7 +1101,15 @@ if (PAGE === 'dashboard') {
       lineChart([{key:'requests', label:'requests / phút', color:C.req}]) +
       lineChart([{key:'input_tokens', label:'tokens vào / phút', color:C.in}, {key:'output_tokens', label:'tokens ra / phút', color:C.out}]) +
       lineChart([{key:'ttfb_avg_ms', label:'TTFB tb / phút', color:C.req, fmt:fmtMS}]) +
-      '<div class=note>TTFB = thời gian chờ byte đầu tiên của stream; phút không có request stream nào hiển thị 0.</div>';
+      '<div class=note>TTFB = thời gian chờ byte đầu tiên của stream; phút không có request stream nào hiển thị 0.</div>' +
+      '<div class=note><b>biểu đồ theo model — requests / phút</b></div>' +
+      (Object.keys(modelSeries).length
+        ? Object.entries(modelSeries)
+            .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
+            .sort((a, b) => b[1] - a[1]).slice(0, 8)
+            .map(([m], i) => lineChart([{key:'requests', label:esc(m), color:MCOLS[i % MCOLS.length]}], modelSeries[m] || [])).join('')
+        : '<div class=row><span class=id>chưa có request nào</span></div>') +
+      '<div class=note>mỗi đường = 1 model (kể cả api custom); tối đa 8 model nhiều request nhất</div>';
     armCharts();
   }
 
@@ -1115,7 +1125,7 @@ if (PAGE === 'dashboard') {
         const i = Math.max(0, Math.min(series.length - 1, Math.round((px - 38) / ((640 - 38 - 10) / Math.max(1, series.length - 1)))));
         const vx = 38 + i * (640 - 38 - 10) / Math.max(1, series.length - 1);
         cross.setAttribute('x1', vx); cross.setAttribute('x2', vx);
-        const p = series[i]; if (!p) return;
+        const p = (chartData[ci] || series)[i]; if (!p) return;
         tip.textContent = '';
         const head = document.createElement('div');
         head.className = 'tip-h';
@@ -1193,6 +1203,7 @@ if (PAGE === 'dashboard') {
         const d = await res.json();
         models = d.models || [];
         series = d.series || [];
+        modelSeries = d.series_by_model || {};
         events = d.events || [];
         startedAt = d.started_at ? +new Date(d.started_at) : 0;
         drawCharts();
