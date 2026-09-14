@@ -32,6 +32,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location -Path $PSScriptRoot
 
+# Ensure the local model catalog exists (gitignored - holds per-machine keys).
+$modelsFile = Join-Path $PSScriptRoot 'internal\models\playground_models.json'
+if (-not (Test-Path $modelsFile)) {
+  Write-Host "playground_models.json missing - running init.ps1..." -ForegroundColor DarkGray
+  & (Join-Path $PSScriptRoot 'init.ps1')
+}
+
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
   throw "go is not in PATH"
 }
