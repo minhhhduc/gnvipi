@@ -53,6 +53,10 @@ var messagesOnlyClient = &http.Client{
 	},
 }
 
+// compatClient serves the OpenAI-compat passthrough: plain transport with ALPN,
+// so h1-only upstreams (tokenrouter) don't get h2 frames pasted onto HTTP/1.1.
+var compatClient = &http.Client{}
+
 // customOpenAICompatPassthrough routes custom providers directly. CLIProxyAPI's
 // compatibility registry can lag behind the admin file watcher; the local model
 // catalog must not advertise an alias that then fails with "unknown provider".
@@ -77,7 +81,7 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		model, _ := payload["model"].(string)
 		prov := lookupCustomProvider(p, model)
-		if prov == nil || prov.MessagesOnly || !strings.EqualFold(prov.Name, "tokenharbor") {
+		if prov == nil || prov.MessagesOnly {
 			c.Next()
 			return
 		}
@@ -104,7 +108,7 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 		if v := c.Request.Header.Get("User-Agent"); v != "" {
 			req.Header.Set("User-Agent", v)
 		}
-		resp, err := messagesOnlyClient.Do(req)
+		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(model, start)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream: " + err.Error()})
