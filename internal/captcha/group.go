@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // BrowserGroup fans Extract across n independent Chrome processes.
@@ -46,8 +47,22 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 	for i := 0; i < n; i++ {
 		b, err := g.browserFactory(parent, cfg)
 		if err != nil {
-			g.Close()
-			return nil, fmt.Errorf("captcha browser %d: %w", i, err)
+			target := ""
+			if cfg.URLProvider != nil {
+				target = cfg.URLProvider.PlaygroundURL(parent)
+			}
+			log.Printf("warning: captcha browser %d failed on %s (%v); trying fallback URL", i, target, err)
+			fallbackCfg := cfg
+			fallbackCfg.URLProvider = NewDefaultURLProvider()
+			b, err = g.browserFactory(parent, fallbackCfg)
+			if err != nil {
+				if len(g.browsers) > 0 {
+					log.Printf("warning: captcha browser %d failed fallback (%v); continuing with %d worker(s)", i, err, len(g.browsers))
+					break
+				}
+				g.Close()
+				return nil, fmt.Errorf("captcha browser %d: %w", i, err)
+			}
 		}
 		g.browsers = append(g.browsers, b)
 		g.free <- b
@@ -62,6 +77,216 @@ func (g *BrowserGroup) Len() int {
 	return len(g.browsers)
 }
 
+// ChromeInfo is one Chrome's admin-facing status.
+type ChromeInfo struct {
+	Index    int       `json:"index"`
+	PID      int       `json:"pid"`
+	Busy     bool      `json:"busy"`
+	Paused   bool      `json:"paused"`
+	Warmed   bool      `json:"warmed"`
+	LastOK   time.Time `json:"last_ok"`
+	Extracts uint64    `json:"extracts"` // successful ExtractN borrows since start
+}
+
+// Snapshot returns the status of every Chrome in the group.
+func (g *BrowserGroup) Snapshot() []ChromeInfo {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]ChromeInfo, 0, len(g.browsers))
+	for i, b := range g.browsers {
+		out = append(out, ChromeInfo{
+			Index:    i,
+			PID:      b.PID(),
+			Busy:     b.busy.Load(),
+			Paused:   b.paused.Load(),
+			Warmed:   b.Warmed(),
+			LastOK:   b.LastOK(),
+			Extracts: b.extracts.Load(),
+		})
+	}
+	return out
+}
+
+// Pause takes Chrome i out of rotation: its process is killed immediately and
+// mint attempts stop borrowing it until Resume replaces it. Mint calls while
+// paused fail fast unless another Chrome is free.
+func (g *BrowserGroup) Pause(i int) error {
+	g.mu.Lock()
+	if i < 0 || i >= len(g.browsers) {
+		g.mu.Unlock()
+		return fmt.Errorf("chrome %d not found", i)
+	}
+	b := g.browsers[i]
+	g.mu.Unlock()
+	if b.paused.Swap(true) {
+		return nil // already paused
+	}
+	if b.busy.Load() {
+		// An extract is mid-flight on this Chrome; mark it closed so the
+		// current/next CDP call fails fast and the borrow unwinds. The
+		// in-flight Extract will error and the pool worker backs off.
+		b.Close()
+		return nil
+	}
+	b.Close()
+	log.Printf("captcha chrome %d (pid %d) paused by admin", i, b.PID())
+	return nil
+}
+
+// Resume puts Chrome i back into rotation with a fresh Chrome process. The
+// old process is dropped (Pause already killed it).
+func (g *BrowserGroup) Resume(i int) error {
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return fmt.Errorf("captcha browser group closed")
+	}
+	if i < 0 || i >= len(g.browsers) {
+		g.mu.Unlock()
+		return fmt.Errorf("chrome %d not found", i)
+	}
+	old := g.browsers[i]
+	g.mu.Unlock()
+
+	nb, err := g.browserFactory(g.parent, g.cfg)
+	if err != nil {
+		return fmt.Errorf("spawn chrome: %w", err)
+	}
+
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		nb.Close()
+		return fmt.Errorf("captcha browser group closed")
+	}
+	if i >= len(g.browsers) || g.browsers[i] != old {
+		g.mu.Unlock()
+		nb.Close()
+		return fmt.Errorf("chrome %d replaced meanwhile", i)
+	}
+	g.browsers[i] = nb
+	g.mu.Unlock()
+
+	// The old browser was closed by Pause; clear its pause flag so a stale
+	// Snapshot never shows it paused again (it is gone from g.browsers).
+	old.paused.Store(false)
+	log.Printf("captcha chrome %d resumed (pid %d)", i, nb.PID())
+	return nil
+}
+
+// borrow returns a free, unpaused browser, or an error when every browser is
+// paused or the group is closed. Busy browsers wait (bounded by the caller's
+// ctx — mint eventually proceeds when one frees up).
+func (g *BrowserGroup) borrow() (*Browser, error) {
+	for {
+		g.mu.Lock()
+		closed := g.closed
+		browsers := g.browsers
+		g.mu.Unlock()
+		if closed {
+			return nil, fmt.Errorf("captcha browser group closed")
+		}
+		allPaused := true
+		for _, b := range browsers {
+			if b.paused.Load() || b.closed {
+				continue
+			}
+			allPaused = false
+			if b.busy.Load() {
+				continue
+			}
+			if !b.busy.CompareAndSwap(false, true) {
+				continue
+			}
+			return b, nil
+		}
+		if allPaused {
+			return nil, fmt.Errorf("all captcha chromes paused; resume them from /admin")
+		}
+		// Everything usable is busy; wait for a release or a swap, then
+		// rescan. Releases push to g.free — wait on it (also woken by Close).
+		select {
+		case b, ok := <-g.free:
+			if !ok {
+				return nil, fmt.Errorf("captcha browser group closed")
+			}
+			if b == nil || b.paused.Load() || b.busy.Load() || b.closed {
+				continue // stale/paused release; keep waiting
+			}
+			if !b.busy.CompareAndSwap(false, true) {
+				continue
+			}
+			return b, nil
+		case <-g.done:
+			return nil, fmt.Errorf("captcha browser group closed")
+		}
+	}
+}
+
+// releaseBorrowed returns a borrowed browser to rotation. A paused browser is
+// dropped: its Chrome is already dead.
+func (g *BrowserGroup) releaseBorrowed(b *Browser) {
+	b.busy.Store(false)
+	if b.paused.Load() {
+		return
+	}
+	g.release(b)
+}
+
+// ExtractN borrows a free browser and asks for n tokens in one sticky-tab
+// pass. Falls back to n serial extracts on browsers that don't support
+// batch (Playground mode — single widget). Same reload/relaunch ladder
+// as Extract: a hard failure retries once on the same browser, then
+// recycles the Chrome process before giving up.
+func (g *BrowserGroup) ExtractN(ctx context.Context, n int) ([]string, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	b, err := g.borrow()
+	if err != nil {
+		return nil, err
+	}
+
+	tryBatch := func(br *Browser) ([]string, error) { return br.ExtractN(ctx, n) }
+
+	toks, err := tryBatch(b)
+	if err == nil {
+		b.extracts.Add(1)
+		g.releaseBorrowed(b)
+		return toks, nil
+	}
+	if ctx.Err() != nil || !isHardExtractFailure(err) {
+		g.releaseBorrowed(b)
+		return nil, err
+	}
+	log.Printf("captcha browser hard failure; retrying on same chrome: %v", err)
+	toks, err = tryBatch(b)
+	if err == nil {
+		b.extracts.Add(1)
+		g.releaseBorrowed(b)
+		return toks, nil
+	}
+	if ctx.Err() != nil || !isHardExtractFailure(err) {
+		g.releaseBorrowed(b)
+		return nil, err
+	}
+	log.Printf("captcha browser hard failure again; recycling chrome: %v", err)
+	nb, rerr := g.recycle(b)
+	if rerr != nil {
+		g.releaseBorrowed(b)
+		return nil, fmt.Errorf("%w; chrome recycle: %v", err, rerr)
+	}
+	toks, err = tryBatch(nb)
+	g.releaseBorrowed(nb)
+	if err != nil {
+		return nil, fmt.Errorf("after chrome recycle: %w", err)
+	}
+	nb.extracts.Add(1)
+	return toks, nil
+}
+
 // Extract borrows a free browser, mints one token, then returns it to the pool.
 // Recovery is layered, mirroring BoxPwnr NimClient's reload→relaunch ladders:
 // a hard failure first gets one cheap in-place retry on the *same* browser
@@ -69,58 +294,57 @@ func (g *BrowserGroup) Len() int {
 // execute), and only a second hard failure recycles the whole Chrome process
 // (the "relaunch" rung — clears a wedged renderer / stale session).
 func (g *BrowserGroup) Extract(ctx context.Context) (string, error) {
-	g.mu.Lock()
-	closed := g.closed
-	g.mu.Unlock()
-	if closed {
-		return "", fmt.Errorf("captcha browser group closed")
-	}
-
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case <-g.done:
-		return "", fmt.Errorf("captcha browser group closed")
-	case b := <-g.free:
-		tok, err := b.Extract(ctx)
-		if err == nil {
-			g.release(b)
-			return tok, nil
-		}
-		if ctx.Err() != nil || !isHardExtractFailure(err) {
-			g.release(b)
-			return "", err
-		}
-		// "reload" rung: one cheap retry on the same browser before recycling.
-		// Cold-start `missing-captcha` (the dominant transient hard failure on
-		// freshly-launched Chromium) clears on a second execute; recycling
-		// immediately would pay the ~1–2s Chrome relaunch for a transient blip.
-		log.Printf("captcha browser hard failure; retrying on same chrome: %v", err)
-		tok, err = b.Extract(ctx)
-		if err == nil {
-			g.release(b)
-			return tok, nil
-		}
-		if ctx.Err() != nil || !isHardExtractFailure(err) {
-			g.release(b)
-			return "", err
-		}
-		// "relaunch" rung: twice-bitten renderer / stale session — rebuild.
-		log.Printf("captcha browser hard failure again; recycling chrome: %v", err)
-		nb, rerr := g.recycle(b)
-		if rerr != nil {
-			// old browser already closed inside recycle on success only;
-			// on failure keep the slot with the old browser if still usable.
-			g.release(b)
-			return "", fmt.Errorf("%w; chrome recycle: %v", err, rerr)
-		}
-		tok, err = nb.Extract(ctx)
-		g.release(nb)
-		if err != nil {
-			return "", fmt.Errorf("after chrome recycle: %w", err)
-		}
+	default:
+	}
+	b, err := g.borrow()
+	if err != nil {
+		return "", err
+	}
+
+	tok, err := b.Extract(ctx)
+	if err == nil {
+		b.extracts.Add(1)
+		g.releaseBorrowed(b)
 		return tok, nil
 	}
+	if ctx.Err() != nil || !isHardExtractFailure(err) {
+		g.releaseBorrowed(b)
+		return "", err
+	}
+	// "reload" rung: one cheap retry on the same browser before recycling.
+	// Cold-start `missing-captcha` (the dominant transient hard failure on
+	// freshly-launched Chromium) clears on a second execute; recycling
+	// immediately would pay the ~1–2s Chrome relaunch for a transient blip.
+	log.Printf("captcha browser hard failure; retrying on same chrome: %v", err)
+	tok, err = b.Extract(ctx)
+	if err == nil {
+		b.extracts.Add(1)
+		g.releaseBorrowed(b)
+		return tok, nil
+	}
+	if ctx.Err() != nil || !isHardExtractFailure(err) {
+		g.releaseBorrowed(b)
+		return "", err
+	}
+	// "relaunch" rung: twice-bitten renderer / stale session — rebuild.
+	log.Printf("captcha browser hard failure again; recycling chrome: %v", err)
+	nb, rerr := g.recycle(b)
+	if rerr != nil {
+		// old browser already closed inside recycle on success only;
+		// on failure keep the slot with the old browser if still usable.
+		g.releaseBorrowed(b)
+		return "", fmt.Errorf("%w; chrome recycle: %v", err, rerr)
+	}
+	tok, err = nb.Extract(ctx)
+	g.releaseBorrowed(nb)
+	if err != nil {
+		return "", fmt.Errorf("after chrome recycle: %w", err)
+	}
+	nb.extracts.Add(1)
+	return tok, nil
 }
 
 func (g *BrowserGroup) release(b *Browser) {

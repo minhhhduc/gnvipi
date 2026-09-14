@@ -24,6 +24,12 @@ const (
 // ExtractFunc obtains one one-shot captcha token.
 type ExtractFunc func(ctx context.Context) (string, error)
 
+// ExtractNFunc obtains n captcha tokens in one sticky-tab borrow. Only the
+// harness-mode Browser actually does this in one round-trip; Playground
+// mode returns n tokens via serial sticky executes. Implementations should
+// be safe for concurrent use up to PoolConfig.Workers.
+type ExtractNFunc func(ctx context.Context, n int) ([]string, error)
+
 type entry struct {
 	token string
 	at    time.Time
@@ -73,9 +79,11 @@ func (l *TokenLease) Release() {
 // FIFO (not a channel drain/restore), a full fresh pool truly idles Chrome —
 // see runs/hangbench-2026-07-22.md.
 type Pool struct {
-	extract ExtractFunc
-	size    int
-	ttl     time.Duration
+	extract   ExtractFunc
+	extractN  ExtractNFunc
+	batchSize int
+	size      int
+	ttl       time.Duration
 
 	mu        sync.Mutex
 	tokens    []entry
@@ -99,10 +107,19 @@ type PoolConfig struct {
 	Size    int           // buffered ready tokens (default 2)
 	Workers int           // concurrent extractors (default 1)
 	TTL     time.Duration // max age before a pooled token is discarded (default 90s)
+	// BatchSize is how many tokens one sticky-tab borrow should mint.
+	// 1 (default) keeps the legacy single-token-per-borrow semantics.
+	// >1 requires PoolConfig.ExtractN to be set; Pool will call extractN
+	// once per borrow and enqueue each token separately. Only harness mode
+	// actually realises the speedup — playground mode serializes.
+	BatchSize int
+	// ExtractN is the batch extractor; required when BatchSize > 1.
+	ExtractN ExtractNFunc
 }
 
 // NewPool starts background workers that keep tokens filled up to Size.
 // extract must be safe for concurrent use up to Workers (e.g. Browser.Extract).
+// cfg.ExtractN is only consulted when cfg.BatchSize > 1.
 func NewPool(parent context.Context, extract ExtractFunc, cfg PoolConfig) *Pool {
 	if cfg.Size < 1 {
 		cfg.Size = 2
@@ -113,15 +130,20 @@ func NewPool(parent context.Context, extract ExtractFunc, cfg PoolConfig) *Pool 
 	if cfg.TTL <= 0 {
 		cfg.TTL = 90 * time.Second
 	}
+	if cfg.BatchSize < 1 {
+		cfg.BatchSize = 1
+	}
 	ctx, cancel := context.WithCancel(parent)
 	p := &Pool{
-		extract: extract,
-		size:    cfg.Size,
-		tokens:  make([]entry, 0, cfg.Size),
-		changed: make(chan struct{}),
-		ttl:     cfg.TTL,
-		ctx:     ctx,
-		cancel:  cancel,
+		extract:   extract,
+		extractN:  cfg.ExtractN,
+		batchSize: cfg.BatchSize,
+		size:      cfg.Size,
+		tokens:    make([]entry, 0, cfg.Size),
+		changed:   make(chan struct{}),
+		ttl:       cfg.TTL,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	for i := 0; i < cfg.Workers; i++ {
 		p.wg.Add(1)
@@ -132,26 +154,38 @@ func NewPool(parent context.Context, extract ExtractFunc, cfg PoolConfig) *Pool 
 	return p
 }
 
+// safeExtract runs extract with panic recovery so a broken browser/CDP call
+// never takes down a pool worker (or the whole process).
+func safeExtract(extract ExtractFunc, ctx context.Context) (token string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			token = ""
+			err = fmt.Errorf("captcha extract panicked: %v", r)
+		}
+	}()
+	return extract(ctx)
+}
+
 func (p *Pool) worker(id int) {
 	defer p.wg.Done()
 	var consecFailures int
 	for {
-		if !p.reserveSlot() {
+		want := p.batchSize
+		if want < 1 {
+			want = 1
+		}
+		if !p.reserveSlots(want) {
 			return
 		}
 
-		token, err := p.extract(p.ctx)
+		tokens, err := p.runExtract(p.ctx)
 		if err != nil {
-			p.releaseReservation()
+			p.releaseReservations(want)
 			p.errors.Add(1)
 			consecFailures++
 			if p.ctx.Err() != nil {
 				return
 			}
-			// Exponential backoff with jitter — a sustained captcha outage
-			// must not busy-loop (fixed 2s did) nor drown the logs. Log the
-			// first failure immediately (pool-empty hangs are otherwise silent),
-			// then every Nth. Reset on success below.
 			if consecFailures == 1 || consecFailures%logEveryNth == 0 {
 				log.Printf("captcha pool worker %d: %v (consecutive failures=%d, backing off)",
 					id, err, consecFailures)
@@ -166,23 +200,64 @@ func (p *Pool) worker(id int) {
 		}
 
 		consecFailures = 0
-		if !p.enqueue(token) {
-			return
+		for _, tok := range tokens {
+			if !p.enqueue(tok) {
+				return
+			}
+		}
+		// extractN may have returned fewer than want tokens (Playground
+		// mode never overshoots, but harness could on partial failure).
+		// Free any reserved-but-unused slots so we do not deadlock the pool.
+		if len(tokens) < want {
+			p.releaseReservations(want - len(tokens))
 		}
 	}
 }
 
+// runExtract calls extract or extractN depending on batchSize. extractN is
+// wrapped in the same panic-recovery as the single-token path so a broken
+// harness page does not take down the worker.
+func (p *Pool) runExtract(ctx context.Context) ([]string, error) {
+	if p.batchSize > 1 && p.extractN != nil {
+		return safeExtractN(p.extractN, ctx, p.batchSize)
+	}
+	tok, err := safeExtract(p.extract, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []string{tok}, nil
+}
+
+// safeExtractN mirrors safeExtract for the batch path.
+func safeExtractN(extractN ExtractNFunc, ctx context.Context, n int) (out []string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = fmt.Errorf("captcha extractN panicked: %v", r)
+		}
+	}()
+	return extractN(ctx, n)
+}
+
 // reserveSlot blocks until queue capacity is available, then claims it before
 // extraction. The reservation prevents concurrent workers from over-minting.
-func (p *Pool) reserveSlot() bool {
+func (p *Pool) reserveSlot() bool { return p.reserveSlots(1) }
+
+// reserveSlots claims n capacity slots atomically; blocks until n slots are
+// available. Used by batch-mode workers so the pool cannot over-mint
+// relative to Size.
+func (p *Pool) reserveSlots(n int) bool {
+	if n < 1 {
+		n = 1
+	}
 	for {
 		p.mu.Lock()
 		if p.ctx.Err() != nil {
 			p.mu.Unlock()
 			return false
 		}
-		if len(p.tokens)+p.reserved+p.leased < p.size {
-			p.reserved++
+		if len(p.tokens)+p.reserved+p.leased+n <= p.size {
+			p.reserved += n
 			p.mu.Unlock()
 			return true
 		}
@@ -196,9 +271,19 @@ func (p *Pool) reserveSlot() bool {
 	}
 }
 
-func (p *Pool) releaseReservation() {
+func (p *Pool) releaseReservation() { p.releaseReservations(1) }
+
+// releaseReservations frees n reserved slots. n>reserved is clamped to
+// reserved so a bug elsewhere cannot drive reserved negative.
+func (p *Pool) releaseReservations(n int) {
+	if n < 1 {
+		return
+	}
 	p.mu.Lock()
-	p.reserved--
+	if n > p.reserved {
+		n = p.reserved
+	}
+	p.reserved -= n
 	p.notifyLocked()
 	p.mu.Unlock()
 }
@@ -242,16 +327,23 @@ func (p *Pool) reaper() {
 		case <-p.ctx.Done():
 			return
 		case <-t.C:
-			n := p.discardStale()
-			if n == 0 {
-				continue
-			}
-			// Rate-limit: idle pools otherwise log every tick while workers refill.
-			if time.Since(lastLog) < time.Minute && p.Ready() > 0 {
-				continue
-			}
-			lastLog = time.Now()
-			log.Printf("captcha pool: reaped %d stale token(s); ready=%d (workers refill)", n, p.Ready())
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("captcha pool reaper: recovered from panic: %v", r)
+					}
+				}()
+				n := p.discardStale()
+				if n == 0 {
+					return
+				}
+				// Rate-limit: idle pools otherwise log every tick while workers refill.
+				if time.Since(lastLog) < time.Minute && p.Ready() > 0 {
+					return
+				}
+				lastLog = time.Now()
+				log.Printf("captcha pool: reaped %d stale token(s); ready=%d (workers refill)", n, p.Ready())
+			}()
 		}
 	}
 }

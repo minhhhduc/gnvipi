@@ -249,3 +249,39 @@ func newTrackedBrowser() (*Browser, *atomic.Int32) {
 	var closes atomic.Int32
 	return &Browser{cancel: func() { closes.Add(1) }}, &closes
 }
+
+// All browsers paused → borrow must fail immediately, not block waiting.
+func TestBrowserGroupBorrow_AllPaused(t *testing.T) {
+	b1, _ := newTrackedBrowser()
+	b2, _ := newTrackedBrowser()
+	g := &BrowserGroup{
+		parent:   context.Background(),
+		browsers: []*Browser{b1, b2},
+		free:     make(chan *Browser, 2),
+		done:     make(chan struct{}),
+	}
+	for i := range g.browsers {
+		if err := g.Pause(i); err != nil {
+			t.Fatalf("Pause: %v", err)
+		}
+	}
+
+	type result struct {
+		b   *Browser
+		err error
+	}
+	res := make(chan result, 1)
+	go func() { b, err := g.borrow(); res <- result{b, err} }()
+
+	select {
+	case r := <-res:
+		if r.b != nil {
+			t.Fatalf("borrow returned browser %p, want nil", r.b)
+		}
+		if r.err == nil || !strings.Contains(r.err.Error(), "all captcha chromes paused") {
+			t.Fatalf("borrow error = %v, want all-paused error", r.err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("borrow blocked with all chromes paused; want immediate error")
+	}
+}

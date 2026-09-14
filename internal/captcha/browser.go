@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -30,10 +31,58 @@ type Browser struct {
 	cancel  context.CancelFunc // allocator
 	bCancel context.CancelFunc // browser tab / process owner
 
+	url        URLProvider
+	harnessURL string // data: URL when harness mode is on; "" = playground mode
+
+	// busy/paused are owned by BrowserGroup: busy is set on borrow and
+	// cleared on release; paused takes the browser out of rotation (admin
+	// Pause) until Resume spawns a replacement Chrome.
+	busy     atomic.Bool
+	paused   atomic.Bool
+	extracts atomic.Uint64
+
 	mu     sync.Mutex
 	closed bool
 	warmed bool
 	lastOK time.Time
+}
+
+// PID returns the Chrome OS process id (0 when unavailable, e.g. test fakes).
+func (b *Browser) PID() int {
+	if b.browser == nil {
+		return 0
+	}
+	if c := chromedp.FromContext(b.browser); c != nil && c.Browser != nil {
+		if p := c.Browser.Process(); p != nil {
+			return p.Pid
+		}
+	}
+	return 0
+}
+
+// Warmed reports whether the sticky tab is currently warm.
+func (b *Browser) Warmed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.warmed
+}
+
+// LastOK returns the time of the last successful extract (zero = never).
+func (b *Browser) LastOK() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastOK
+}
+
+// currentURL returns the navigation target for warmPlayground. Harness mode
+// uses a precomputed data: URL (set once in NewBrowser from cfg.HarnessPage);
+// playground mode defers to URLProvider each call (so ChampionState swaps
+// are picked up on the next sticky-idle re-navigate).
+func (b *Browser) currentURL(ctx context.Context) string {
+	if b.harnessURL != "" {
+		return b.harnessURL
+	}
+	return b.url.PlaygroundURL(ctx)
 }
 
 // stickyMaxIdle is how long a warm playground tab is trusted for sticky execute.
@@ -51,6 +100,8 @@ const stickyMaxIdle = 60 * time.Second
 //     by default to cut per-navigate RAM/bandwidth; re-enable only if a future
 //     site change makes image decode required for token extraction.
 //   - CHROME_PROXY / BrowserConfig.Proxy: Chrome --proxy-server (e.g. socks5://host:port)
+//   - BrowserConfig.HarnessPage: when set, Browser warms a local data: URL
+//     instead of a real playground URL — RAM drops from ~150–350MB to ~50MB.
 func NewBrowser(parent context.Context, cfg BrowserConfig) (*Browser, error) {
 	cfg = cfg.withDefaults()
 	allocOpts := ChromeAllocatorOptions()
@@ -89,15 +140,17 @@ func NewBrowser(parent context.Context, cfg BrowserConfig) (*Browser, error) {
 	}
 
 	b := &Browser{
-		browser: browser,
-		cancel:  allocCancel,
-		bCancel: bCancel,
+		browser:    browser,
+		cancel:     allocCancel,
+		bCancel:    bCancel,
+		url:        cfg.URLProvider,
+		harnessURL: cfg.HarnessPage,
 	}
 
 	// Warm playground once so Extract can skip Navigate in the steady state.
 	warmCtx, warmCancel := context.WithTimeout(browser, 90*time.Second)
 	defer warmCancel()
-	if err := warmPlayground(warmCtx); err != nil {
+	if err := warmPlayground(warmCtx, b.currentURL(parent)); err != nil {
 		b.Close()
 		return nil, fmt.Errorf("captcha browser warm: %w", err)
 	}
@@ -121,7 +174,10 @@ func (b *Browser) Extract(ctx context.Context) (string, error) {
 	// most of captcha-wait (30s) before recovery begins.
 	needNav := !b.warmed || time.Since(b.lastOK) > stickyMaxIdle
 	if needNav {
-		token, err := b.runExtract(ctx, 90*time.Second, navigateAndExecute)
+		pageURL := b.currentURL(ctx)
+		token, err := b.runExtract(ctx, 90*time.Second, func(c context.Context) (string, error) {
+			return navigateAndExecute(c, pageURL)
+		})
 		if err != nil {
 			b.warmed = false
 			return "", err
@@ -137,7 +193,10 @@ func (b *Browser) Extract(ctx context.Context) (string, error) {
 		return token, nil
 	}
 	// Page may have broken (navigation, bot wall, widget gone) — full recover.
-	token, navErr := b.runExtract(ctx, 90*time.Second, navigateAndExecute)
+	pageURL := b.currentURL(ctx)
+	token, navErr := b.runExtract(ctx, 90*time.Second, func(c context.Context) (string, error) {
+		return navigateAndExecute(c, pageURL)
+	})
 	if navErr != nil {
 		b.warmed = false
 		return "", fmt.Errorf("sticky execute failed (%v); re-navigate failed: %w", err, navErr)
@@ -145,6 +204,38 @@ func (b *Browser) Extract(ctx context.Context) (string, error) {
 	b.warmed = true
 	b.lastOK = time.Now()
 	return token, nil
+}
+
+// ExtractN returns n captcha tokens from one sticky-tab borrow. Only the
+// harness mode can do this in a single CDP round-trip — the harness page
+// pre-mounts N hidden widgets, so each hcaptcha.execute(id_i) returns a
+// fresh token independently. Playground mode falls back to N serial
+// Extracts (sticky widget can only hold one response at a time).
+//
+// ponytail: playground batch is N serial sticky executes — same per-borrow
+// cost, no throughput gain. Switch to -captcha-harness=true to actually
+// realise the speedup.
+func (b *Browser) ExtractN(ctx context.Context, n int) ([]string, error) {
+	if n <= 1 {
+		t, err := b.Extract(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return []string{t}, nil
+	}
+	if b.harnessURL == "" {
+		// Playground mode: serialize n sticky executes. See ponytail comment.
+		out := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			t, err := b.Extract(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, t)
+		}
+		return out, nil
+	}
+	return b.extractBatchHarness(ctx, n)
 }
 
 func (b *Browser) runExtract(ctx context.Context, limit time.Duration, fn func(context.Context) (string, error)) (string, error) {

@@ -9,17 +9,37 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-const playgroundURL = "https://build.nvidia.com/z-ai/glm-5.2/playground"
-
 // Extract is a one-shot helper: start Chrome, scrape one token, shut down.
 // Prefer Browser + Pool for concurrent serving.
 func Extract(baseCtx context.Context) (string, error) {
-	b, err := NewBrowser(baseCtx, BrowserConfig{})
+	b, err := NewBrowser(baseCtx, BrowserConfig{URLProvider: NewDefaultURLProvider()})
 	if err != nil {
 		return "", err
 	}
 	defer b.Close()
 	return b.Extract(baseCtx)
+}
+
+// warmPlayground navigates to the URL whose hCaptcha widget mints tokens.
+// Multi-page source: Browser passes the URL from its URLProvider, so any
+// registry candidate can be the warming page (no hardcoded URL).
+func warmPlayground(ctx context.Context, pageURL string) error {
+	return chromedp.Run(ctx,
+		network.Enable(),
+		network.SetBlockedURLs().WithURLPatterns(blockedAssetPatterns),
+		chromedp.Navigate(pageURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Evaluate(`Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`, nil),
+		chromedp.WaitReady(`[data-hcaptcha-widget-id]`, chromedp.ByQuery),
+		waitHCaptchaReady(),
+	)
+}
+
+func navigateAndExecute(ctx context.Context, pageURL string) (string, error) {
+	if err := warmPlayground(ctx, pageURL); err != nil {
+		return "", fmt.Errorf("chromedp navigate: %w", err)
+	}
+	return executeOnly(ctx)
 }
 
 // blockedAssetPatterns skips CSS/fonts/media/images during playground navigate.
@@ -42,25 +62,6 @@ var blockedAssetPatterns = []*network.BlockPattern{
 	{URLPattern: "*://*:*/*.webp", Block: true},
 	{URLPattern: "*://*:*/*.svg", Block: true},
 	{URLPattern: "*://*:*/*.ico", Block: true},
-}
-
-func warmPlayground(ctx context.Context) error {
-	return chromedp.Run(ctx,
-		network.Enable(),
-		network.SetBlockedURLs().WithURLPatterns(blockedAssetPatterns),
-		chromedp.Navigate(playgroundURL),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Evaluate(`Object.defineProperty(navigator, 'webdriver', {get: () => undefined})`, nil),
-		chromedp.WaitReady(`[data-hcaptcha-widget-id]`, chromedp.ByQuery),
-		waitHCaptchaReady(),
-	)
-}
-
-func navigateAndExecute(ctx context.Context) (string, error) {
-	if err := warmPlayground(ctx); err != nil {
-		return "", fmt.Errorf("chromedp navigate: %w", err)
-	}
-	return executeOnly(ctx)
 }
 
 // executeOnly assumes the sticky tab is already on the playground with hCaptcha ready.

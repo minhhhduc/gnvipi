@@ -15,11 +15,25 @@ type BrowserConfig struct {
 	// Proxy is a Chrome --proxy-server URL, e.g. "socks5://127.0.0.1:7890".
 	// Empty falls back to CHROME_PROXY.
 	Proxy string
+
+	// URLProvider returns the playground URL whose hCaptcha widget mints
+	// the next token. nil falls back to NewDefaultURLProvider() so existing
+	// tools (cmd/cacheprobe, cmd/hangbench) keep working unchanged.
+	URLProvider URLProvider
+
+	// HarnessPage, when non-empty, replaces the playground navigation with a
+	// data: URL pointing at this minimal HTML — RAM drops from ~150–350MB
+	// per Chrome to ~50MB. Sitekey must already be set on the page via
+	// HarnessPageFor(sitekey, batch).
+	HarnessPage string
 }
 
 func (c BrowserConfig) withDefaults() BrowserConfig {
 	if c.Proxy == "" {
 		c.Proxy = strings.TrimSpace(os.Getenv("CHROME_PROXY"))
+	}
+	if c.URLProvider == nil {
+		c.URLProvider = NewDefaultURLProvider()
 	}
 	return c
 }
