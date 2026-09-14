@@ -4,8 +4,6 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-> Tiếng Việt: [README.vi.md](./README.vi.md)
-
 A self-hosted multi-format LLM gateway that serves **NVIDIA Playground models
 (deepseek-v4, kimi, glm, nemotron, gpt-oss, …)** plus any number of
 **custom OpenAI-compatible / Anthropic endpoints** behind one local server, with
