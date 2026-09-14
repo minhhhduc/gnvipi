@@ -1104,12 +1104,21 @@ if (PAGE === 'dashboard') {
       '<div class=note>TTFB = thời gian chờ byte đầu tiên của stream; phút không có request stream nào hiển thị 0.</div>' +
       '<div class=note><b>biểu đồ theo model — requests / phút</b></div>' +
       (Object.keys(modelSeries).length
-        ? Object.entries(modelSeries)
-            .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
-            .sort((a, b) => b[1] - a[1]).slice(0, 8)
-            .map(([m], i) => lineChart([{key:'requests', label:esc(m), color:MCOLS[i % MCOLS.length]}], modelSeries[m] || [])).join('')
+        ? (() => {
+            const top = Object.entries(modelSeries)
+              .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
+              .sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
+            // màu cố định theo hash tên model — trùng bảng provCell, không đổi mỗi lần render
+            const mcol = m => { let h = 0; for (let j = 0; j < m.length; j++) h = (h * 31 + m.charCodeAt(j)) >>> 0; return MCOLS[h % MCOLS.length]; };
+            const grid = series.map((p, i) => {
+              const o = {minute: p.minute};
+              top.forEach((m, k) => { o['m' + k] = (modelSeries[m] && modelSeries[m][i] && modelSeries[m][i].requests) || 0; });
+              return o;
+            });
+            return lineChart(top.map((m, k) => ({key: 'm' + k, label: esc(m), color: mcol(m)})), grid);
+          })()
         : '<div class=row><span class=id>chưa có request nào</span></div>') +
-      '<div class=note>mỗi đường = 1 model (kể cả api custom); tối đa 8 model nhiều request nhất</div>';
+      '<div class=note>mỗi đường màu = 1 model (kể cả api custom); màu ứng với tên ngay trên biểu đồ; tối đa 8 model nhiều request nhất.</div>';
     armCharts();
   }
 
