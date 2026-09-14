@@ -975,12 +975,26 @@ if (PAGE === 'dashboard') {
   }
   const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
   const COLS = [
-    ['model', 'model'], ['requests', 'req'], ['errors', 'lỗi'], ['streamed', 'stream'],
-    ['input_tokens', 'in tok'], ['output_tokens', 'out tok'], ['avg_ms', 'tb'], ['ttfb_avg_ms', 'ttfb tb'], ['last_ms', 'last'], ['last_ok', 'ok lúc'],
+    ['model', 'model', 'model được gọi; badge màu = publisher (model playground NVIDIA) hoặc tên endpoint tự thêm ở /admin'],
+    ['requests', 'req', 'số request đã gửi qua gateway (kể cả lỗi)'],
+    ['errors', 'lỗi', 'upstream trả >=400 hoặc lỗi kết nối'],
+    ['streamed', 'stream', 'số request dùng stream (SSE)'],
+    ['input_tokens', 'in tok', 'token đầu vào, lấy từ usage của upstream (chỉ tính request thành công)'],
+    ['output_tokens', 'out tok', 'token đầu ra, lấy từ usage của upstream'],
+    ['avg_ms', 'tb', 'độ trễ trung bình mỗi request (từ lúc nhận tới lúc upstream trả xong)'],
+    ['ttfb_avg_ms', 'ttfb tb', 'thời gian chờ token ĐẦU TIÊN, trung bình — chỉ đo được với request stream'],
+    ['last_ms', 'last', 'độ trễ lần gọi gần nhất'],
+    ['last_ok', 'ok lúc', 'thời điểm request THÀNH CÔNG gần nhất'],
   ];
   const LCOLS = [
-    ['time', 'thời gian'], ['model', 'model'], ['streamed', 'stream'], ['input_tokens', 'in tok'],
-    ['output_tokens', 'out tok'], ['ms', 'độ trễ'], ['ttfb_ms', 'TTFB'], ['error', 'trạng thái'],
+    ['time', 'thời gian', 'lúc gateway nhận request'],
+    ['model', 'model', 'model được gọi'],
+    ['streamed', 'stream', 'request có dùng stream không'],
+    ['input_tokens', 'in tok', 'token đầu vào'],
+    ['output_tokens', 'out tok', 'token đầu ra'],
+    ['ms', 'độ trễ', 'tổng thời gian upstream trả lời'],
+    ['ttfb_ms', 'TTFB', 'chờ token đầu tiên (chỉ stream)'],
+    ['error', 'trạng thái', 'ok = upstream trả 2xx; lỗi = >=400 hoặc rớt kết nối'],
   ];
   let models = [], series = [], events = [], startedAt = 0;
   let sortKey = 'requests', sortDir = -1, logKey = 'time', logDir = -1;
@@ -1036,6 +1050,7 @@ if (PAGE === 'dashboard') {
 
   function sortHeader(cols, key, dir, attr) {
     return '<tr>' + cols.map(c => '<th ' + attr + '="' + c[0] + '"' +
+      (c[2] ? ' title="' + esc(c[2]) + '"' : '') +
       (c[0] === key ? ' class="on' + (dir > 0 ? ' asc' : '') + '"' : '') + '>' + c[1] + '</th>').join('') + '</tr>';
   }
 
@@ -1138,7 +1153,7 @@ if (PAGE === 'dashboard') {
     });
     const tot = k => models.reduce((s, m) => s + (m[k] || 0), 0);
     box.innerHTML =
-      '<div class=note>chỉ hiện model CÓ request; lỗi = upstream trả >=400 hoặc lỗi kết nối; TTFB chỉ đo cho request stream.</div>' +
+      '<div class=note>chỉ hiện model CÓ request; mỗi dòng = 1 model (kể cả api custom); rê chuột lên tiêu đề cột để xem chú giải; bấm tiêu đề để sắp xếp.</div>' +
       '<table class=stats><thead>' + sortHeader(COLS, sortKey, sortDir, 'data-key') + '</thead><tbody>' +
       sorted.map(m => '<tr data-id="' + esc(m.model) + '">' +
         '<td class=nm>' + provCell(m.model) + '</td>' +
