@@ -250,8 +250,8 @@ func newTrackedBrowser() (*Browser, *atomic.Int32) {
 	return &Browser{cancel: func() { closes.Add(1) }}, &closes
 }
 
-// All browsers paused → borrow must fail immediately, not block waiting.
-func TestBrowserGroupBorrow_AllPaused(t *testing.T) {
+// All browsers killed → borrow must fail immediately, not block waiting.
+func TestBrowserGroupBorrow_AllKilled(t *testing.T) {
 	b1, _ := newTrackedBrowser()
 	b2, _ := newTrackedBrowser()
 	g := &BrowserGroup{
@@ -261,8 +261,8 @@ func TestBrowserGroupBorrow_AllPaused(t *testing.T) {
 		done:     make(chan struct{}),
 	}
 	for i := range g.browsers {
-		if err := g.Pause(i); err != nil {
-			t.Fatalf("Pause: %v", err)
+		if err := g.Kill(i); err != nil {
+			t.Fatalf("Kill: %v", err)
 		}
 	}
 
@@ -278,10 +278,56 @@ func TestBrowserGroupBorrow_AllPaused(t *testing.T) {
 		if r.b != nil {
 			t.Fatalf("borrow returned browser %p, want nil", r.b)
 		}
-		if r.err == nil || !strings.Contains(r.err.Error(), "all captcha chromes paused") {
-			t.Fatalf("borrow error = %v, want all-paused error", r.err)
+		if r.err == nil || !strings.Contains(r.err.Error(), "all captcha chromes killed") {
+			t.Fatalf("borrow error = %v, want all-killed error", r.err)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("borrow blocked with all chromes paused; want immediate error")
+		t.Fatal("borrow blocked with all chromes killed; want immediate error")
+	}
+}
+
+// Kill → slot is a dead tombstone (borrow skips it, Snapshot reports killed);
+// Start → fresh Chrome in the same slot, borrow works again.
+func TestBrowserGroupKillStart(t *testing.T) {
+	old, oldCloses := newTrackedBrowser()
+	fresh, _ := newTrackedBrowser()
+	g := &BrowserGroup{
+		parent:   context.Background(),
+		browsers: []*Browser{old},
+		free:     make(chan *Browser, 1),
+		done:     make(chan struct{}),
+		browserFactory: func(context.Context, BrowserConfig) (*Browser, error) {
+			return fresh, nil
+		},
+	}
+
+	if err := g.Kill(0); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if got := oldCloses.Load(); got != 1 {
+		t.Fatalf("killed browser close count = %d, want 1", got)
+	}
+	if !g.browsers[0].dead.Load() || !g.browsers[0].closed {
+		t.Fatal("killed slot is not a dead tombstone")
+	}
+	if snap := g.Snapshot(); len(snap) != 1 || !snap[0].Killed {
+		t.Fatalf("Snapshot = %+v, want one killed entry", snap)
+	}
+	if _, err := g.borrow(); err == nil {
+		t.Fatal("borrow succeeded on a killed slot")
+	}
+
+	if err := g.Start(0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if g.browsers[0] != fresh || fresh.dead.Load() {
+		t.Fatal("Start did not put a fresh live browser in the slot")
+	}
+	b, err := g.borrow()
+	if err != nil {
+		t.Fatalf("borrow after Start: %v", err)
+	}
+	if b != fresh {
+		t.Fatalf("borrow returned %p, want fresh %p", b, fresh)
 	}
 }

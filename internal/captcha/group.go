@@ -82,7 +82,7 @@ type ChromeInfo struct {
 	Index    int       `json:"index"`
 	PID      int       `json:"pid"`
 	Busy     bool      `json:"busy"`
-	Paused   bool      `json:"paused"`
+	Killed   bool      `json:"killed"`
 	Warmed   bool      `json:"warmed"`
 	LastOK   time.Time `json:"last_ok"`
 	Extracts uint64    `json:"extracts"` // successful ExtractN borrows since start
@@ -98,7 +98,7 @@ func (g *BrowserGroup) Snapshot() []ChromeInfo {
 			Index:    i,
 			PID:      b.PID(),
 			Busy:     b.busy.Load(),
-			Paused:   b.paused.Load(),
+			Killed:   b.dead.Load(),
 			Warmed:   b.Warmed(),
 			LastOK:   b.LastOK(),
 			Extracts: b.extracts.Load(),
@@ -107,10 +107,12 @@ func (g *BrowserGroup) Snapshot() []ChromeInfo {
 	return out
 }
 
-// Pause takes Chrome i out of rotation: its process is killed immediately and
-// mint attempts stop borrowing it until Resume replaces it. Mint calls while
-// paused fail fast unless another Chrome is free.
-func (g *BrowserGroup) Pause(i int) error {
+// Kill takes Chrome i out of rotation and releases its memory: the process,
+// tab and allocator contexts are closed, and the slot keeps a dead tombstone
+// so its index survives. Mint skips dead slots; a mid-flight extract on this
+// Chrome fails fast and its pool worker backs off. Start puts a fresh Chrome
+// back into the slot.
+func (g *BrowserGroup) Kill(i int) error {
 	g.mu.Lock()
 	if i < 0 || i >= len(g.browsers) {
 		g.mu.Unlock()
@@ -118,24 +120,18 @@ func (g *BrowserGroup) Pause(i int) error {
 	}
 	b := g.browsers[i]
 	g.mu.Unlock()
-	if b.paused.Swap(true) {
-		return nil // already paused
+	if b.dead.Swap(true) {
+		return nil // already killed
 	}
-	if b.busy.Load() {
-		// An extract is mid-flight on this Chrome; mark it closed so the
-		// current/next CDP call fails fast and the borrow unwinds. The
-		// in-flight Extract will error and the pool worker backs off.
-		b.Close()
-		return nil
-	}
+	pid := b.PID()
 	b.Close()
-	log.Printf("captcha chrome %d (pid %d) paused by admin", i, b.PID())
+	log.Printf("captcha chrome %d (pid %d) killed by admin", i, pid)
 	return nil
 }
 
-// Resume puts Chrome i back into rotation with a fresh Chrome process. The
-// old process is dropped (Pause already killed it).
-func (g *BrowserGroup) Resume(i int) error {
+// Start puts Chrome i back into rotation with a fresh Chrome process,
+// replacing the dead tombstone left by Kill (so the GC can collect it).
+func (g *BrowserGroup) Start(i int) error {
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
@@ -167,16 +163,19 @@ func (g *BrowserGroup) Resume(i int) error {
 	g.browsers[i] = nb
 	g.mu.Unlock()
 
-	// The old browser was closed by Pause; clear its pause flag so a stale
-	// Snapshot never shows it paused again (it is gone from g.browsers).
-	old.paused.Store(false)
-	log.Printf("captcha chrome %d resumed (pid %d)", i, nb.PID())
+	// The old browser (a Kill tombstone or a still-live Chrome superseded by
+	// this Start) is gone from g.browsers; close it for good and clear its
+	// dead flag so a stale reference never reports itself as killed.
+	old.Close()
+	old.dead.Store(false)
+	log.Printf("captcha chrome %d started (pid %d)", i, nb.PID())
 	return nil
 }
 
-// borrow returns a free, unpaused browser, or an error when every browser is
-// paused or the group is closed. Busy browsers wait (bounded by the caller's
-// ctx — mint eventually proceeds when one frees up).
+// borrow returns a free, live browser, or an error when every browser is
+// killed or the group is closed. Busy browsers wait (bounded by the caller's
+// ctx — mint eventually proceeds when one frees up). Dead-slot tombstones are
+// skipped: their Chrome is gone, their index survives for Start.
 func (g *BrowserGroup) borrow() (*Browser, error) {
 	for {
 		g.mu.Lock()
@@ -186,12 +185,12 @@ func (g *BrowserGroup) borrow() (*Browser, error) {
 		if closed {
 			return nil, fmt.Errorf("captcha browser group closed")
 		}
-		allPaused := true
+		allDead := true
 		for _, b := range browsers {
-			if b.paused.Load() || b.closed {
+			if b.dead.Load() || b.closed {
 				continue
 			}
-			allPaused = false
+			allDead = false
 			if b.busy.Load() {
 				continue
 			}
@@ -200,8 +199,8 @@ func (g *BrowserGroup) borrow() (*Browser, error) {
 			}
 			return b, nil
 		}
-		if allPaused {
-			return nil, fmt.Errorf("all captcha chromes paused; resume them from /admin")
+		if allDead {
+			return nil, fmt.Errorf("all captcha chromes killed; start them from /admin")
 		}
 		// Everything usable is busy; wait for a release or a swap, then
 		// rescan. Releases push to g.free — wait on it (also woken by Close).
@@ -210,8 +209,8 @@ func (g *BrowserGroup) borrow() (*Browser, error) {
 			if !ok {
 				return nil, fmt.Errorf("captcha browser group closed")
 			}
-			if b == nil || b.paused.Load() || b.busy.Load() || b.closed {
-				continue // stale/paused release; keep waiting
+			if b == nil || b.dead.Load() || b.busy.Load() || b.closed {
+				continue // stale/dead release; keep waiting
 			}
 			if !b.busy.CompareAndSwap(false, true) {
 				continue
@@ -223,11 +222,11 @@ func (g *BrowserGroup) borrow() (*Browser, error) {
 	}
 }
 
-// releaseBorrowed returns a borrowed browser to rotation. A paused browser is
+// releaseBorrowed returns a borrowed browser to rotation. A killed browser is
 // dropped: its Chrome is already dead.
 func (g *BrowserGroup) releaseBorrowed(b *Browser) {
 	b.busy.Store(false)
-	if b.paused.Load() {
+	if b.dead.Load() {
 		return
 	}
 	g.release(b)

@@ -376,27 +376,44 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 		case http.MethodPost:
 			var payload struct {
 				Index int    `json:"index"`
-				Mode  string `json:"mode"` // "pause" | "resume"
+				Mode  string `json:"mode"` // "kill" | "start" (aliases: pause|resume)
+				All   bool   `json:"all"`  // mọi chrome
 			}
-			if err := c.ShouldBindJSON(&payload); err != nil {
+			// Accept form posts too (optional all=true field), per task spec.
+			if c.Request.Header.Get("content-type") == "application/x-www-form-urlencoded" {
+				payload.Index, _ = strconv.Atoi(c.Request.FormValue("index"))
+				payload.Mode = c.Request.FormValue("mode")
+				payload.All = c.Request.FormValue("all") == "true"
+			} else if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
-			switch payload.Mode {
-			case "pause":
-				if err := chromeAdmin.Pause(payload.Index); err != nil {
+			kill := func(i int) error { return chromeAdmin.Kill(i) }
+			start := func(i int) error { return chromeAdmin.Start(i) }
+			do := func(fn func(int) error) {
+				if payload.All {
+					for _, ci := range chromeAdmin.Snapshot() {
+						if err := fn(ci.Index); err != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+							return
+						}
+					}
+					c.JSON(http.StatusOK, gin.H{"ok": true})
+					return
+				}
+				if err := fn(payload.Index); err != nil {
 					c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 					return
 				}
-				c.JSON(http.StatusOK, gin.H{"paused": payload.Index})
-			case "resume":
-				if err := chromeAdmin.Resume(payload.Index); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"resumed": payload.Index})
+				c.JSON(http.StatusOK, gin.H{"index": payload.Index})
+			}
+			switch payload.Mode {
+			case "kill", "pause":
+				do(kill)
+			case "start", "resume":
+				do(start)
 			default:
-				c.JSON(http.StatusBadRequest, gin.H{"error": "mode phải là pause hoặc resume"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "mode phải là kill hoặc start"})
 			}
 		default:
 			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method không hỗ trợ"})
@@ -567,7 +584,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 <h2>log request (khung 200 request, giữ lại qua restart)</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
 		if chromeAdmin != nil {
-			rows.WriteString(`<h2>chrome captcha</h2><div id=chromes></div>`)
+			rows.WriteString(`<h2>chrome captcha — tắt để giải phóng RAM</h2><div id=chromes></div>`)
 		} else {
 			rows.WriteString(`<div class=row><span class=id>serve không chạy -auto (không có chrome nào)</span></div>`)
 		}
@@ -1227,58 +1244,80 @@ if (PAGE === 'dashboard') {
   setInterval(poll, 5000);
 } // dashboard block end
 
-// --- Chrome captcha (pause = kill process, resume = spawn mới) ---
+// --- Chrome captcha (tắt = giết process + giải phóng RAM, bật lại = spawn mới) ---
 if (CHROMES && PAGE === 'chromes') {
   const box = document.getElementById('chromes');
   const fmtLast = t => {
     const d = new Date(t);
     return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—';
   };
+  async function post(body) {
+    const res = await fetch('/admin/chromes', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({error: res.status}));
+      throw new Error(err.error);
+    }
+  }
+  async function doMode(btn) {
+    btn.disabled = true;
+    try {
+      await post({index: +btn.dataset.index, mode: btn.dataset.mode});
+      flash(btn.dataset.mode === 'kill' ? 'đã tắt chrome ' + btn.dataset.index + ' (RAM đã giải phóng)'
+                                       : 'đã bật lại chrome ' + btn.dataset.index);
+      drawChromes();
+    } catch (err) {
+      flash('lỗi: ' + err.message);
+      btn.disabled = false;
+    }
+  }
   async function drawChromes() {
     try {
       const res = await fetch('/admin/chromes');
       if (!res.ok) { box.textContent = 'lỗi chromes: ' + res.status; return; }
       const list = (await res.json()).chromes || [];
-      box.innerHTML = list.length ? list.map(c =>
-        '<div class=row data-id="chrome' + c.index + '">' +
-          '<span class=id>#' + c.index + ' · pid ' + c.pid + '</span>' +
-          (c.busy ? '<span class="badge warn">đang bận</span>' : '') +
-          (c.paused ? '<span class=badge>tạm dừng</span>' : '<span class="badge ok">running</span>') +
-          (c.warmed && !c.paused ? '<span class="badge ok">warm</span>' : '') +
-          '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
-            c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
-          '<button type=button data-index="' + c.index + '" data-mode="' +
-            (c.paused ? 'resume' : 'pause') + '">' +
-            (c.paused ? 'Tiếp tục' : 'Tạm dừng') + '</button>' +
-        '</div>').join('')
-        : '<div class=row><span class=id>không có chrome nào</span></div>';
+      box.innerHTML = (list.length
+        ? list.map(c =>
+            '<div class=row data-id="chrome' + c.index + '">' +
+              '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
+              (c.busy && !c.killed ? '<span class="badge warn">đang bận</span>' : '') +
+              (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">đã tắt</span>'
+                        : '<span class="badge ok">running</span>') +
+              (c.warmed && !c.killed ? '<span class="badge ok">warm</span>' : '') +
+              '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
+                c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
+              '<button type=button data-index="' + c.index + '" data-mode="' +
+                (c.killed ? 'start' : 'kill') + '">' +
+                (c.killed ? 'bật lại' : 'tắt') + '</button>' +
+            '</div>').join('')
+        : '<div class=row><span class=id>không có chrome nào</span>') +
+        (list.length ? '<div class=bar style="margin-top:.6rem">' +
+          '<button type=button data-mode-all=kill>tắt tất cả</button>' +
+          '<button type=button data-mode-all=start>bật lại tất cả</button></div>' : '');
     } catch (err) {
       box.textContent = 'lỗi chromes: ' + err;
     }
   }
   box.addEventListener('click', async e => {
-    const btn = e.target.closest('button[data-mode]');
-    if (!btn) return;
-    btn.disabled = true;
-    try {
-      const res = await fetch('/admin/chromes', {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({index: +btn.dataset.index, mode: btn.dataset.mode}),
-      });
-      if (res.ok) {
-        flash(btn.dataset.mode === 'pause' ? 'đã tạm dừng chrome ' + btn.dataset.index
-                                           : 'đã tiếp tục chrome ' + btn.dataset.index);
+    const all = e.target.closest('button[data-mode-all]');
+    if (all) {
+      all.disabled = true;
+      try {
+        await post({mode: all.dataset.modeAll, all: true});
+        flash(all.dataset.modeAll === 'kill' ? 'đã tắt tất cả chrome (RAM đã giải phóng)'
+                                            : 'đã bật lại tất cả chrome');
         drawChromes();
-      } else {
-        const err = await res.json().catch(() => ({error: res.status}));
-        flash('lỗi: ' + err.error);
-        btn.disabled = false;
+      } catch (err) {
+        flash('lỗi: ' + err.message);
+        all.disabled = false;
       }
-    } catch (err) {
-      flash('lỗi: ' + err);
-      btn.disabled = false;
+      return;
     }
+    const btn = e.target.closest('button[data-mode]');
+    if (btn) doMode(btn);
   });
   drawChromes();
   setInterval(drawChromes, 5000);

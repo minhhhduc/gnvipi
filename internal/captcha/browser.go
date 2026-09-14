@@ -34,11 +34,11 @@ type Browser struct {
 	url        URLProvider
 	harnessURL string // data: URL when harness mode is on; "" = playground mode
 
-	// busy/paused are owned by BrowserGroup: busy is set on borrow and
-	// cleared on release; paused takes the browser out of rotation (admin
-	// Pause) until Resume spawns a replacement Chrome.
+	// busy/dead are owned by BrowserGroup: busy is set on borrow and
+	// cleared on release; dead marks a slot whose Chrome was killed (admin
+	// Kill) — the tombstone keeps the index until Start spawns a replacement.
 	busy     atomic.Bool
-	paused   atomic.Bool
+	dead     atomic.Bool
 	extracts atomic.Uint64
 
 	mu     sync.Mutex
