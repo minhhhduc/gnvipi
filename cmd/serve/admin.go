@@ -367,7 +367,7 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog, claude())))
 	case "/admin/chromes":
 		if chromeAdmin == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "serve không chạy -auto (không có chrome nào)"})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "serve not running with -auto (no chromes)"})
 			return
 		}
 		switch c.Request.Method {
@@ -377,7 +377,7 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			var payload struct {
 				Index int    `json:"index"`
 				Mode  string `json:"mode"` // "kill" | "start" (aliases: pause|resume)
-				All   bool   `json:"all"`  // mọi chrome
+				All   bool   `json:"all"`  // all chromes
 			}
 			// Accept form posts too (optional all=true field), per task spec.
 			if c.Request.Header.Get("content-type") == "application/x-www-form-urlencoded" {
@@ -413,10 +413,10 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			case "start", "resume":
 				do(start)
 			default:
-				c.JSON(http.StatusBadRequest, gin.H{"error": "mode phải là kill hoặc start"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be kill or start"})
 			}
 		default:
-			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method không hỗ trợ"})
+			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not supported"})
 		}
 	case "/admin/stats":
 		if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {
@@ -457,7 +457,7 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.BaseURL) == "" ||
 				strings.TrimSpace(p.Model) == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
-					": cần name, base_url và model"})
+					": name, base_url and model required"})
 				return
 			}
 		}
@@ -476,7 +476,7 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			return
 		}
 		if strings.TrimSpace(payload.ID) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "cần id"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
 			return
 		}
 		if payload.Restore {
@@ -507,7 +507,7 @@ func modelRow(id, name string, hidden, dead bool) string {
 		checked = ""
 	}
 	if dead {
-		badge = `<span class=badge title="upstream báo không có function khả dụng">lỗi upstream</span>`
+		badge = `<span class=badge title="upstream reports no available function">upstream error</span>`
 	}
 	return modelRowHTML(id, name, checked, badge)
 }
@@ -517,12 +517,12 @@ func modelRowHTML(id, name, checked, badge string) string {
 		`<input type=checkbox class=sw` + checked + ` value="` + html.EscapeString(id) + `">` +
 		`<span class=name>` + html.EscapeString(name) + badge + `</span>` +
 		`<span class=id>` + html.EscapeString(id) + `</span>` +
-		`<button type=button class=del-btn title="Xóa khỏi danh sách" onclick="deleteModel(event,'` + html.EscapeString(id) + `')">×</button>` +
+		`<button type=button class=del-btn title="Remove from list" onclick="deleteModel(event,'` + html.EscapeString(id) + `')">×</button>` +
 		`</div>`
 }
 
 // adminHTML renders one page per ?page= (dashboard | models | endpoints |
-// chromes) — mỗi trang một chức năng.
+// chromes) — one function per page.
 func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel) string {
 	ids := make([]string, 0, len(catalog))
 	for _, m := range catalog {
@@ -534,7 +534,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 
 	providers := prefs.listProviders()
 
-	// --- Trang models: danh sách mọi model (NVIDIA + custom) ---
+	// --- Models page: every model (NVIDIA + custom) ---
 	type renderModel struct {
 		Publisher string
 		Name      string
@@ -580,16 +580,16 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 	failed := 0
 	switch page {
 	case "dashboard":
-		rows.WriteString(`<h2>tổng quan (mọi api, tính từ lúc bật server)</h2><div id=charts></div>
-<h2>log request (khung 200 request, giữ lại qua restart)</h2><div id=frames></div><div id=framebox></div>`)
+		rows.WriteString(`<h2>overview (all APIs, since server start)</h2><div id=charts></div>
+<h2>request log (200-request frames, kept across restarts)</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
 		if chromeAdmin != nil {
-			rows.WriteString(`<h2>chrome captcha — tắt để giải phóng RAM</h2><div id=chromes></div>`)
+			rows.WriteString(`<h2>captcha chromes — kill to free RAM</h2><div id=chromes></div>`)
 		} else {
-			rows.WriteString(`<div class=row><span class=id>serve không chạy -auto (không có chrome nào)</span></div>`)
+			rows.WriteString(`<div class=row><span class=id>serve not running with -auto (no chromes)</span></div>`)
 		}
-	default: // models + endpoints chung một trang
-		rows.WriteString(`<h2>thêm endpoint mới</h2>` + providerForm)
+	default: // models + endpoints share one page
+		rows.WriteString(`<h2>add new endpoint</h2>` + providerForm)
 		group := ""
 		for _, rm := range renderList {
 			if rm.Publisher != group {
@@ -605,13 +605,13 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 					`<input type=checkbox class=sw` + checked + ` value="` + html.EscapeString(rm.ID) + `">` +
 					`<span class=name title="` + html.EscapeString(rm.BaseURL) + `">` + html.EscapeString(rm.Name) + `</span>` +
 					`<span class=id>` + html.EscapeString(rm.ID) + `</span>` +
-					`<button type=button class=del-btn title="Xóa endpoint" onclick="deleteProvider(event, ` + strconv.Itoa(rm.Index) + `)">×</button>` +
+					`<button type=button class=del-btn title="Delete endpoint" onclick="deleteProvider(event, ` + strconv.Itoa(rm.Index) + `)">×</button>` +
 					`</div>`)
 			} else {
 				_, isDead := deadModels.Load(rm.ID)
 				if isDead {
 					failed++
-					badge = `<span class=badge title="upstream báo không có function khả dụng">lỗi upstream</span>`
+					badge = `<span class=badge title="upstream reports no available function">upstream error</span>`
 				}
 				rows.WriteString(modelRowHTML(rm.ID, rm.Name, checked, badge))
 			}
@@ -647,7 +647,7 @@ const CHROMES = ` + strconv.FormatBool(chromeAdmin != nil) + `;
 // adminHeadTabs renders just the nav tab bar.
 func adminHeadTabs(active string, chromes bool) string {
 	type tab struct{ id, label string }
-	tabs := []tab{{"dashboard", "thống kê"}, {"models", "models"}}
+	tabs := []tab{{"dashboard", "stats"}, {"models", "models"}}
 	if chromes {
 		tabs = append(tabs, tab{"chromes", "chrome captcha"})
 	}
@@ -774,10 +774,10 @@ table.stats tfoot th{color:var(--dim);background:var(--card)}
   <div class=tab-bar>` + adminHeadTabs(active, chromes) + `</div>
   <div class=sub id=counts></div>
   <div class=bar>
-    <input type=search id=q placeholder="tìm model…" autofocus data-page="models">
-    <button id=all>Bật hết</button>
-    <button id=none>Tắt hết</button>
-    <button id=retry>Thử lại model lỗi</button>
+    <input type=search id=q placeholder="search models…" autofocus data-page="models">
+    <button id=all>Enable all</button>
+    <button id=none>Disable all</button>
+    <button id=retry>Retry failed models</button>
   </div>
 </div></header>
 `
@@ -785,12 +785,12 @@ table.stats tfoot th{color:var(--dim);background:var(--card)}
 
 // providerForm is the "add an endpoint" card rendered above the model list.
 const providerForm = `<form id=addform class=card>
-  <input name=name placeholder="tên (vd: openrouter)" required>
+  <input name=name placeholder="name (e.g. openrouter)" required>
   <input name=base_url placeholder="https://openrouter.ai/api/v1" required>
   <input name=api_key placeholder="api key" type=password>
-  <input name=model placeholder="model id bên đó (vd: x-ai/grok-4)" required>
-  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=messages_only>chỉ /v1/messages</label>
-  <button type=submit>Thêm endpoint</button>
+  <input name=model placeholder="their model id (e.g. x-ai/grok-4)" required>
+  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=messages_only>only /v1/messages</label>
+  <button type=submit>Add endpoint</button>
 </form>`
 
 // adminScript keeps the page and the mask file in sync: every toggle saves.
@@ -810,7 +810,7 @@ function flash(msg) {
 
 function render() {
   const on = sws.filter(s => s.checked).length;
-  counts.textContent = on + ' bật · ' + (sws.length - on) + ' tắt · ' + FAILED + ' lỗi upstream';
+  counts.textContent = on + ' on · ' + (sws.length - on) + ' off · ' + FAILED + ' upstream errors';
 }
 
 async function save() {
@@ -822,9 +822,9 @@ async function save() {
       headers: {'content-type': 'application/json'},
       body: JSON.stringify({masks_id: hidden}),
     });
-    flash(res.ok ? 'đã lưu' : 'lưu lỗi: ' + res.status);
+    flash(res.ok ? 'saved' : 'save failed: ' + res.status);
   } catch (err) {
-    flash('lưu lỗi: ' + err);
+    flash('save failed: ' + err);
   }
 }
 
@@ -844,14 +844,14 @@ if (addForm) addForm.addEventListener('submit', async e => {
       body: JSON.stringify(list),
     });
     if (res.ok) {
-      flash('đã thêm endpoint');
+      flash('added endpoint');
       setTimeout(() => { location.href = '/admin?page=models'; }, 300);
     } else {
       const err = await res.json().catch(() => ({error: res.status}));
-      flash('lỗi thêm: ' + err.error);
+      flash('add failed: ' + err.error);
     }
   } catch (err) {
-    flash('lỗi thêm: ' + err);
+    flash('add failed: ' + err);
   }
 });
 
@@ -866,14 +866,14 @@ async function deleteProvider(e, idx) {
       body: JSON.stringify(list),
     });
     if (res.ok) {
-      flash('đã xóa endpoint');
+      flash('deleted endpoint');
       setTimeout(() => { location.href = '/admin?page=models'; }, 300);
     } else {
       const err = await res.json().catch(() => ({error: res.status}));
-      flash('lỗi xóa: ' + err.error);
+      flash('delete failed: ' + err.error);
     }
   } catch (err) {
-    flash('lỗi xóa: ' + err);
+    flash('delete failed: ' + err);
   }
 }
 
@@ -888,14 +888,14 @@ async function deleteModel(e, id) {
       body: JSON.stringify({id}),
     });
     if (res.ok) {
-      flash('đã xóa: ' + id);
+      flash('deleted: ' + id);
       setTimeout(() => location.reload(), 300);
     } else {
       const err = await res.json().catch(() => ({error: res.status}));
-      flash('lỗi xóa: ' + err.error);
+      flash('delete failed: ' + err.error);
     }
   } catch (err) {
-    flash('lỗi xóa: ' + err);
+    flash('delete failed: ' + err);
   }
 }
 
@@ -907,14 +907,14 @@ async function restoreModel(id) {
       body: JSON.stringify({id, restore: true}),
     });
     if (res.ok) {
-      flash('đã khôi phục: ' + id);
+      flash('restored: ' + id);
       setTimeout(() => location.reload(), 300);
     } else {
       const err = await res.json().catch(() => ({error: res.status}));
-      flash('lỗi khôi phục: ' + err.error);
+      flash('restore failed: ' + err.error);
     }
   } catch (err) {
-    flash('lỗi khôi phục: ' + err);
+    flash('restore failed: ' + err);
   }
 }
 
@@ -929,7 +929,7 @@ function drawDeleted() {
 
   const header = document.createElement('div');
   header.id = 'deleted-header';
-  header.innerHTML = '<span class=arrow>▶</span> <span>Model đã xóa</span> <span class=cnt>' + deleted.length + ' model</span>';
+  header.innerHTML = '<span class=arrow>▶</span> <span>Deleted models</span> <span class=cnt>' + deleted.length + ' model</span>';
   header.onclick = () => section.classList.toggle('collapsed');
 
   const list = document.createElement('div');
@@ -939,7 +939,7 @@ function drawDeleted() {
     row.className = 'del-row';
     row.innerHTML = '<span class=id>' + id + '</span>';
     const btn = document.createElement('button');
-    btn.textContent = 'khôi phục';
+    btn.textContent = 'restore';
     btn.onclick = () => restoreModel(id);
     row.appendChild(btn);
     list.appendChild(row);
@@ -981,9 +981,9 @@ if (PAGE !== 'models') {
   document.getElementById('retry').style.display = 'none';
 }
 
-// --- Thống kê model: KPI tiles + line charts (crosshair, tooltip). Refresh 5s.
-// Palette validated: #3987e5/#d95926 trên surface #171a21; badge trạng thái
-// dùng --on/--bad.
+// --- Model stats: KPI tiles + line charts (crosshair, tooltip). Refresh 5s.
+// Palette validated: #3987e5/#d95926 on the #171a21 surface; status badges
+// use --on/--bad.
 if (PAGE === 'dashboard') {
   const charts = document.getElementById('charts');
   const fmtTime = t => { const d = new Date(t); return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—'; };
@@ -992,7 +992,7 @@ if (PAGE === 'dashboard') {
   const fmtUp = ms => { if (!(ms > 0)) return '—'; const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
     return (h ? h + 'g ' : '') + (h || m ? m + 'p ' : '') + (h ? '' : (s % 60) + 's'); };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  // Màu badge provider: chỉ lấy từ palette đã validate / token CSS có sẵn.
+  // Provider badge colors: only from the validated palette / existing CSS tokens.
   const PCOLS = ['#3987e5', '#d95926', 'var(--on)', 'var(--warn)', 'var(--dim)'];
   function provCell(m) {
     m = m || '';
@@ -1006,18 +1006,18 @@ if (PAGE === 'dashboard') {
   const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
   const MCOLS = ['#3987e5', '#d95926', '#2da44e', '#bf4b52', '#8250df', '#1b7c83', '#e3b341', '#218bff']; // per-model chart lines
   const LCOLS = [
-    ['time', 'thời gian', 'lúc gateway nhận request'],
-    ['model', 'model', 'model được gọi'],
-    ['streamed', 'stream', 'request có dùng stream không'],
-    ['input_tokens', 'in tok', 'token đầu vào'],
-    ['output_tokens', 'out tok', 'token đầu ra'],
-    ['ms', 'độ trễ', 'tổng thời gian upstream trả lời'],
-    ['ttfb_ms', 'TTFB', 'chờ token đầu tiên (chỉ stream)'],
-    ['error', 'trạng thái', 'ok = upstream trả 2xx; lỗi = >=400 hoặc rớt kết nối'],
+    ['time', 'time', 'when the gateway got the request'],
+    ['model', 'model', 'called model'],
+    ['streamed', 'stream', 'whether the request streamed'],
+    ['input_tokens', 'in tok', 'input tokens'],
+    ['output_tokens', 'out tok', 'output tokens'],
+    ['ms', 'latency', 'total upstream response time'],
+    ['ttfb_ms', 'TTFB', 'time to first token (stream only)'],
+    ['error', 'status', 'ok = upstream 2xx; error = >=400 or dropped connection'],
   ];
   let models = [], series = [], modelSeries = {}, events = [], startedAt = 0;
 
-  // Sparkline cho tile: 12 điểm cuối, line key màu series, nền không vẽ.
+  // Tile sparkline: last 12 points, series-coloured line, no fill.
   function spark(vals, color) {
     const v = vals.slice(-12), max = Math.max(1, ...v);
     const W = 96, H = 26;
@@ -1030,8 +1030,8 @@ if (PAGE === 'dashboard') {
       '</svg>';
   }
 
-  // Line chart có crosshair + tooltip. defs: [{key,label,color,fmt}].
-  // Một trục Y / chart (không dual-axis); tooltip hiển thị đúng series của chart.
+  // Line chart with crosshair + tooltip. defs: [{key,label,color,fmt}].
+  // One Y axis per chart (no dual axis); tooltip shows that chart's series.
   let chartDefs = [], chartData = [];
   function lineChart(defs, data) {
     const W = 640, H = 150, PADL = 38, PADR = 10, PADT = 8, PADB = 20;
@@ -1054,7 +1054,7 @@ if (PAGE === 'dashboard') {
       const pts = vals.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
       paths += '<path d="M' + x(0).toFixed(1) + ',' + y(vals[0] || 0).toFixed(1) +
         ' L' + pts.replace(/ /g, ' L') + '" fill="none" stroke="' + d.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-      // end-dot với surface ring 2px
+      // end-dot with a 2px surface ring
       paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#171a21" stroke-width="2"/>';
       legend += '<span class=lg><svg width=14 height=8><line x1=0 y1=4 x2=14 y2=4 stroke=' + d.color + ' stroke-width=2 stroke-linecap=round/></svg>' + d.label + '</span>';
     });
@@ -1084,35 +1084,35 @@ if (PAGE === 'dashboard') {
     const mss = events.map(e => e.ms || 0).sort((a, b) => a - b);
     const p95 = mss.length ? mss[Math.max(0, Math.ceil(0.95 * mss.length) - 1)] : 0;
     const tiles = [
-      [fmtN(tot('requests')), 'tổng requests', reqS, C.req],
-      [fmtN(last.requests || 0), 'req / phút', reqS, C.req],
-      [fmtN(tot('input_tokens')), 'tokens vào', series.map(p => p.input_tokens || 0), C.in],
+      [fmtN(tot('requests')), 'total requests', reqS, C.req],
+      [fmtN(last.requests || 0), 'req / min', reqS, C.req],
+      [fmtN(tot('input_tokens')), 'in tokens', series.map(p => p.input_tokens || 0), C.in],
       [fmtN(tot('output_tokens')), 'tokens ra', series.map(p => p.output_tokens || 0), C.out],
-      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'lỗi', series.map(p => p.errors || 0), '#e66767'],
+      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'error', series.map(p => p.errors || 0), '#e66767'],
       [ttfbAvg ? fmtMS(ttfbAvg) : '—', 'TTFB tb (stream)', null, null],
-      [mss.length ? fmtMS(p95) : '—', 'p95 độ trễ', null, null],
+      [mss.length ? fmtMS(p95) : '—', 'p95 latency', null, null],
       [fmtUp(startedAt ? Date.now() - startedAt : 0), 'uptime', null, null],
     ];
     charts.innerHTML =
       '<div class=tiles>' + tiles.map(t =>
         '<div class=tile><div class=lbl>' + t[1] + '</div><div class=big>' + t[0] + '</div>' +
         (t[2] ? spark(t[2], t[3]) : '') + '</div>').join('') + '</div>' +
-      '<div class=note>tất cả số liệu tính từ lúc bật server' +
+      '<div class=note>all metrics since server start' +
         (startedAt ? ' (' + new Date(startedAt).toLocaleString() + ')' : '') +
-        ' — mọi api gateway phục vụ: model NVIDIA playground lẫn custom providers đi qua passthrough (tokenharbor, justworker…) đều được tính.</div>' +
+        ' — every API the gateway serves: both NVIDIA playground models and custom providers via passthrough (tokenharbor, justworker…) all count.</div>' +
       '<div class=chartrow>' +
-      lineChart([{key:'requests', label:'requests / phút', color:C.req}]) +
-      lineChart([{key:'input_tokens', label:'tokens vào / phút', color:C.in}, {key:'output_tokens', label:'tokens ra / phút', color:C.out}]) +
-      lineChart([{key:'ttfb_avg_ms', label:'TTFB tb / phút', color:C.req, fmt:fmtMS}]) +
+      lineChart([{key:'requests', label:'requests / min', color:C.req}]) +
+      lineChart([{key:'input_tokens', label:'in tok / min', color:C.in}, {key:'output_tokens', label:'out tok / min', color:C.out}]) +
+      lineChart([{key:'ttfb_avg_ms', label:'avg TTFB / min', color:C.req, fmt:fmtMS}]) +
       '</div>' +
-      '<div class=note>TTFB = thời gian chờ byte đầu tiên của stream; phút không có request stream nào hiển thị 0.</div>' +
-      '<div class=note><b>biểu đồ theo model — requests / phút</b></div>' +
+      '<div class=note>TTFB = time to first byte of the stream; minutes with no streamed requests show 0.</div>' +
+      '<div class=note><b>per-model charts — requests / min</b></div>' +
       (Object.keys(modelSeries).length
         ? (() => {
             const top = Object.entries(modelSeries)
               .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
               .sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
-            // màu cố định theo hash tên model — trùng bảng provCell, không đổi mỗi lần render
+            // fixed colour by model-name hash — matches the provCell table, stable per render
             const mcol = m => { let h = 0; for (let j = 0; j < m.length; j++) h = (h * 31 + m.charCodeAt(j)) >>> 0; return MCOLS[h % MCOLS.length]; };
             const grid = series.map((p, i) => {
               const o = {minute: p.minute};
@@ -1121,12 +1121,12 @@ if (PAGE === 'dashboard') {
             });
             return lineChart(top.map((m, k) => ({key: 'm' + k, label: esc(m), color: mcol(m)})), grid);
           })()
-        : '<div class=row><span class=id>chưa có request nào</span></div>');
+        : '<div class=row><span class=id>no requests yet</span></div>');
     armCharts();
   }
 
-  // Crosshair + tooltip: snap theo X gần nhất, hiện các series của chart đó tại X.
-  // Tooltip dùng textContent (giá trị model id là untrusted).
+  // Crosshair + tooltip: snap to nearest X, show that chart's series at X.
+  // Tooltip uses textContent (model id values are untrusted).
   function armCharts() {
     charts.querySelectorAll('.chwrap').forEach((w, ci) => {
       const svg = w.querySelector('svg'), cross = svg.querySelector('.crosshair'), tip = w.querySelector('.tip');
@@ -1160,7 +1160,7 @@ if (PAGE === 'dashboard') {
     });
   }
 
-  // Bảng request: dùng chung cho log live và khung lịch sử.
+  // Request table: shared by the live log and history frames.
   function logTable(evs, key, dir) {
     const lval = (e, k) => k === 'time' ? +new Date(e.time)
       : k === 'model' ? (e.model || '')
@@ -1173,12 +1173,12 @@ if (PAGE === 'dashboard') {
       sorted.map(e => '<tr>' +
         '<td>' + fmtTime(e.time) + '</td>' +
         '<td class=nm>' + provCell(e.model) + '</td>' +
-        '<td>' + (e.streamed ? 'có' : '—') + '</td>' +
+        '<td>' + (e.streamed ? 'yes' : '—') + '</td>' +
         '<td>' + fmtN(e.input_tokens) + '</td>' +
         '<td>' + fmtN(e.output_tokens) + '</td>' +
         '<td>' + fmtMS(e.ms) + '</td>' +
         '<td>' + (e.ttfb_ms ? fmtMS(e.ttfb_ms) : '—') + '</td>' +
-        '<td>' + (e.error ? '<span class=badge>lỗi</span>' : '<span class="badge ok">ok</span>') + '</td>' +
+        '<td>' + (e.error ? '<span class=badge>error</span>' : '<span class="badge ok">ok</span>') + '</td>' +
       '</tr>').join('') + '</tbody></table></div>';
   }
   async function poll() {
@@ -1193,13 +1193,13 @@ if (PAGE === 'dashboard') {
         startedAt = d.started_at ? +new Date(d.started_at) : 0;
         drawCharts();
         totalFrames = d.total_frames || 0;
-        if (!curFrame && totalFrames) openFrame(totalFrames); else drawFrames(); // poll chỉ cập nhật số chip
-      } else { charts.textContent = 'lỗi stats: ' + res.status; }
-    } catch (err) { charts.textContent = 'lỗi stats: ' + err; }
+        if (!curFrame && totalFrames) openFrame(totalFrames); else drawFrames(); // poll only updates chip counts
+      } else { charts.textContent = 'stats error: ' + res.status; }
+    } catch (err) { charts.textContent = 'stats error: ' + err; }
   }
 
-  // Khung log lịch sử: #frames = chip 1..total (frame 1 = cũ nhất), >12 thì
-  // dùng nút « » dịch cửa sổ 12 chip; nội dung fetch 1 lần/lần bấm, không poll.
+  // History log frames: #frames = chips 1..total (frame 1 = oldest), >12 the
+  // « » buttons slide a 12-chip window; content fetched once per click, no polling.
   const framesBox = document.getElementById('frames');
   const frameBox = document.getElementById('framebox');
   let totalFrames = 0, curFrame = 0, fKey = 'time', fDir = -1, fEvents = [];
@@ -1222,11 +1222,11 @@ if (PAGE === 'dashboard') {
     try {
       const res = await fetch('/admin/stats?frames=' + n);
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) { frameBox.textContent = 'lỗi khung: ' + (d.error || res.status); return; }
+      if (!res.ok) { frameBox.textContent = 'frame error: ' + (d.error || res.status); return; }
       totalFrames = d.total_frames || totalFrames; drawFrames();
       fEvents = d.events || [];
       frameBox.innerHTML = logTable(fEvents, fKey, fDir);
-    } catch (err) { frameBox.textContent = 'lỗi khung: ' + err; }
+    } catch (err) { frameBox.textContent = 'frame error: ' + err; }
   }
   framesBox.addEventListener('click', e => {
     const b = e.target.closest('button[data-f]');
@@ -1244,7 +1244,7 @@ if (PAGE === 'dashboard') {
   setInterval(poll, 5000);
 } // dashboard block end
 
-// --- Chrome captcha (tắt = giết process + giải phóng RAM, bật lại = spawn mới) ---
+// --- Captcha chromes (kill = free RAM, start = respawn) ---
 if (CHROMES && PAGE === 'chromes') {
   const box = document.getElementById('chromes');
   const fmtLast = t => {
@@ -1266,39 +1266,39 @@ if (CHROMES && PAGE === 'chromes') {
     btn.disabled = true;
     try {
       await post({index: +btn.dataset.index, mode: btn.dataset.mode});
-      flash(btn.dataset.mode === 'kill' ? 'đã tắt chrome ' + btn.dataset.index + ' (RAM đã giải phóng)'
-                                       : 'đã bật lại chrome ' + btn.dataset.index);
+      flash(btn.dataset.mode === 'kill' ? 'killed chrome ' + btn.dataset.index + ' (RAM freed)'
+                                       : 'started chrome ' + btn.dataset.index);
       drawChromes();
     } catch (err) {
-      flash('lỗi: ' + err.message);
+      flash('error: ' + err.message);
       btn.disabled = false;
     }
   }
   async function drawChromes() {
     try {
       const res = await fetch('/admin/chromes');
-      if (!res.ok) { box.textContent = 'lỗi chromes: ' + res.status; return; }
+      if (!res.ok) { box.textContent = 'chromes error: ' + res.status; return; }
       const list = (await res.json()).chromes || [];
       box.innerHTML = (list.length
         ? list.map(c =>
             '<div class=row data-id="chrome' + c.index + '">' +
               '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
-              (c.busy && !c.killed ? '<span class="badge warn">đang bận</span>' : '') +
-              (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">đã tắt</span>'
+              (c.busy && !c.killed ? '<span class="badge warn">busy</span>' : '') +
+              (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">killed</span>'
                         : '<span class="badge ok">running</span>') +
               (c.warmed && !c.killed ? '<span class="badge ok">warm</span>' : '') +
               '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
                 c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
               '<button type=button data-index="' + c.index + '" data-mode="' +
                 (c.killed ? 'start' : 'kill') + '">' +
-                (c.killed ? 'bật lại' : 'tắt') + '</button>' +
+                (c.killed ? 'start' : 'kill') + '</button>' +
             '</div>').join('')
-        : '<div class=row><span class=id>không có chrome nào</span>') +
+        : '<div class=row><span class=id>no chromes</span>') +
         (list.length ? '<div class=bar style="margin-top:.6rem">' +
-          '<button type=button data-mode-all=kill>tắt tất cả</button>' +
-          '<button type=button data-mode-all=start>bật lại tất cả</button></div>' : '');
+          '<button type=button data-mode-all=kill>kill all</button>' +
+          '<button type=button data-mode-all=start>start all</button></div>' : '');
     } catch (err) {
-      box.textContent = 'lỗi chromes: ' + err;
+      box.textContent = 'chromes error: ' + err;
     }
   }
   box.addEventListener('click', async e => {
@@ -1307,11 +1307,11 @@ if (CHROMES && PAGE === 'chromes') {
       all.disabled = true;
       try {
         await post({mode: all.dataset.modeAll, all: true});
-        flash(all.dataset.modeAll === 'kill' ? 'đã tắt tất cả chrome (RAM đã giải phóng)'
-                                            : 'đã bật lại tất cả chrome');
+        flash(all.dataset.modeAll === 'kill' ? 'killed all chromes (RAM freed)'
+                                            : 'started all chromes');
         drawChromes();
       } catch (err) {
-        flash('lỗi: ' + err.message);
+        flash('error: ' + err.message);
         all.disabled = false;
       }
       return;
