@@ -702,6 +702,8 @@ h2{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.09
 .tile .big{font-size:1.35rem;font-weight:600;line-height:1.2}
 .tile .lbl{color:var(--dim);font-size:.72rem;margin-bottom:.1rem}
 .chartbox{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.6rem .8rem .5rem;margin-bottom:.6rem}
+.chartrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(26rem,1fr));gap:.6rem;margin-bottom:.6rem}
+.chartrow .chartbox{margin-bottom:0}
 .note{color:var(--dim);font-size:.72rem;margin:.2rem 0 .5rem}
 .pb{border:1px solid;border-radius:999px;font-size:.66rem;padding:0 .4rem;line-height:1.4;white-space:nowrap;margin-right:.4rem}
 #frames{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.5rem}
@@ -1098,9 +1100,11 @@ if (PAGE === 'dashboard') {
       '<div class=note>tất cả số liệu tính từ lúc bật server' +
         (startedAt ? ' (' + new Date(startedAt).toLocaleString() + ')' : '') +
         ' — mọi api gateway phục vụ: model NVIDIA playground lẫn custom providers đi qua passthrough (tokenharbor, justworker…) đều được tính.</div>' +
+      '<div class=chartrow>' +
       lineChart([{key:'requests', label:'requests / phút', color:C.req}]) +
       lineChart([{key:'input_tokens', label:'tokens vào / phút', color:C.in}, {key:'output_tokens', label:'tokens ra / phút', color:C.out}]) +
       lineChart([{key:'ttfb_avg_ms', label:'TTFB tb / phút', color:C.req, fmt:fmtMS}]) +
+      '</div>' +
       '<div class=note>TTFB = thời gian chờ byte đầu tiên của stream; phút không có request stream nào hiển thị 0.</div>' +
       '<div class=note><b>biểu đồ theo model — requests / phút</b></div>' +
       (Object.keys(modelSeries).length
