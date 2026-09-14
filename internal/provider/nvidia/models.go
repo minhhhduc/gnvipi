@@ -9,6 +9,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
+// DefaultAliasModel returns the playground model used to serve requests whose
+// model field is a built-in Claude name (see cmd/serve claudeDefaultModelAlias).
+func DefaultAliasModel() string { return models.DefaultModel }
+
 // RegistryModels returns cliproxy ModelInfo entries for every playground model.
 func RegistryModels() []*cliproxy.ModelInfo {
 	ids := make([]string, 0, len(models.Models))

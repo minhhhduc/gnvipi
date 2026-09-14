@@ -72,8 +72,8 @@ func receiveTestValue[T any](t *testing.T, ch <-chan T, name string) T {
 
 func leaseTestRequest() (clipexec.Request, clipexec.Options) {
 	return clipexec.Request{
-		Model:   "z-ai/glm-5.2",
-		Payload: []byte(`{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hi"}]}`),
+		Model:   "deepseek-ai/deepseek-v4-pro",
+		Payload: []byte(`{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`),
 	}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 }
 
@@ -213,7 +213,7 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 	}))
 	defer up.Close()
 
-	info, err := models.Lookup("z-ai/glm-5.2")
+	info, err := models.Lookup("deepseek-ai/deepseek-v4-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +225,8 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 	})
 
 	stream, err := e.ExecuteStream(context.Background(), nil, clipexec.Request{
-		Model:   "z-ai/glm-5.2",
-		Payload: []byte(`{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+		Model:   "deepseek-ai/deepseek-v4-pro",
+		Payload: []byte(`{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}],"stream":true}`),
 	}, clipexec.Options{
 		Stream:       true,
 		SourceFormat: sdktranslator.FormatOpenAI,
@@ -612,8 +612,8 @@ func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
 }
 
 func TestTranslatorClaudeToOpenAIChatShape(t *testing.T) {
-	claude := []byte(`{"model":"z-ai/glm-5.2","max_tokens":64,"messages":[{"role":"user","content":"Hi"}],"stream":false}`)
-	out := sdktranslator.TranslateRequest(sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "z-ai/glm-5.2", claude, false)
+	claude := []byte(`{"model":"deepseek-ai/deepseek-v4-pro","max_tokens":64,"messages":[{"role":"user","content":"Hi"}],"stream":false}`)
+	out := sdktranslator.TranslateRequest(sdktranslator.FormatClaude, sdktranslator.FormatOpenAI, "deepseek-ai/deepseek-v4-pro", claude, false)
 	if len(out) == 0 {
 		t.Fatal("empty translation")
 	}
@@ -624,14 +624,14 @@ func TestTranslatorClaudeToOpenAIChatShape(t *testing.T) {
 	if _, ok := raw["messages"]; !ok {
 		t.Fatalf("expected messages in openai chat shape, got %s", out)
 	}
-	if raw["model"] != "z-ai/glm-5.2" {
+	if raw["model"] != "deepseek-ai/deepseek-v4-pro" {
 		t.Fatalf("model=%v", raw["model"])
 	}
 }
 
 func TestTranslatorResponsesToOpenAIChatShape(t *testing.T) {
-	responses := []byte(`{"model":"z-ai/glm-5.2","input":"Hi","stream":false}`)
-	out := sdktranslator.TranslateRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, "z-ai/glm-5.2", responses, false)
+	responses := []byte(`{"model":"deepseek-ai/deepseek-v4-pro","input":"Hi","stream":false}`)
+	out := sdktranslator.TranslateRequest(sdktranslator.FormatOpenAIResponse, sdktranslator.FormatOpenAI, "deepseek-ai/deepseek-v4-pro", responses, false)
 	if len(out) == 0 {
 		t.Fatal("empty translation")
 	}
@@ -661,7 +661,7 @@ func TestRegistryModelsSorted(t *testing.T) {
 		}
 		byID[m.ID] = true
 	}
-	for _, want := range []string{"z-ai/glm-5.2", "deepseek-ai/deepseek-v4-pro"} {
+	for _, want := range []string{"deepseek-ai/deepseek-v4-pro", "deepseek-ai/deepseek-v4-pro"} {
 		if !byID[want] {
 			t.Errorf("missing %q", want)
 		}
@@ -689,8 +689,8 @@ func TestExecuteUsesHeaderCaptcha(t *testing.T) {
 	hdr := make(http.Header)
 	hdr.Set("nv-captcha-token", "from-header")
 	resp, err := e.Execute(context.Background(), nil, clipexec.Request{
-		Model:   "z-ai/glm-5.2",
-		Payload: []byte(`{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hi"}]}`),
+		Model:   "deepseek-ai/deepseek-v4-pro",
+		Payload: []byte(`{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`),
 	}, clipexec.Options{
 		SourceFormat: sdktranslator.FormatOpenAI,
 		Headers:      hdr,
@@ -766,9 +766,9 @@ func TestExecute_sendsResponsesSamplingFieldsToPlayground(t *testing.T) {
 
 	// When: a Responses request uses Chat-compatible sampling and attribution fields.
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
-		Model: "z-ai/glm-5.2",
+		Model: "deepseek-ai/deepseek-v4-pro",
 		Payload: []byte(`{
-			"model":"z-ai/glm-5.2",
+			"model":"deepseek-ai/deepseek-v4-pro",
 			"input":"hello",
 			"temperature":0.25,
 			"top_p":0.8,
@@ -815,9 +815,9 @@ func TestExecute_forwardsResponsesStoreWithoutRejecting(t *testing.T) {
 
 	// When: a Responses request includes store (unsupported by NVIDIA, but must not be rejected).
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
-		Model: "z-ai/glm-5.2",
+		Model: "deepseek-ai/deepseek-v4-pro",
 		Payload: []byte(`{
-			"model":"z-ai/glm-5.2",
+			"model":"deepseek-ai/deepseek-v4-pro",
 			"input":"hello",
 			"store":true
 		}`),

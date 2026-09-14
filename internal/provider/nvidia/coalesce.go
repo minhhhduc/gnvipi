@@ -3,6 +3,7 @@ package nvidia
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -24,6 +25,14 @@ func coalesceSSEEvents(src io.Reader, window time.Duration, emit func(line strin
 	defer close(done)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				select {
+				case ch <- readResult{err: fmt.Errorf("sse reader panicked: %v", r)}:
+				case <-done:
+				}
+			}
+		}()
 		reader := bufio.NewReaderSize(src, 64<<10)
 		for {
 			line, err := reader.ReadString('\n')
@@ -110,6 +119,14 @@ func coalesceSSEEvents(src io.Reader, window time.Duration, emit func(line strin
 
 			case strings.HasPrefix(line, "data: "):
 				data := strings.TrimPrefix(line, "data: ")
+				if strings.TrimSpace(data) == "" {
+					// Empty `data: \n\n` lines that NVIDIA emits during long
+					// reasoning pauses — the OpenAI client treats any
+					// forwarded `data:` line as a frame and may close on
+					// a content-less one. Drop them, keep the connection
+					// open, and let the real delta through when it lands.
+					break
+				}
 				var chunk map[string]any
 				if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 					if err := flushPending(); err != nil {
@@ -185,6 +202,15 @@ func pipeSSELines(src io.Reader, emit func(line string) error) error {
 		if len(line) > 0 {
 			trimmed := strings.TrimRight(line, "\r\n")
 			if trimmed != "" && !strings.HasPrefix(trimmed, ":") {
+				// Same empty-data guard as the coalesce path: `data: \n\n`
+				// from upstream during a long reasoning pause must not
+				// reach the OpenAI consumer as a content-less frame.
+				if strings.HasPrefix(trimmed, "data:") && strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")) == "" {
+					if err := readerErrOrNil(err); err != nil {
+						return err
+					}
+					continue
+				}
 				if errEmit := emit(trimmed); errEmit != nil {
 					return errEmit
 				}
@@ -197,6 +223,13 @@ func pipeSSELines(src io.Reader, emit func(line string) error) error {
 			return err
 		}
 	}
+}
+
+func readerErrOrNil(err error) error {
+	if err == nil || err == io.EOF {
+		return nil
+	}
+	return err
 }
 
 // mergeableContent returns the delta content if this chunk is a pure content

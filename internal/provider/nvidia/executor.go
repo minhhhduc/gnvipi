@@ -113,8 +113,10 @@ func (e *Executor) Execute(ctx context.Context, _ *coreauth.Auth, req clipexec.R
 	if err != nil {
 		return clipexec.Response{}, err
 	}
+	start := time.Now()
 	upResp, release, err := e.doPredict(ctx, info, body, opts)
 	if err != nil {
+		GlobalStats.Observe(modelFrom(body), 0, 0, time.Since(start), 0, false, true)
 		return clipexec.Response{}, err
 	}
 	defer release()
@@ -122,12 +124,25 @@ func (e *Executor) Execute(ctx context.Context, _ *coreauth.Auth, req clipexec.R
 
 	raw, err := io.ReadAll(upResp.Body)
 	if err != nil {
+		GlobalStats.Observe(modelFrom(body), 0, 0, time.Since(start), 0, false, true)
 		return clipexec.Response{}, err
 	}
+	in, out := scrapeUsage(raw)
+	GlobalStats.Observe(modelFrom(body), in, out, time.Since(start), 0, false, false)
 	from := sdktranslator.FormatOpenAI
 	to := clipexec.ResponseFormatOrSource(opts)
-	out := sdktranslator.TranslateNonStream(ctx, from, to, req.Model, opts.OriginalRequest, body, raw, nil)
-	return clipexec.Response{Payload: out, Headers: upResp.Header.Clone()}, nil
+	outPayload := sdktranslator.TranslateNonStream(ctx, from, to, req.Model, opts.OriginalRequest, body, raw, nil)
+	return clipexec.Response{Payload: outPayload, Headers: upResp.Header.Clone()}, nil
+}
+
+// modelFrom pulls the model id out of the prepared upstream body (for stats;
+// falls back to "" when unparseable, never fails the request).
+func modelFrom(body []byte) string {
+	var probe struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	return probe.Model
 }
 
 // ExecuteStream handles streaming chat completions against NVIDIA predict.
@@ -147,15 +162,38 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 		defer release()
 		defer upResp.Body.Close()
 
+		start := time.Now()
+		statModel := modelFrom(body)
+		var inTok, outTok uint64
+		var sawErr bool
+		var firstOut time.Time // when the first real output chunk left us (TTFB)
+
 		from := sdktranslator.FormatOpenAI
 		to := clipexec.ResponseFormatOrSource(opts)
 		var param any
 
 		emitLine := func(line string) error {
+			// Stats: sniff SSE lines for a usage object (include_usage is
+			// forced on in preparePayload, so the final chunk carries it).
+			if in, out := scrapeUsage([]byte(line)); in != 0 || out != 0 {
+				inTok, outTok = in, out
+			}
 			chunks := sdktranslator.TranslateStream(ctx, from, to, req.Model, opts.OriginalRequest, body, []byte(line), &param)
 			for _, chunk := range chunks {
+				if len(chunk) == 0 {
+					// Skip empty frames: the CLIProxyAPI consumer treats a
+					// zero-length payload as end-of-stream and closes the
+					// connection, which surfaces to the client as an
+					// interrupt. Some SSE lines (keep-alives, role-only
+					// deltas, control frames) translate to empty chunks —
+					// drop them rather than forward.
+					continue
+				}
 				select {
 				case out <- clipexec.StreamChunk{Payload: chunk}:
+					if firstOut.IsZero() {
+						firstOut = time.Now()
+					}
 				case <-ctx.Done():
 					return ctx.Err()
 				}
@@ -164,11 +202,17 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 		}
 
 		if err := coalesceSSEEvents(upResp.Body, e.coalesce, emitLine); err != nil && ctx.Err() == nil {
+			sawErr = true
 			select {
 			case out <- clipexec.StreamChunk{Err: err}:
 			case <-ctx.Done():
 			}
 		}
+		ttfb := time.Duration(0)
+		if !firstOut.IsZero() {
+			ttfb = firstOut.Sub(start)
+		}
+		GlobalStats.Observe(statModel, inTok, outTok, time.Since(start), ttfb, true, sawErr)
 	}()
 
 	return &clipexec.StreamResult{Headers: upResp.Header.Clone(), Chunks: out}, nil
@@ -190,6 +234,21 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
 	}
 
+	// Validate tools[] before forwarding upstream: NVIDIA returns a generic
+	// 400 for malformed tool entries but the diagnostic body is unhelpful
+	// (e.g. "Cannot parse function_id with value None"), so we surface a
+	// precise message to the caller. Claude Code's tool wiring has
+	// occasionally drifted (missing "function" key, missing "name"), so a
+	// caller-side mistake would otherwise reach NVIDIA verbatim.
+	if err := validateTools(body); err != nil {
+		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, err.Error())
+	}
+
+	body, err = sanitizeToolMessages(body)
+	if err != nil {
+		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
+	}
+
 	// Ensure stream flag matches the execution mode after translation.
 	body, err = forceStreamFlag(body, stream)
 	if err != nil {
@@ -204,6 +263,7 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 	if lookupModel == "" {
 		lookupModel = model
 	}
+	log.Printf("nvidia executor got model=%q", lookupModel)
 	info, err := models.Lookup(lookupModel)
 	if err != nil {
 		if uerr, ok := err.(*models.ErrUnknownModel); ok {
@@ -211,6 +271,7 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 		}
 		return nil, models.ModelInfo{}, err
 	}
+
 	return body, info, nil
 }
 
@@ -356,6 +417,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		if msg == "" {
 			msg = "upstream request failed"
 		}
+		log.Printf("upstream error status=%d model=%q body=%.500s", status, info.Slug, msg)
 		return nil, nil, &coreauth.Error{
 			Code:       "upstream_error",
 			Message:    msg,
@@ -451,7 +513,7 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 
 func captchaErr(err error) error {
 	status := http.StatusUnauthorized
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "captcha pool empty after") {
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "captcha pool empty after") || strings.Contains(err.Error(), "captcha token required") {
 		status = http.StatusServiceUnavailable
 	} else if errors.Is(err, context.Canceled) {
 		status = http.StatusRequestTimeout
@@ -495,4 +557,115 @@ func isRetryableCaptchaFailure(status int, raw []byte) bool {
 		return true
 	}
 	return strings.Contains(low, "captcha") || strings.Contains(low, "hcaptcha")
+}
+
+// sanitizeToolMessages coerces role:"tool" content into the shape NVIDIA's
+// playground accepts: a string, an array of {text,image_url,video_url} parts,
+// or absent. Upstream translators can leak an object or non-conforming part
+// (e.g. Claude tool_result with object content), which NVIDIA rejects with
+// "tool message `content` must be a string..." — so wrap anything else in a
+// JSON string, exactly what NVIDIA's error message prescribes.
+func sanitizeToolMessages(body []byte) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	msgsRaw, ok := raw["messages"]
+	if !ok {
+		return body, nil
+	}
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(msgsRaw, &msgs); err != nil {
+		return nil, err
+	}
+
+	changed := false
+	for i, m := range msgs {
+		role, _ := m["role"]
+		if string(role) != `"tool"` {
+			continue
+		}
+		content, ok := m["content"]
+		if !ok || string(content) == "null" {
+			continue
+		}
+		if toolContentOK(content) {
+			continue
+		}
+		wrapped, err := json.Marshal(string(content))
+		if err != nil {
+			return nil, err
+		}
+		msgs[i]["content"] = wrapped
+		changed = true
+	}
+	if !changed {
+		return body, nil
+	}
+	out, err := json.Marshal(msgs)
+	if err != nil {
+		return nil, err
+	}
+	raw["messages"] = out
+	return json.Marshal(raw)
+}
+
+// toolContentOK reports whether a role:"tool" content value already matches
+// NVIDIA's accepted shapes: JSON string, or array of parts whose type is
+// text / image_url / video_url (unknown part types rejected upstream).
+func toolContentOK(content json.RawMessage) bool {
+	var v any
+	if err := json.Unmarshal(content, &v); err != nil {
+		return false
+	}
+	switch c := v.(type) {
+	case string:
+		return true
+	case []any:
+		for _, p := range c {
+			pm, ok := p.(map[string]any)
+			if !ok {
+				return false
+			}
+			switch pm["type"] {
+			case "text", "image_url", "video_url":
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// validateTools walks body.tools[] and rejects entries that NVIDIA would
+// reject with an opaque 400. Returns nil if the key is absent or empty
+// (callers may legitimately send no tools).
+func validateTools(body []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("tools: body is not valid JSON: %w", err)
+	}
+	tools, ok := raw["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return nil
+	}
+	for i, e := range tools {
+		em, ok := e.(map[string]any)
+		if !ok {
+			return fmt.Errorf("tools[%d]: expected JSON object, got %T", i, e)
+		}
+		if typ, _ := em["type"].(string); typ != "function" {
+			return fmt.Errorf("tools[%d]: type=%q (want \"function\")", i, typ)
+		}
+		fn, ok := em["function"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("tools[%d]: missing \"function\" object", i)
+		}
+		name, _ := fn["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("tools[%d]: function.name is empty", i)
+		}
+	}
+	return nil
 }
