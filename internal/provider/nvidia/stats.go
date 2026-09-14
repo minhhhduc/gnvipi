@@ -107,9 +107,11 @@ func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, s
 	defer s.mu.Unlock()
 	ms := uint64(dur.Milliseconds())
 	tms := uint64(ttfb.Milliseconds())
-	s.events = append(s.events, RequestEvent{
+	ev := RequestEvent{
 		Time: time.Now(), Model: model, In: in, Out: out, MS: ms, TTFB: tms, Stream: streamed, Err: isErr,
-	})
+	}
+	s.events = append(s.events, ev)
+	AppendLog(ev)
 	if len(s.events) > eventsKeep {
 		s.events = s.events[len(s.events)-eventsKeep:]
 	}

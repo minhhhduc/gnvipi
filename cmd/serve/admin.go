@@ -402,11 +402,21 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method không hỗ trợ"})
 		}
 	case "/admin/stats":
+		if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {
+			ev, tf, err := nvidia.ReadFrame(n)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"frame": n, "total_frames": tf, "events": ev})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
-			"models":     nvidia.GlobalStats.Snapshot(),
-			"series":     nvidia.GlobalStats.Series(60),
-			"events":     nvidia.GlobalStats.Events(200),
-			"started_at": nvidia.GlobalStats.StartedAt(),
+			"models":       nvidia.GlobalStats.Snapshot(),
+			"series":       nvidia.GlobalStats.Series(60),
+			"events":       nvidia.GlobalStats.Events(200),
+			"started_at":   nvidia.GlobalStats.StartedAt(),
+			"total_frames": nvidia.FramesCount(),
 		})
 	case "/admin/models":
 		var payload prefsFile
@@ -554,7 +564,8 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 	case "dashboard":
 		rows.WriteString(`<h2>tổng quan (mọi api, tính từ lúc bật server)</h2><div id=charts></div>
 <h2>log yêu cầu gần đây</h2><div id=log></div>
-<h2>thống kê theo model</h2><div id=stats></div>`)
+<h2>thống kê theo model</h2><div id=stats></div>
+<h2>log request (khung 200 request, giữ lại qua restart)</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
 		if chromeAdmin != nil {
 			rows.WriteString(`<h2>chrome captcha</h2><div id=chromes></div>`)
@@ -692,6 +703,9 @@ h2{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.09
 .chartbox{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.6rem .8rem .5rem;margin-bottom:.6rem}
 .note{color:var(--dim);font-size:.72rem;margin:.2rem 0 .5rem}
 .pb{border:1px solid;border-radius:999px;font-size:.66rem;padding:0 .4rem;line-height:1.4;white-space:nowrap;margin-right:.4rem}
+#frames{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.5rem}
+#frames button{padding:.2rem .55rem;font-size:.78rem}
+.fp.on{background:#223044;border-color:#39405a}
 .logwrap{max-height:22rem;overflow:auto;border:1px solid var(--line);border-radius:10px}
 .chhead{display:flex;gap:1rem;margin-bottom:.3rem}
 .lg{color:var(--dim);font-size:.72rem;display:inline-flex;align-items:center;gap:.3rem}
@@ -1123,16 +1137,16 @@ if (PAGE === 'dashboard') {
     });
   }
 
-  // Log per-request: bảng events mới nhất trước, sort được theo cột, cuộn 22rem.
-  function drawLog() {
+  // Bảng request: dùng chung cho log live và khung lịch sử.
+  function logTable(evs, key, dir) {
     const lval = (e, k) => k === 'time' ? +new Date(e.time)
       : k === 'model' ? (e.model || '')
       : typeof e[k] === 'boolean' ? (e[k] ? 1 : 0) : (e[k] || 0);
-    const sorted = events.slice().sort((a, b) => {
-      const va = lval(a, logKey), vb = lval(b, logKey);
-      return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * logDir;
+    const sorted = evs.slice().sort((a, b) => {
+      const va = lval(a, key), vb = lval(b, key);
+      return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * dir;
     });
-    logBox.innerHTML = '<div class=logwrap><table class=stats><thead>' + sortHeader(LCOLS, logKey, logDir, 'data-lkey') + '</thead><tbody>' +
+    return '<div class=logwrap><table class=stats><thead>' + sortHeader(LCOLS, key, dir, 'data-lkey') + '</thead><tbody>' +
       sorted.map(e => '<tr>' +
         '<td>' + fmtTime(e.time) + '</td>' +
         '<td class=nm>' + provCell(e.model) + '</td>' +
@@ -1144,6 +1158,7 @@ if (PAGE === 'dashboard') {
         '<td>' + (e.error ? '<span class=badge>lỗi</span>' : '<span class="badge ok">ok</span>') + '</td>' +
       '</tr>').join('') + '</tbody></table></div>';
   }
+  function drawLog() { logBox.innerHTML = logTable(events, logKey, logDir); }
 
   function draw() {
     if (!models.length) { box.innerHTML = '<div class=row><span class=id>chưa có request nào</span></div>'; return; }
@@ -1182,6 +1197,8 @@ if (PAGE === 'dashboard') {
         drawCharts();
         drawLog();
         draw();
+        totalFrames = d.total_frames || 0;
+        if (!curFrame && totalFrames) openFrame(totalFrames); else drawFrames(); // poll chỉ cập nhật số chip
       } else { charts.textContent = logBox.textContent = box.textContent = 'lỗi stats: ' + res.status; }
     } catch (err) { charts.textContent = logBox.textContent = box.textContent = 'lỗi stats: ' + err; }
   }
@@ -1196,6 +1213,49 @@ if (PAGE === 'dashboard') {
     if (!th) return;
     if (logKey === th.dataset.lkey) { logDir = -logDir; } else { logKey = th.dataset.lkey; logDir = -1; }
     drawLog();
+  });
+
+  // Khung log lịch sử: #frames = chip 1..total (frame 1 = cũ nhất), >12 thì
+  // dùng nút « » dịch cửa sổ 12 chip; nội dung fetch 1 lần/lần bấm, không poll.
+  const framesBox = document.getElementById('frames');
+  const frameBox = document.getElementById('framebox');
+  let totalFrames = 0, curFrame = 0, fKey = 'time', fDir = -1, fEvents = [];
+  function drawFrames() {
+    if (!totalFrames) { framesBox.innerHTML = ''; return; }
+    let lo = 1, hi = totalFrames, nav = '';
+    if (totalFrames > 12) {
+      lo = Math.floor((curFrame - 1) / 12) * 12 + 1;
+      hi = Math.min(totalFrames, lo + 11);
+      nav = '<button type=button data-f="prev">«</button>';
+    }
+    let chips = '';
+    for (let f = lo; f <= hi; f++)
+      chips += '<button type=button class="fp' + (f === curFrame ? ' on' : '') + '" data-f=' + f + '>' + f + '</button>';
+    framesBox.innerHTML = nav + chips + (totalFrames > 12 ? '<button type=button data-f="next">»</button>' : '');
+  }
+  async function openFrame(n) {
+    n = Math.max(1, Math.min(totalFrames, n));
+    curFrame = n; drawFrames();
+    try {
+      const res = await fetch('/admin/stats?frames=' + n);
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { frameBox.textContent = 'lỗi khung: ' + (d.error || res.status); return; }
+      totalFrames = d.total_frames || totalFrames; drawFrames();
+      fEvents = d.events || [];
+      frameBox.innerHTML = logTable(fEvents, fKey, fDir);
+    } catch (err) { frameBox.textContent = 'lỗi khung: ' + err; }
+  }
+  framesBox.addEventListener('click', e => {
+    const b = e.target.closest('button[data-f]');
+    if (!b) return;
+    const f = b.dataset.f;
+    openFrame(f === 'prev' ? curFrame - 12 : f === 'next' ? curFrame + 12 : +f);
+  });
+  frameBox.addEventListener('click', e => {
+    const th = e.target.closest('th[data-lkey]');
+    if (!th) return;
+    if (fKey === th.dataset.lkey) { fDir = -fDir; } else { fKey = th.dataset.lkey; fDir = -1; }
+    frameBox.innerHTML = logTable(fEvents, fKey, fDir);
   });
   poll();
   setInterval(poll, 5000);
