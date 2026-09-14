@@ -4,10 +4,18 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	// Observe() appends to the global stats log — keep test events out of the
+	// real %LocalAppData%\glm52-nvidia\stats.jsonl the dashboard reads.
+	os.Setenv("GLM52_STATS_FILE", filepath.Join(os.TempDir(), "glm52-nvidia-test-stats.jsonl"))
+	os.Exit(m.Run())
+}
 
 func TestStatsLogFrames(t *testing.T) {
 	l := openStatsLogAt(t.TempDir() + "/stats.jsonl")
