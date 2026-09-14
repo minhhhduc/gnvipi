@@ -564,8 +564,6 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 	switch page {
 	case "dashboard":
 		rows.WriteString(`<h2>tổng quan (mọi api, tính từ lúc bật server)</h2><div id=charts></div>
-<h2>log yêu cầu gần đây</h2><div id=log></div>
-<h2>thống kê theo model</h2><div id=stats></div>
 <h2>log request (khung 200 request, giữ lại qua restart)</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
 		if chromeAdmin != nil {
@@ -966,12 +964,10 @@ if (PAGE !== 'models') {
   document.getElementById('retry').style.display = 'none';
 }
 
-// --- Thống kê model: KPI tiles + line charts (crosshair, tooltip) + log
-// per-request + bảng sort theo model. Refresh 5s. Palette validated:
-// #3987e5/#d95926 trên surface #171a21; badge trạng thái dùng --on/--bad.
+// --- Thống kê model: KPI tiles + line charts (crosshair, tooltip). Refresh 5s.
+// Palette validated: #3987e5/#d95926 trên surface #171a21; badge trạng thái
+// dùng --on/--bad.
 if (PAGE === 'dashboard') {
-  const box = document.getElementById('stats');
-  const logBox = document.getElementById('log');
   const charts = document.getElementById('charts');
   const fmtTime = t => { const d = new Date(t); return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—'; };
   const fmtMS = ms => ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : (ms || 0) + 'ms';
@@ -992,18 +988,6 @@ if (PAGE === 'dashboard') {
   }
   const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
   const MCOLS = ['#3987e5', '#d95926', '#2da44e', '#bf4b52', '#8250df', '#1b7c83', '#e3b341', '#218bff']; // per-model chart lines
-  const COLS = [
-    ['model', 'model', 'model được gọi; badge màu = publisher (model playground NVIDIA) hoặc tên endpoint tự thêm ở /admin'],
-    ['requests', 'req', 'số request đã gửi qua gateway (kể cả lỗi)'],
-    ['errors', 'lỗi', 'upstream trả >=400 hoặc lỗi kết nối'],
-    ['streamed', 'stream', 'số request dùng stream (SSE)'],
-    ['input_tokens', 'in tok', 'token đầu vào, lấy từ usage của upstream (chỉ tính request thành công)'],
-    ['output_tokens', 'out tok', 'token đầu ra, lấy từ usage của upstream'],
-    ['avg_ms', 'tb', 'độ trễ trung bình mỗi request (từ lúc nhận tới lúc upstream trả xong)'],
-    ['ttfb_avg_ms', 'ttfb tb', 'thời gian chờ token ĐẦU TIÊN, trung bình — chỉ đo được với request stream'],
-    ['last_ms', 'last', 'độ trễ lần gọi gần nhất'],
-    ['last_ok', 'ok lúc', 'thời điểm request THÀNH CÔNG gần nhất'],
-  ];
   const LCOLS = [
     ['time', 'thời gian', 'lúc gateway nhận request'],
     ['model', 'model', 'model được gọi'],
@@ -1015,7 +999,6 @@ if (PAGE === 'dashboard') {
     ['error', 'trạng thái', 'ok = upstream trả 2xx; lỗi = >=400 hoặc rớt kết nối'],
   ];
   let models = [], series = [], modelSeries = {}, events = [], startedAt = 0;
-  let sortKey = 'requests', sortDir = -1, logKey = 'time', logDir = -1;
 
   // Sparkline cho tile: 12 điểm cuối, line key màu series, nền không vẽ.
   function spark(vals, color) {
@@ -1121,8 +1104,7 @@ if (PAGE === 'dashboard') {
             });
             return lineChart(top.map((m, k) => ({key: 'm' + k, label: esc(m), color: mcol(m)})), grid);
           })()
-        : '<div class=row><span class=id>chưa có request nào</span></div>') +
-      '<div class=note>mỗi đường màu = 1 model (kể cả api custom); màu ứng với tên ngay trên biểu đồ; tối đa 8 model nhiều request nhất.</div>';
+        : '<div class=row><span class=id>chưa có request nào</span></div>');
     armCharts();
   }
 
@@ -1182,33 +1164,6 @@ if (PAGE === 'dashboard') {
         '<td>' + (e.error ? '<span class=badge>lỗi</span>' : '<span class="badge ok">ok</span>') + '</td>' +
       '</tr>').join('') + '</tbody></table></div>';
   }
-  function drawLog() { logBox.innerHTML = logTable(events, logKey, logDir); }
-
-  function draw() {
-    if (!models.length) { box.innerHTML = '<div class=row><span class=id>chưa có request nào</span></div>'; return; }
-    const sorted = models.slice().sort((a, b) => {
-      const va = a[sortKey], vb = b[sortKey];
-      return (typeof va === 'string' ? va.localeCompare(vb) : (va || 0) - (vb || 0)) * sortDir;
-    });
-    const tot = k => models.reduce((s, m) => s + (m[k] || 0), 0);
-    box.innerHTML =
-      '<div class=note>chỉ hiện model CÓ request; mỗi dòng = 1 model (kể cả api custom); rê chuột lên tiêu đề cột để xem chú giải; bấm tiêu đề để sắp xếp.</div>' +
-      '<table class=stats><thead>' + sortHeader(COLS, sortKey, sortDir, 'data-key') + '</thead><tbody>' +
-      sorted.map(m => '<tr data-id="' + esc(m.model) + '">' +
-        '<td class=nm>' + provCell(m.model) + '</td>' +
-        '<td>' + m.requests + '</td>' +
-        '<td>' + (m.errors ? '<span class=badge>' + m.errors + '</span>' : '0') + '</td>' +
-        '<td>' + (m.streamed || 0) + '</td>' +
-        '<td>' + fmtN(m.input_tokens) + '</td>' +
-        '<td>' + fmtN(m.output_tokens) + '</td>' +
-        '<td>' + fmtMS(m.avg_ms) + '</td>' +
-        '<td>' + (m.ttfb_avg_ms ? fmtMS(m.ttfb_avg_ms) : '—') + '</td>' +
-        '<td>' + fmtMS(m.last_ms) + '</td>' +
-        '<td>' + fmtTime(m.last_ok) + '</td>' +
-      '</tr>').join('') +
-      '</tbody><tfoot><tr><th>tổng</th><th>' + tot('requests') + '</th><th>' + tot('errors') + '</th><th>' + tot('streamed') +
-      '</th><th>' + fmtN(tot('input_tokens')) + '</th><th>' + fmtN(tot('output_tokens')) + '</th><th></th><th></th><th></th><th></th></tr></tfoot></table>';
-  }
   async function poll() {
     try {
       const res = await fetch('/admin/stats');
@@ -1220,25 +1175,11 @@ if (PAGE === 'dashboard') {
         events = d.events || [];
         startedAt = d.started_at ? +new Date(d.started_at) : 0;
         drawCharts();
-        drawLog();
-        draw();
         totalFrames = d.total_frames || 0;
         if (!curFrame && totalFrames) openFrame(totalFrames); else drawFrames(); // poll chỉ cập nhật số chip
-      } else { charts.textContent = logBox.textContent = box.textContent = 'lỗi stats: ' + res.status; }
-    } catch (err) { charts.textContent = logBox.textContent = box.textContent = 'lỗi stats: ' + err; }
+      } else { charts.textContent = 'lỗi stats: ' + res.status; }
+    } catch (err) { charts.textContent = 'lỗi stats: ' + err; }
   }
-  box.addEventListener('click', e => {
-    const th = e.target.closest('th[data-key]');
-    if (!th) return;
-    if (sortKey === th.dataset.key) { sortDir = -sortDir; } else { sortKey = th.dataset.key; sortDir = -1; }
-    draw();
-  });
-  logBox.addEventListener('click', e => {
-    const th = e.target.closest('th[data-lkey]');
-    if (!th) return;
-    if (logKey === th.dataset.lkey) { logDir = -logDir; } else { logKey = th.dataset.lkey; logDir = -1; }
-    drawLog();
-  });
 
   // Khung log lịch sử: #frames = chip 1..total (frame 1 = cũ nhất), >12 thì
   // dùng nút « » dịch cửa sổ 12 chip; nội dung fetch 1 lần/lần bấm, không poll.
