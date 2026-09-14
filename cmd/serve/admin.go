@@ -1029,13 +1029,14 @@ if (PAGE === 'dashboard') {
   // Line chart có crosshair + tooltip. defs: [{key,label,color,fmt}].
   // Một trục Y / chart (không dual-axis); tooltip hiển thị đúng series của chart.
   let chartDefs = [];
-  function lineChart(defs) {
+  function lineChart(defs, data) {
     const W = 640, H = 150, PADL = 38, PADR = 10, PADT = 8, PADB = 20;
-    const all = defs.map(d => series.map(p => p[d.key] || 0));
+    if (!data) data = series;
+    const all = defs.map(d => data.map(p => p[d.key] || 0));
     const max = Math.max(1, ...all.flat());
     const tick = max > 4 ? Math.ceil(max / 4) : 1;
     const yMax = Math.max(tick, Math.ceil(max / tick) * tick);
-    const x = i => PADL + i * (W - PADL - PADR) / Math.max(1, series.length - 1);
+    const x = i => PADL + i * (W - PADL - PADR) / Math.max(1, data.length - 1);
     const y = v => H - PADB - v * (H - PADB - PADT) / yMax;
     let grid = '';
     for (let t = 0; t <= 4; t++) {
@@ -1045,7 +1046,7 @@ if (PAGE === 'dashboard') {
     }
     let paths = '', legend = '';
     defs.forEach((d, di) => {
-      const vals = series.map(p => p[d.key] || 0);
+      const vals = data.map(p => p[d.key] || 0);
       const pts = vals.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
       paths += '<path d="M' + x(0).toFixed(1) + ',' + y(vals[0] || 0).toFixed(1) +
         ' L' + pts.replace(/ /g, ' L') + '" fill="none" stroke="' + d.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
