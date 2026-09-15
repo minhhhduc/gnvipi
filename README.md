@@ -70,13 +70,13 @@ One page per tab (`?page=`), each doing exactly one thing:
 ## How it works
 
 ```
-client â”€â”€/v1/*â”€â”€â–¶ CLIProxyAPI â”€â”€â–¶ nvidia executor â”€â”€â–¶ playground predict API
-                    â”‚                    â”‚                    â–²
-                    â”‚                    â””â”€ scrapeUsage â”€â”€â”€â”€â”€â”€â”¤ SSE usage
-                    â–¼                                        â”‚
-              passthrough (custom providers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
-              captcha pool (headless Chrome + hCaptcha) â”€â”€â”€â”€â”€â”˜ nv-captcha-token
-              GlobalStats.Observe â—€â”€â”€ every call on every path
+client ──/v1/*──▶ CLIProxyAPI ──▶ nvidia executor ──▶ playground predict API
+                    │                    │                    ▲
+                    │                    └── scrapeUsage ──────┤ SSE usage
+                    ▼                                         │
+              passthrough (custom providers) ──────────────────┤
+              captcha pool (headless Chrome + hCaptcha) ───────┘ nv-captcha-token
+              GlobalStats.Observe ◀── every call on every path
 ```
 
 - **Captcha pool**: `-auto` prewarms hCaptcha tokens with headless Chrome
