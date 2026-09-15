@@ -1,11 +1,11 @@
-﻿# gnvipi â€” NVIDIA Playground Gateway
+﻿# gnvipi — NVIDIA Playground Gateway
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 A self-hosted multi-format LLM gateway that serves **NVIDIA Playground models
-(deepseek-v4, kimi, glm, nemotron, gpt-oss, â€¦)** plus any number of
+(deepseek-v4, kimi, glm, nemotron, gpt-oss, …)** plus any number of
 **custom OpenAI-compatible / Anthropic endpoints** behind one local server, with
 automatic hCaptcha solving (headless Chrome pool) and a built-in admin console
 for model management and per-request statistics.
@@ -13,7 +13,7 @@ for model management and per-request statistics.
 Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
 inbound format translation; this repo provides the NVIDIA provider executor,
 the captcha automation, and the admin surface. Inbound gateway API keys are
-**not** enabled â€” keep it on localhost.
+**not** enabled — keep it on localhost.
 
 ## Endpoints
 
@@ -47,24 +47,24 @@ go run ./cmd/serve -captcha "P1_..."   # one-shot manual token, no browser
 ```
 
 Point any client at `http://localhost:8080`. Model ids come from the playground
-catalog (`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`, â€¦) plus
+catalog (`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`, …) plus
 `<provider>/<model>` aliases you add in the admin page.
 
-## Admin console â€” `/admin`
+## Admin console — `/admin`
 
 One page per tab (`?page=`), each doing exactly one thing:
 
-- **`?page=dashboard`** â€” token/request statistics **since server start**, for
+- **`?page=dashboard`** — token/request statistics **since server start**, for
   every API route: playground models (executor) *and* custom providers
   (passthrough middleware). KPI tiles (requests, req/min, tokens in/out,
   error %, TTFB, p95 latency, uptime), per-minute charts with crosshair
   tooltips, per-model table (only models with traffic), and a scrollable
-  **log of the last 200 individual requests** (time Â· model Â· provider Â·
-  stream Â· tokens Â· latency Â· TTFB Â· ok/error), sortable by column.
-- **`?page=models`** â€” toggle every model on/off (persisted), delete/restore
+  **log of the last 200 individual requests** (time · model · provider ·
+  stream · tokens · latency · TTFB · ok/error), sortable by column.
+- **`?page=models`** — toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom OpenAI-compatible endpoints
   (including `messages_only` mode for WAF-blocked upstreams).
-- **`?page=chromes`** â€” live captcha Chrome workers: pause/resume each process,
+- **`?page=chromes`** — live captcha Chrome workers: pause/resume each process,
   see busy/warm state and extract counts.
 
 ## How it works
