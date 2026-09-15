@@ -81,6 +81,11 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		model, _ := payload["model"].(string)
 		prov := lookupCustomProvider(p, model)
+		if prov == nil && customModelHidden(p, model) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "model is hidden"})
+			c.Abort()
+			return
+		}
 		if prov == nil || prov.MessagesOnly {
 			c.Next()
 			return
@@ -225,15 +230,9 @@ func claudeDefaultModelAlias(defaultModel string) gin.HandlerFunc {
 		}
 		if json.Unmarshal(body, &payload) == nil &&
 			strings.HasPrefix(payload.Model, "claude-") {
-			rewritten := bytes.Replace(body,
-				[]byte(`"model":`+`"`+payload.Model+`"`),
-				[]byte(`"model":`+`"`+defaultModel+`"`), 1)
-			if bytes.Equal(rewritten, body) {
-				rewritten = bytes.Replace(body,
-					[]byte(`"model": `+`"`+payload.Model+`"`),
-					[]byte(`"model": `+`"`+defaultModel+`"`), 1)
+			if rewritten, changed := rewriteJSONModel(body, payload.Model, defaultModel); changed {
+				body = rewritten
 			}
-			body = rewritten
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 		c.Request.ContentLength = int64(len(body))
@@ -409,6 +408,11 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 
 		prov := lookupMessagesOnly(p, payload.Model)
+		if prov == nil && customModelHidden(p, payload.Model) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "model is hidden"})
+			c.Abort()
+			return
+		}
 		if prov == nil {
 			c.Next()
 			return
@@ -416,11 +420,9 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 
 		// The upstream only knows its own model name — strip our alias prefix
 		// ("justworker/gpt-5.6-terra" -> "gpt-5.6-terra") before forwarding.
-		outBody := bytes.Replace(body, []byte(`"model":"`+payload.Model+`"`), []byte(`"model":"`+prov.Model+`"`), 1)
-		if bytes.Equal(outBody, body) {
-			outBody = bytes.Replace(body, []byte(`"model": "`+payload.Model+`"`), []byte(`"model": "`+prov.Model+`"`), 1)
+		if rewritten, changed := rewriteJSONModel(body, payload.Model, prov.Model); changed {
+			body = rewritten
 		}
-		body = outBody
 
 		target := strings.TrimRight(prov.BaseURL, "/")
 		if strings.HasSuffix(target, "/v1") {
@@ -495,13 +497,45 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 			_, copyErr = io.Copy(tee, resp.Body)
 		}
 		statCopyDone(payload.Model, start, tee, resp.StatusCode, streamed, copyErr)
+		c.Abort()
 	}
+}
+
+// rewriteJSONModel replaces the top-level model field structurally, so valid
+// JSON with arbitrary whitespace or field order is handled consistently.
+func rewriteJSONModel(body []byte, from, to string) ([]byte, bool) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return body, false
+	}
+	var model string
+	if err := json.Unmarshal(raw["model"], &model); err != nil || model != from {
+		return body, false
+	}
+	replacement, err := json.Marshal(to)
+	if err != nil {
+		return body, false
+	}
+	raw["model"] = replacement
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 // lookupMessagesOnly finds the messages-only provider owning modelID. modelID
 // is matched either as the full alias ("justworker/gpt-5.6-terra") or as the
 // bare upstream name when the provider registered it without an alias prefix.
 func lookupCustomProvider(p *modelPrefs, modelID string) *customProvider {
+	prov := customProviderForModel(p, modelID)
+	if prov == nil || customModelHidden(p, modelID) {
+		return nil
+	}
+	return prov
+}
+
+func customProviderForModel(p *modelPrefs, modelID string) *customProvider {
 	list := p.listProviders()
 	for i := range list {
 		prov := &list[i]
@@ -510,6 +544,11 @@ func lookupCustomProvider(p *modelPrefs, modelID string) *customProvider {
 		}
 	}
 	return nil
+}
+
+func customModelHidden(p *modelPrefs, modelID string) bool {
+	prov := customProviderForModel(p, modelID)
+	return prov != nil && (p.isHidden(modelID) || p.isHidden(prov.alias()))
 }
 
 func lookupMessagesOnly(p *modelPrefs, modelID string) *customProvider {

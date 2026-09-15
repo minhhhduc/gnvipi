@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ var prefs = &modelPrefs{}
 
 type modelPrefs struct {
 	mu           sync.RWMutex
+	changeMu     sync.Mutex // serializes mutations, persistence, and reload callbacks
 	path         string
 	hidden       map[string]struct{}
 	deleted      map[string]struct{}
@@ -153,6 +155,8 @@ func (p *modelPrefs) isDeleted(id string) bool {
 
 // setHidden replaces the mask and writes it back to disk.
 func (p *modelPrefs) setHidden(ids []string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	p.hidden = make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -164,6 +168,8 @@ func (p *modelPrefs) setHidden(ids []string) error {
 
 // setDeleted replaces the deleted set and writes it back to disk.
 func (p *modelPrefs) setDeleted(ids []string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	p.deleted = make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -175,6 +181,8 @@ func (p *modelPrefs) setDeleted(ids []string) error {
 
 // addDeleted adds a single model to the deleted set.
 func (p *modelPrefs) addDeleted(id string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	if p.deleted == nil {
 		p.deleted = map[string]struct{}{}
@@ -191,6 +199,8 @@ func (p *modelPrefs) addDeleted(id string) error {
 
 // removeDeleted restores a model from the deleted set.
 func (p *modelPrefs) removeDeleted(id string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	delete(p.deleted, id)
 	p.mu.Unlock()
@@ -218,6 +228,8 @@ func (p *modelPrefs) listProviders() []customProvider {
 
 // setProviders replaces the custom endpoints and asks the gateway to reload them.
 func (p *modelPrefs) setProviders(list []customProvider) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	p.providers = list
 	notify := p.onChange
@@ -300,7 +312,20 @@ func (p *modelPrefs) save() error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(path, append(out, '\n'), 0o600)
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".gnvipi-models-*.tmp")
+	if err == nil {
+		name := tmp.Name()
+		defer os.Remove(name)
+		if _, err = tmp.Write(append(out, '\n')); err == nil {
+			err = tmp.Close()
+		} else {
+			_ = tmp.Close()
+		}
+		if err == nil {
+			err = os.Rename(name, path)
+		}
+	}
 	if err == nil {
 		if notify := p.onMaskChange; notify != nil {
 			notify()
