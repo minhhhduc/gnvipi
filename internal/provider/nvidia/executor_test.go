@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/models"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	clipexec "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"

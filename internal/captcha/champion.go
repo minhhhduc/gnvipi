@@ -17,9 +17,9 @@ import (
 // failure the captcha subsystem can swap to a fallback URL without
 // re-running the full SelectChampion benchmark.
 //
-// State file location: $XDG_CACHE_HOME/glm52-nvidia/playground-state.json
-// (defaults to ~/.cache/glm52-nvidia/playground-state.json on Linux,
-// %LocalAppData%/glm52-nvidia/playground-state.json on Windows).
+// State file location: $XDG_CACHE_HOME/gnvipi/playground-state.json
+// (defaults to ~/.cache/gnvipi/playground-state.json on Linux,
+// %LocalAppData%/gnvipi/playground-state.json on Windows).
 type ChampionState struct {
 	mu sync.Mutex
 
@@ -36,7 +36,7 @@ type ChampionState struct {
 // ChampionStateFile returns the absolute path of the persisted state file.
 // Tests + callers override by passing a path directly to Load/Save.
 func ChampionStateFile() string {
-	if dir := os.Getenv("GLM52_CAPTCHA_STATE"); dir != "" {
+	if dir := os.Getenv("GNVIPI_CAPTCHA_STATE"); dir != "" {
 		return dir
 	}
 	// os.UserCacheDir returns ~/.cache on Linux, %LocalAppData% on Windows,
@@ -45,7 +45,7 @@ func ChampionStateFile() string {
 	if err != nil || base == "" {
 		base, _ = os.UserHomeDir()
 	}
-	return filepath.Join(base, "glm52-nvidia", "playground-state.json")
+	return filepath.Join(base, "gnvipi", "playground-state.json")
 }
 
 // LoadChampion reads champion state from path; returns an empty state

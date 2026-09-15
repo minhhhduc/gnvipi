@@ -1,4 +1,4 @@
-// cmd/example/main.go — Example usage of the glm52 Go client.
+// cmd/example/main.go — Example usage of the gnvipi Go client.
 //
 // Usage:
 //
@@ -17,8 +17,10 @@ import (
 	"os"
 	"os/signal"
 	"time"
+	"unicode/utf8"
 
-	glm52 "glm52-nvidia"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
 )
 
 func main() {
@@ -52,14 +54,14 @@ func main() {
 		log.Fatal("Specify -captcha or -auto")
 	}
 
-	opts := []glm52.Option{glm52.WithCaptchaToken(token)}
+	opts := []gnvipi.Option{gnvipi.WithCaptchaToken(token)}
 	if *model != "" {
-		opts = append(opts, glm52.WithModel(*model))
+		opts = append(opts, gnvipi.WithModel(*model))
 	}
-	client := glm52.New(opts...)
+	client := gnvipi.New(opts...)
 
 	// --- Send request ---
-	messages := []glm52.Message{
+	messages := []gnvipi.Message{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "user", Content: *prompt},
 	}
@@ -67,9 +69,9 @@ func main() {
 	if *stream {
 		fmt.Print("\n=== Streaming response ===\n\n")
 		smooth := time.Duration(*smoothMs) * time.Millisecond
-		var lastUsage *glm52.Usage
+		var lastUsage *gnvipi.Usage
 		var reasoningStarted, contentStarted bool
-		err := client.StreamChat(ctx, messages, func(chunk glm52.StreamChunk) {
+		err := client.StreamChat(ctx, messages, func(chunk gnvipi.StreamChunk) {
 			if chunk.Error != nil {
 				log.Printf("Stream error: %v", chunk.Error)
 				return
@@ -116,4 +118,25 @@ func main() {
 			fmt.Printf("\n[Usage: %s]\n", resp.Usage.Format())
 		}
 	}
+}
+
+// writeSmooth prints s rune-by-rune with a fixed delay. delay<=0 prints at once.
+func writeSmooth(s string, delay time.Duration) {
+	if delay <= 0 || s == "" {
+		fmt.Print(s)
+		return
+	}
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		fmt.Printf("%c", r)
+		_ = os.Stdout.Sync()
+		s = s[size:]
+		time.Sleep(delay)
+	}
+}
+
+// extractCaptchaToken loads the NVIDIA Playground, triggers hCaptcha, and
+// extracts the token from data-hcaptcha-response.
+func extractCaptchaToken(baseCtx context.Context) (string, error) {
+	return captcha.Extract(baseCtx)
 }

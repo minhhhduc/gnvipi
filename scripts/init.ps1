@@ -15,15 +15,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -Path $PSScriptRoot
+$root = Split-Path -Parent $PSScriptRoot; Set-Location -Path $root
 
-$target = Join-Path $PSScriptRoot 'internal\models\playground_models.json'
+$target = Join-Path $root 'internal\models\playground_models.json'
 if ((Test-Path $target) -and -not $Force) {
   Write-Host "already there, skipping: $target" -ForegroundColor Green
   return
 }
 
-$default = Join-Path $PSScriptRoot 'internal\models\playground_models.default.json'
+$default = Join-Path $root 'internal\models\playground_models.default.json'
 if (-not (Test-Path $default)) { throw "missing default file: $default" }
 
 Copy-Item $default $target

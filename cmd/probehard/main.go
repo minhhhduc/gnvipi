@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 type probe struct {

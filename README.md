@@ -1,11 +1,11 @@
-# gnvipi — NVIDIA Playground Gateway
+﻿# gnvipi â€” NVIDIA Playground Gateway
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 A self-hosted multi-format LLM gateway that serves **NVIDIA Playground models
-(deepseek-v4, kimi, glm, nemotron, gpt-oss, …)** plus any number of
+(deepseek-v4, kimi, glm, nemotron, gpt-oss, â€¦)** plus any number of
 **custom OpenAI-compatible / Anthropic endpoints** behind one local server, with
 automatic hCaptcha solving (headless Chrome pool) and a built-in admin console
 for model management and per-request statistics.
@@ -13,7 +13,7 @@ for model management and per-request statistics.
 Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
 inbound format translation; this repo provides the NVIDIA provider executor,
 the captcha automation, and the admin surface. Inbound gateway API keys are
-**not** enabled — keep it on localhost.
+**not** enabled â€” keep it on localhost.
 
 ## Endpoints
 
@@ -29,14 +29,14 @@ the captcha automation, and the admin surface. Inbound gateway API keys are
 ## Quick start
 
 ```powershell
-.\init.ps1                     # one-time: create local model catalog (skips if present)
+.\scripts\init.ps1             # one-time: create local model catalog (skips if present)
 
 # Windows (recommended): builds if needed, checks the port, starts with -auto
-.\run.ps1                      # :8080, 3 chromes, pool of 6
-.\run.ps1 -Port 8081          # test instance
-.\run.ps1 -Claude             # start gateway + open Claude Code pointed at it
-.\run.ps1 -Harness -Batch 6   # low-RAM captcha harness
-.\run.ps1 -Proxy socks5://127.0.0.1:1080
+.\scripts\run.ps1                      # :8080, 3 chromes, pool of 6
+.\scripts\run.ps1 -Port 8081          # test instance
+.\scripts\run.ps1 -Claude             # start gateway + open Claude Code pointed at it
+.\scripts\run.ps1 -Harness -Batch 6   # low-RAM captcha harness
+.\scripts\run.ps1 -Proxy socks5://127.0.0.1:1080
 ```
 
 ```bash
@@ -47,36 +47,36 @@ go run ./cmd/serve -captcha "P1_..."   # one-shot manual token, no browser
 ```
 
 Point any client at `http://localhost:8080`. Model ids come from the playground
-catalog (`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`, …) plus
+catalog (`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`, â€¦) plus
 `<provider>/<model>` aliases you add in the admin page.
 
-## Admin console — `/admin`
+## Admin console â€” `/admin`
 
 One page per tab (`?page=`), each doing exactly one thing:
 
-- **`?page=dashboard`** — token/request statistics **since server start**, for
+- **`?page=dashboard`** â€” token/request statistics **since server start**, for
   every API route: playground models (executor) *and* custom providers
   (passthrough middleware). KPI tiles (requests, req/min, tokens in/out,
   error %, TTFB, p95 latency, uptime), per-minute charts with crosshair
   tooltips, per-model table (only models with traffic), and a scrollable
-  **log of the last 200 individual requests** (time · model · provider ·
-  stream · tokens · latency · TTFB · ok/error), sortable by column.
-- **`?page=models`** — toggle every model on/off (persisted), delete/restore
+  **log of the last 200 individual requests** (time Â· model Â· provider Â·
+  stream Â· tokens Â· latency Â· TTFB Â· ok/error), sortable by column.
+- **`?page=models`** â€” toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom OpenAI-compatible endpoints
   (including `messages_only` mode for WAF-blocked upstreams).
-- **`?page=chromes`** — live captcha Chrome workers: pause/resume each process,
+- **`?page=chromes`** â€” live captcha Chrome workers: pause/resume each process,
   see busy/warm state and extract counts.
 
 ## How it works
 
 ```
-client ──/v1/*──▶ CLIProxyAPI ──▶ nvidia executor ──▶ playground predict API
-                    │                    │                    ▲
-                    │                    └─ scrapeUsage ──────┤ SSE usage
-                    ▼                                        │
-              passthrough (custom providers) ────────────────┤
-              captcha pool (headless Chrome + hCaptcha) ─────┘ nv-captcha-token
-              GlobalStats.Observe ◀── every call on every path
+client â”€â”€/v1/*â”€â”€â–¶ CLIProxyAPI â”€â”€â–¶ nvidia executor â”€â”€â–¶ playground predict API
+                    â”‚                    â”‚                    â–²
+                    â”‚                    â””â”€ scrapeUsage â”€â”€â”€â”€â”€â”€â”¤ SSE usage
+                    â–¼                                        â”‚
+              passthrough (custom providers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+              captcha pool (headless Chrome + hCaptcha) â”€â”€â”€â”€â”€â”˜ nv-captcha-token
+              GlobalStats.Observe â—€â”€â”€ every call on every path
 ```
 
 - **Captcha pool**: `-auto` prewarms hCaptcha tokens with headless Chrome
@@ -88,7 +88,7 @@ client ──/v1/*──▶ CLIProxyAPI ──▶ nvidia executor ──▶ play
   immediately so TTFT is untouched.
 - **Claude Code**: `/admin` mask changes rewrite the gateway model cache so
   `/model` reflects the catalog without re-login; `-claude` flag or
-  `.\run.ps1 -Claude` wires `ANTHROPIC_BASE_URL` for you.
+  `.\scripts\run.ps1 -Claude` wires `ANTHROPIC_BASE_URL` for you.
 
 ## Notable flags
 
@@ -112,10 +112,11 @@ client ──/v1/*──▶ CLIProxyAPI ──▶ nvidia executor ──▶ play
 go build ./... && go test ./...
 ```
 
-Key packages: `cmd/serve` (gateway + admin), `internal/provider/nvidia`
+Key packages: `cmd/serve` (gateway + admin), `internal/gnvipi` (playground API
+client), `internal/provider/nvidia`
 (executor, SSE coalescing/normalizing, `stats.go`), `internal/captcha`
 (browser group, pool, harness, champion selection), `internal/models`
-(playground catalog).
+(playground catalog). Local build output goes to `bin/`.
 
 Docker deployment for the captcha browser is in `Dockerfile` /
 `docker-compose.yml`.

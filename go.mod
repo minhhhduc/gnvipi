@@ -1,4 +1,4 @@
-module glm52-nvidia
+module github.com/minhhhduc/gnvipi
 
 go 1.26.0
 

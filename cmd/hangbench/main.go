@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"glm52-nvidia/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
 )
 
 func main() {

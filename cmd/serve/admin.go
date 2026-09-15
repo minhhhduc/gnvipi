@@ -17,11 +17,11 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
-	"glm52-nvidia/internal/provider/nvidia"
 )
 
 var deadModels sync.Map // model id -> struct{}
@@ -1218,12 +1218,12 @@ if (PAGE === 'dashboard') {
         startedAt = d.started_at ? +new Date(d.started_at) : 0;
         drawCharts();
         totalFrames = d.total_frames || 0;
-        if (!curFrame && totalFrames) openFrame(totalFrames); else drawFrames(); // poll only updates chip counts
+        if (!curFrame && totalFrames) openFrame(1); else drawFrames(); // poll only updates chip counts (frame 1 = newest)
       } else { charts.textContent = 'stats error: ' + res.status; }
     } catch (err) { charts.textContent = 'stats error: ' + err; }
   }
 
-  // History log frames: #frames = chips 1..total (frame 1 = oldest), >12 the
+  // History log frames: #frames = chips 1..total (frame 1 = newest), >12 the
   // « » buttons slide a 12-chip window; content fetched once per click, no polling.
   const framesBox = document.getElementById('frames');
   const frameBox = document.getElementById('framebox');

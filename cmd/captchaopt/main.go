@@ -20,8 +20,8 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
 )
 
 const playgroundURL = "https://build.nvidia.com/deepseek-ai/deepseek-v4-pro/playground"
@@ -509,14 +509,14 @@ func pollTokenUntilChange(ctx context.Context, prev string, withReset bool) (str
 }
 
 func pingAPI(ctx context.Context, token string) (bool, error) {
-	client := glm52.New(
-		glm52.WithCaptchaToken(token),
-		glm52.WithThinking(false),
-		glm52.WithDefaults(8, 42, 1.0, 1.0),
+	client := gnvipi.New(
+		gnvipi.WithCaptchaToken(token),
+		gnvipi.WithThinking(false),
+		gnvipi.WithDefaults(8, 42, 1.0, 1.0),
 	)
 	apiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	resp, err := client.Chat(apiCtx, []glm52.Message{
+	resp, err := client.Chat(apiCtx, []gnvipi.Message{
 		{Role: "user", Content: "ping"},
 	})
 	if err != nil {

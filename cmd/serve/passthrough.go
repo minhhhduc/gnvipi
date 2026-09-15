@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	utls "github.com/refraction-networking/utls"
-	"glm52-nvidia/internal/provider/nvidia"
 	"golang.org/x/net/http2"
 )
 

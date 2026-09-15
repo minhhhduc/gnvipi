@@ -23,9 +23,9 @@ import (
 	"strings"
 	"time"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
-	"glm52-nvidia/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 // Known cache-related keys under usage (and one level of nested objects).
@@ -46,7 +46,7 @@ func main() {
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (only for -rounds=1)")
 	auto := flag.Bool("auto", false, "extract captcha via chromedp (needed for multi-round upstream)")
 	proxy := flag.String("proxy", "", "hit local OpenAI proxy instead of upstream (e.g. http://localhost:8080)")
-	model := flag.String("model", glm52.DefaultModel, "model id")
+	model := flag.String("model", gnvipi.DefaultModel, "model id")
 	stream := flag.Bool("stream", true, "use SSE stream (usage usually in final chunk)")
 	rounds := flag.Int("rounds", 2, "requests with shared prefix (2nd may show cache hit if supported)")
 	prefixTokens := flag.Int("prefix-tokens", 1200, "approx size of shared system prefix (words≈tokens)")

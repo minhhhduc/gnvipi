@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	glm52 "glm52-nvidia"
-	"glm52-nvidia/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
 )
 
 func main() {
@@ -49,13 +49,13 @@ func main() {
 		log.Fatal("-concurrency > 1 requires -proxy (local serve pool handles captchas)")
 	}
 
-	endpoint := glm52.PredictEndpoint
+	endpoint := gnvipi.PredictEndpoint
 	if *proxy != "" {
 		endpoint = strings.TrimRight(*proxy, "/") + "/v1/chat/completions"
 	}
 
 	body, err := json.Marshal(map[string]any{
-		"model":       glm52.DefaultModel,
+		"model":       gnvipi.DefaultModel,
 		"messages":    []map[string]string{{"role": "user", "content": *prompt}},
 		"temperature": 0.2,
 		"top_p":       1.0,
@@ -200,7 +200,7 @@ func doStream(ctx context.Context, endpoint string, body []byte, token string, v
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	if !viaProxy {
-		req.Header.Set("nv-function-id", glm52.NVFunctionID)
+		req.Header.Set("nv-function-id", gnvipi.NVFunctionID)
 		req.Header.Set("nv-captcha-token", token)
 		req.Header.Set("Origin", "https://build.nvidia.com")
 		req.Header.Set("Referer", "https://build.nvidia.com/")

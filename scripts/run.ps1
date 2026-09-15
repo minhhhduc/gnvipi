@@ -3,13 +3,13 @@
   Start the NVIDIA playground gateway for Claude Code.
 
 .EXAMPLE
-  .\run.ps1                                   # :8080, captcha pool on
-  .\run.ps1 -Port 8099                        # another port (adjust ANTHROPIC_BASE_URL accordingly)
-  .\run.ps1 -Haiku z-ai/glm-5.2               # haiku tier uses NVIDIA, others use Claude account
-  .\run.ps1 -Build                            # build .\serve.exe and run
-  .\run.ps1 -Proxy socks5://127.0.0.1:1080    # proxy for both Chrome captcha and upstream
-  .\run.ps1 -Harness -Batch 6                 # nvpi mode: empty DOM, 1 Chrome borrow = 6 tokens
-  .\run.ps1 -ChampionBudget 4m                # benchmark fastest playground URL
+  .\scripts\run.ps1                                   # :8080, captcha pool on
+  .\scripts\run.ps1 -Port 8099                        # another port (adjust ANTHROPIC_BASE_URL accordingly)
+  .\scripts\run.ps1 -Haiku z-ai/glm-5.2               # haiku tier uses NVIDIA, others use Claude account
+  .\scripts\run.ps1 -Build                            # build .\bin\serve.exe and run
+  .\scripts\run.ps1 -Proxy socks5://127.0.0.1:1080    # proxy for both Chrome captcha and upstream
+  .\scripts\run.ps1 -Harness -Batch 6                 # nvpi mode: empty DOM, 1 Chrome borrow = 6 tokens
+  .\scripts\run.ps1 -ChampionBudget 4m                # benchmark fastest playground URL
 #>
 [CmdletBinding()]
 param(
@@ -30,10 +30,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -Path $PSScriptRoot
+$root = Split-Path -Parent $PSScriptRoot   # scripts/.. = repo root
+Set-Location -Path $root
 
 # Ensure the local model catalog exists (gitignored - holds per-machine keys).
-$modelsFile = Join-Path $PSScriptRoot 'internal\models\playground_models.json'
+$modelsFile = Join-Path $root 'internal\models\playground_models.json'
 if (-not (Test-Path $modelsFile)) {
   Write-Host "playground_models.json missing - running init.ps1..." -ForegroundColor DarkGray
   & (Join-Path $PSScriptRoot 'init.ps1')
@@ -75,26 +76,28 @@ foreach ($t in 'MODEL_OPUS','MODEL_SONNET','MODEL_HAIKU','MODEL_FABLE') {
 Write-Host "  Press Ctrl+C to stop"
 Write-Host ""
 
-$needBuild = $Build -or -not (Test-Path .\serve.exe)
+$exe = Join-Path $root 'bin\serve.exe'
+$needBuild = $Build -or -not (Test-Path $exe)
 if (-not $needBuild) {
-  $newestSrc = Get-ChildItem -Recurse -Include *.go -Path (Join-Path $PSScriptRoot 'cmd'), (Join-Path $PSScriptRoot 'internal') |
+  $newestSrc = Get-ChildItem -Recurse -Include *.go -Path (Join-Path $root 'cmd'), (Join-Path $root 'internal') |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if ($newestSrc -and $newestSrc.LastWriteTime -gt (Get-Item .\serve.exe).LastWriteTime) { $needBuild = $true }
+  if ($newestSrc -and $newestSrc.LastWriteTime -gt (Get-Item $exe).LastWriteTime) { $needBuild = $true }
 }
 if ($needBuild) {
-  Write-Host "building serve.exe..." -ForegroundColor DarkGray
-  go build -o serve.exe ./cmd/serve
+  Write-Host "building bin\serve.exe..." -ForegroundColor DarkGray
+  New-Item -ItemType Directory -Force (Join-Path $root 'bin') | Out-Null
+  go build -o $exe ./cmd/serve
   if ($LASTEXITCODE -ne 0) { throw "build failed" }
 }
 if (-not $Claude) {
   # Run directly in foreground so Ctrl+C terminates properly
-  & .\serve.exe @serveArgs
+  & $exe @serveArgs
   return
 }
 
 # Run in background for Claude mode
 try {
-  $proc = Start-Process -FilePath (Join-Path $PSScriptRoot 'serve.exe') `
+  $proc = Start-Process -FilePath $exe `
     -ArgumentList $serveArgs `
     -NoNewWindow -PassThru -ErrorAction Stop
 } catch {
