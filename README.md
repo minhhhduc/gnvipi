@@ -112,6 +112,45 @@ client ──/v1/*──▶ CLIProxyAPI ──▶ nvidia executor ──▶ play
 go build ./... && go test ./...
 ```
 
+## Claude Code setup
+
+Claude Code keeps its local configuration under `.claude/`, which is ignored
+by Git in this repository. To point Claude Code at this local Anthropic-
+compatible gateway, use this `settings.json` content:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8080",
+    "ANTHROPIC_AUTH_TOKEN": "local-gateway",
+    "ANTHROPIC_API_KEY": "local-gateway",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
+  }
+}
+```
+
+Save that block as `.claude/settings.json` if you want Claude Code to use it.
+If you run `.\scripts\run.ps1 -Claude`, the script sets these variables
+automatically for the launched Claude Code session.
+
+- `.claude/settings.json` — shared Claude Code environment for this repo.
+- Keep secrets and machine-specific settings out of this file.
+- `.claude/settings.local.json` — optional local-only settings; do not commit
+  personal or sensitive values.
+- `README.md` — project context, setup instructions, and development guidance
+  for both developers and Claude Code.
+
+For a local Claude Code session, start the gateway and configure the endpoint
+with the existing helper:
+
+```powershell
+.\scripts\run.ps1 -Claude
+```
+
+This starts the gateway and opens Claude Code with `ANTHROPIC_BASE_URL` pointed
+at the local Anthropic-compatible `/v1/messages` endpoint. If you start the
+gateway yourself, use `http://localhost:8080` as the base URL.
+
 Key packages: `cmd/serve` (gateway + admin), `internal/gnvipi` (playground API
 client), `internal/provider/nvidia`
 (executor, SSE coalescing/normalizing, `stats.go`), `internal/captcha`
