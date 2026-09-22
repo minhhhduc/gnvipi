@@ -21,10 +21,10 @@ files_reviewed_list:
   - internal/models/registry_test.go
   - internal/provider/nvidia/executor.go
 findings:
-  critical: 2
-  warning: 3
+  critical: 1
+  warning: 2
   info: 0
-  total: 5
+  total: 3
 status: issues_found
 ---
 
@@ -63,7 +63,7 @@ if prov == nil || prov.MessagesOnly || prov.ResponsesOnly {
 }
 ```
 
-### CR-02: Unauthenticated admin endpoint enables arbitrary SSRF
+### CR-02: Unauthenticated admin endpoint enables arbitrary SSRF (ACCEPTED RISK)
 
 **Severity:** BLOCKER
 **File:** `cmd/serve/admin.go:480-500`; `cmd/serve/passthrough.go:100-117`
@@ -71,6 +71,8 @@ if prov == nil || prov.MessagesOnly || prov.ResponsesOnly {
 **Issue:** `/admin/providers` accepts any non-empty `base_url` and persists it. The server defaults to `:8080` (all interfaces), and subsequent model requests cause the gateway to make a server-side request to that URL with the configured bearer key. A remote caller can add a provider pointing at localhost, cloud metadata (`169.254.169.254`), or another internal service and then use the advertised model to probe it. There is no admin authentication, URL scheme/host validation, or private-network policy.
 
 **Fix:** Protect all `/admin/*` routes with authentication and validate provider URLs before saving. Permit only `https` by default, reject loopback/private/link-local/metadata destinations after DNS resolution, and avoid following redirects to a different host (or apply the same policy to every redirect).
+
+**Disposition:** Out of scope for the current deployment: the gateway is local-only and the host firewall does not expose the listener publicly. Revisit if the bind address or network exposure changes.
 
 ## Warnings
 
@@ -100,7 +102,7 @@ if prov == nil || prov.MessagesOnly || prov.ResponsesOnly {
 	fmt.Printf("✓ Extracted captcha token: %s...\\n", preview)
 ```
 
-### WR-03: `-models-file` group metadata is silently ignored
+### WR-03: `-models-file` group metadata is silently ignored (RESOLVED)
 
 **Severity:** WARNING
 **File:** `cmd/serve/admin.go:105-126`
@@ -108,6 +110,8 @@ if prov == nil || prov.MessagesOnly || prov.ResponsesOnly {
 **Issue:** The previous loader populated `models.Models` from `prefsFile.Groups`; that logic was removed, while `load` still accepts and logs the file. A user-supplied models file containing refreshed/custom playground entries is now treated as masks/providers only, so those entries cannot be selected and the file's model catalog is misleading. This is a behavior regression for existing model files.
 
 **Fix:** Either keep the documented override behavior by validating and loading `Groups` into the registry, or remove `Groups` from the persisted format and clearly migrate/reject files that depend on it. Do not silently discard configured model entries.
+
+**Resolution:** `cmd/serve/admin.go` now merges valid local `groups` entries into the embedded registry while preserving embedded models and capabilities. Covered by `TestModelPrefsLoadKeepsEmbeddedModelCatalog`.
 
 ---
 
