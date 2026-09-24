@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -107,12 +108,8 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if prov.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+prov.APIKey)
-		}
-		if v := c.Request.Header.Get("User-Agent"); v != "" {
-			req.Header.Set("User-Agent", v)
-		}
+		setCustomProviderHeaders(req, c.Request, prov)
+		forwardOpenCodeHeaders(req, c.Request)
 		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(model, start)
@@ -126,8 +123,85 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 	}
 }
 
+// customOpenAIResponsesPassthrough forwards OpenAI Responses requests without
+// translating them through CLIProxyAPI. OpenCode Zen's @ai-sdk/openai
+// provider uses /v1/responses and its payload is not Chat Completions JSON.
+func customOpenAIResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Method != http.MethodPost || c.Request.URL.Path != "/v1/responses" {
+			c.Next()
+			return
+		}
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
+			c.Abort()
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(body, &payload) != nil || payload.Model == "" {
+			c.Next()
+			return
+		}
+		prov := lookupCustomProvider(p, payload.Model)
+		if prov == nil || !prov.ResponsesOnly {
+			c.Next()
+			return
+		}
+		if rewritten, changed := rewriteJSONModel(body, payload.Model, prov.Model); changed {
+			body = rewritten
+		}
+
+		target := providerEndpoint(prov.BaseURL, "/responses")
+		start := time.Now()
+		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, target, bytes.NewReader(body))
+		if err != nil {
+			statFail(payload.Model, start)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		setCustomProviderHeaders(req, c.Request, prov)
+		forwardOpenCodeHeaders(req, c.Request)
+		resp, err := compatClient.Do(req)
+		if err != nil {
+			statFail(payload.Model, start)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream: " + err.Error()})
+			c.Abort()
+			return
+		}
+		defer resp.Body.Close()
+		copyProxyResponse(c, resp, payload.Model, start)
+		c.Abort()
+	}
+}
+
+func setCustomProviderHeaders(dst, src *http.Request, prov *customProvider) {
+	if prov.APIKey != "" {
+		dst.Header.Set("Authorization", "Bearer "+prov.APIKey)
+	}
+	if v := src.Header.Get("User-Agent"); v != "" {
+		dst.Header.Set("User-Agent", v)
+	}
+	if u, err := url.Parse(prov.BaseURL); err == nil && strings.EqualFold(u.Hostname(), "agentrouter.org") {
+		// AgentRouter's WAF only accepts known first-party agent clients.
+		dst.Header.Set("User-Agent", "opencode/1.18.25")
+		dst.Header.Set("X-App", "opencode")
+	}
+}
+
 func providerEndpoint(baseURL, suffix string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
+	// Admin accepts either a provider base URL (.../v1) or the full endpoint
+	// (.../v1/chat/completions, .../v1/responses). Do not append twice.
+	if strings.HasSuffix(baseURL, suffix) {
+		return baseURL
+	}
 	if strings.HasSuffix(baseURL, "/v1") {
 		return baseURL + suffix
 	}
@@ -444,6 +518,7 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		// spoof a curl UA (helps only if the block is header-based). If it
 		// fingerprints the ClientHello, this needs utls instead.
 		req.Header.Set("User-Agent", "curl/8.4.0")
+		forwardOpenCodeHeaders(req, c.Request)
 		if v := c.Request.Header.Get("anthropic-version"); v != "" {
 			req.Header.Set("anthropic-version", v)
 		}
@@ -498,6 +573,21 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		statCopyDone(payload.Model, start, tee, resp.StatusCode, streamed, copyErr)
 		c.Abort()
+	}
+}
+
+// forwardOpenCodeHeaders preserves the session affinity headers required by
+// OpenCode Zen/Go. The relay rejects free-tier requests without
+// x-opencode-session; dropping it while proxying makes direct calls work but
+// gateway calls fail with MissingSessionID.
+func forwardOpenCodeHeaders(dst, src *http.Request) {
+	for name, values := range src.Header {
+		if !strings.HasPrefix(strings.ToLower(name), "x-opencode-") {
+			continue
+		}
+		for _, value := range values {
+			dst.Header.Add(name, value)
+		}
 	}
 }
 

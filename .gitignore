@@ -4,6 +4,9 @@
 # Claude Code local config
 .claude/
 
+# GSD planning artifacts
+.planning/
+
 # Go build output
 *.exe
 *.test

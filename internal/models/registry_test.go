@@ -7,18 +7,18 @@ func TestLookupDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(\"\"): %v", err)
 	}
-	if info.Slug != "deepseek-v4-flash-0731" {
-		t.Fatalf("default slug = %q want deepseek-v4-flash-0731", info.Slug)
+	if info.Slug != "nemotron-3.5-lightning-30b-a3b" {
+		t.Fatalf("default slug = %q want nemotron-3.5-lightning-30b-a3b", info.Slug)
 	}
-	if info.FunctionID != "281478d0-f307-49f4-9e0f-080b63b16c47" {
+	if info.FunctionID != "0a213807-640b-43fb-bfbf-2919f9b666ad" {
 		t.Fatalf("default function id = %q want 281478d0-…", info.FunctionID)
 	}
 }
 
 func TestLookupKnown(t *testing.T) {
 	cases := map[string]string{
-		"deepseek-ai/deepseek-v4-pro":       "deepseek-v4-pro",
-		"nvidia/nemotron-3-ultra-550b-a55b": "nemotron-3-ultra-550b-a55b",
+		"z-ai/glm-5-3-flash":                    "glm-5-3-flash",
+		"nvidia/nemotron-3.5-lightning-30b-a3b": "nemotron-3.5-lightning-30b-a3b",
 	}
 	for model, wantSlug := range cases {
 		info, err := Lookup(model)
@@ -50,8 +50,8 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, _ := Lookup("deepseek-ai/deepseek-v4-pro")
-	want := "https://buildapi.ngc.nvidia.com/v2/predict/models/" + Namespace + "/deepseek-v4-pro"
+	info, _ := Lookup("nvidia/nemotron-3.5-lightning-30b-a3b")
+	want := "https://buildapi.ngc.nvidia.com/v2/predict/models/" + Namespace + "/nemotron-3.5-lightning-30b-a3b"
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)
 	}

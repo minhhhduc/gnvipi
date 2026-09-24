@@ -29,6 +29,17 @@ type BrowserGroup struct {
 
 // NewBrowserGroup starts n warmed browsers (n Chrome processes). n < 1 means 1.
 func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*BrowserGroup, error) {
+	return newBrowserGroup(parent, n, cfg, NewBrowser, nil)
+}
+
+// NewBrowserGroupWithProgress is like NewBrowserGroup but calls onBrowser as
+// soon as the group has a usable Chrome. This lets the admin UI expose process
+// management while additional workers are still warming.
+func NewBrowserGroupWithProgress(parent context.Context, n int, cfg BrowserConfig, onBrowser func(*BrowserGroup)) (*BrowserGroup, error) {
+	return newBrowserGroup(parent, n, cfg, NewBrowser, onBrowser)
+}
+
+func newBrowserGroup(parent context.Context, n int, cfg BrowserConfig, factory func(context.Context, BrowserConfig) (*Browser, error), onBrowser func(*BrowserGroup)) (*BrowserGroup, error) {
 	if n < 1 {
 		n = 1
 	}
@@ -36,7 +47,7 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 	g := &BrowserGroup{
 		parent:         parent,
 		cfg:            cfg,
-		browserFactory: NewBrowser,
+		browserFactory: factory,
 		browsers:       make([]*Browser, 0, n),
 		free:           make(chan *Browser, n),
 		done:           make(chan struct{}),
@@ -45,15 +56,20 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 		log.Printf("captcha chrome proxy=%s", cfg.Proxy)
 	}
 	for i := 0; i < n; i++ {
-		b, err := g.browserFactory(parent, cfg)
+		attemptCfg := cfg
+		if cfg.URLProvider != nil {
+			attemptCfg.URLProvider = StaticURLProvider{URL: cfg.URLProvider.PlaygroundURL(parent)}
+		}
+		b, err := g.browserFactory(parent, attemptCfg)
 		if err != nil {
-			target := ""
-			if cfg.URLProvider != nil {
-				target = cfg.URLProvider.PlaygroundURL(parent)
-			}
+			target := attemptCfg.URLProvider.PlaygroundURL(parent)
 			log.Printf("warning: captcha browser %d failed on %s (%v); trying fallback URL", i, target, err)
 			fallbackCfg := cfg
-			fallbackCfg.URLProvider = NewDefaultURLProvider()
+			if cfg.URLProvider != nil {
+				// Keep the configured provider: a rotating provider advances to a
+				// different NVIDIA playground instead of retrying one dead model URL.
+				fallbackCfg.URLProvider = StaticURLProvider{URL: cfg.URLProvider.PlaygroundURL(parent)}
+			}
 			b, err = g.browserFactory(parent, fallbackCfg)
 			if err != nil {
 				if len(g.browsers) > 0 {
@@ -66,6 +82,9 @@ func NewBrowserGroup(parent context.Context, n int, cfg BrowserConfig) (*Browser
 		}
 		g.browsers = append(g.browsers, b)
 		g.free <- b
+		if onBrowser != nil {
+			onBrowser(g)
+		}
 	}
 	return g, nil
 }
@@ -91,16 +110,26 @@ type ChromeInfo struct {
 // Snapshot returns the status of every Chrome in the group.
 func (g *BrowserGroup) Snapshot() []ChromeInfo {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := make([]ChromeInfo, 0, len(g.browsers))
-	for i, b := range g.browsers {
+	browsers := append([]*Browser(nil), g.browsers...)
+	g.mu.Unlock()
+	out := make([]ChromeInfo, 0, len(browsers))
+	for i, b := range browsers {
+		busy := b.busy.Load()
+		var warmed bool
+		var lastOK time.Time
+		// Extract holds b.mu while navigating/executing hCaptcha and may take
+		// up to 90s. Admin status must never wait for that operation.
+		if !busy {
+			warmed = b.Warmed()
+			lastOK = b.LastOK()
+		}
 		out = append(out, ChromeInfo{
 			Index:    i,
 			PID:      b.PID(),
-			Busy:     b.busy.Load(),
+			Busy:     busy,
 			Killed:   b.dead.Load(),
-			Warmed:   b.Warmed(),
-			LastOK:   b.LastOK(),
+			Warmed:   warmed,
+			LastOK:   lastOK,
 			Extracts: b.extracts.Load(),
 		})
 	}

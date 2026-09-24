@@ -89,7 +89,9 @@ func (b *Browser) currentURL(ctx context.Context) string {
 // Longer idle (user paused mid-chat) often leaves the widget unable to mint tokens.
 const stickyMaxIdle = 60 * time.Second
 
-// NewBrowser starts a shared Chrome process and warms the playground page.
+// NewBrowser starts a shared Chrome process. The playground is warmed lazily
+// by the first Extract call (or by the pool warmup), so callers can expose the
+// Chrome to admin/process management immediately after launch.
 // Call Close when done.
 //
 // Container / proxy hints:
@@ -147,15 +149,6 @@ func NewBrowser(parent context.Context, cfg BrowserConfig) (*Browser, error) {
 		harnessURL: cfg.HarnessPage,
 	}
 
-	// Warm playground once so Extract can skip Navigate in the steady state.
-	warmCtx, warmCancel := context.WithTimeout(browser, 90*time.Second)
-	defer warmCancel()
-	if err := warmPlayground(warmCtx, b.currentURL(parent)); err != nil {
-		b.Close()
-		return nil, fmt.Errorf("captcha browser warm: %w", err)
-	}
-	b.warmed = true
-	b.lastOK = time.Now()
 	return b, nil
 }
 

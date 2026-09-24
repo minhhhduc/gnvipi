@@ -10,12 +10,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
+
+func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(`{"groups":[{"publisher":"old","models":[{"model":"old/retired","slug":"retired","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000000"}]}],"providers":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var prefs modelPrefs
+	prefs.load(path)
+	if _, err := models.Lookup("nvidia/nemotron-3.5-lightning-30b-a3b"); err != nil {
+		t.Fatalf("embedded new model missing after loading saved prefs: %v", err)
+	}
+	if _, err := models.Lookup("old/retired"); err != nil {
+		t.Fatalf("local catalog model was not merged into registry: %v", err)
+	}
+}
 
 func TestParseListenAddr(t *testing.T) {
 	cases := []struct {

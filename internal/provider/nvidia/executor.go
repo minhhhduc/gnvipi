@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/models"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -82,7 +82,18 @@ func NewExecutor(opts Options) *Executor {
 func (e *Executor) Identifier() string { return providerKey }
 
 // Pool returns the captcha pool (may be nil).
-func (e *Executor) Pool() *captcha.Pool { return e.pool }
+func (e *Executor) Pool() *captcha.Pool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pool
+}
+
+// SetPool attaches the captcha pool after the gateway listener is already up.
+func (e *Executor) SetPool(pool *captcha.Pool) {
+	e.mu.Lock()
+	e.pool = pool
+	e.mu.Unlock()
+}
 
 // PrepareRequest is a no-op for playground auth (captcha is per-request).
 func (e *Executor) PrepareRequest(_ *http.Request, _ *coreauth.Auth) error { return nil }
@@ -301,7 +312,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		clientToken = opts.Headers.Get("nv-captcha-token")
 	}
 	maxAttempts := 1
-	if clientToken == "" && (e.pool != nil || e.auto) {
+	if clientToken == "" && (e.Pool() != nil || e.auto) {
 		maxAttempts = 3
 	}
 
@@ -478,26 +489,27 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 		}
 	}
 
-	if e.pool != nil {
+	pool := e.Pool()
+	if pool != nil {
 		takeCtx := ctx
 		var cancel context.CancelFunc
 		if e.captchaWait > 0 {
 			takeCtx, cancel = context.WithTimeout(ctx, e.captchaWait)
 			defer cancel()
 		}
-		if e.pool.Ready() == 0 {
+		if pool.Ready() == 0 {
 			waitFor := "indefinitely"
 			if e.captchaWait > 0 {
 				waitFor = e.captchaWait.String()
 			}
 			log.Printf("captcha pool empty; waiting up to %s (errors will surface from workers)", waitFor)
 		}
-		lease, err := e.pool.TakeLease(takeCtx)
+		lease, err := pool.TakeLease(takeCtx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				fills, takes, errs, expired := e.pool.Stats()
+				fills, takes, errs, expired := pool.Stats()
 				return "", nil, fmt.Errorf("captcha pool empty after %s (ready=%d fills=%d takes=%d errors=%d expired=%d); retry later",
-					e.captchaWait, e.pool.Ready(), fills, takes, errs, expired)
+					e.captchaWait, pool.Ready(), fills, takes, errs, expired)
 			}
 			return "", nil, err
 		}
@@ -505,8 +517,7 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 		return token, lease, nil
 	}
 	if e.auto {
-		token, err := captcha.Extract(ctx)
-		return token, nil, err
+		return "", nil, fmt.Errorf("captcha pool empty after startup; retry later")
 	}
 	return "", nil, fmt.Errorf("captcha token required: send nv-captcha-token, or restart with -captcha / -auto")
 }

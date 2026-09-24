@@ -25,7 +25,12 @@ type StaticURLProvider struct{ URL string }
 func (s StaticURLProvider) PlaygroundURL(context.Context) string { return s.URL }
 
 // defaultPlaygroundURL is the fallback when no champion or rotation is selected.
-const defaultPlaygroundURL = "https://build.nvidia.com/deepseek-ai/deepseek-v4-flash-0731/playground"
+const defaultPlaygroundURL = "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/playground"
+
+// NVIDIAHomeURL is tried as a model-independent CAPTCHA source when NVIDIA
+// exposes a widget on the home page. Today the home page has no hCaptcha
+// widget, so callers must fall back to a playground URL.
+const NVIDIAHomeURL = "https://build.nvidia.com/"
 
 // NewDefaultURLProvider returns the legacy single-URL provider.
 func NewDefaultURLProvider() URLProvider { return StaticURLProvider{URL: defaultPlaygroundURL} }
@@ -64,4 +69,3 @@ func (r *RotatingURLProvider) PlaygroundURL(context.Context) string {
 	r.idx++
 	return u
 }
-

@@ -19,14 +19,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 )
 
 func main() {
 	captcha := flag.String("captcha", "", "hCaptcha token (reverse-engineered mode)")
 	auto := flag.Bool("auto", false, "Auto-extract captcha token via chromedp")
-	model := flag.String("model", "", "model id (e.g. moonshotai/kimi-k2.6); empty = deepseek-ai/deepseek-v4-pro")
+	model := flag.String("model", "", "model id (e.g. moonshotai/kimi-k3); empty = "+gnvipi.DefaultModel)
 	prompt := flag.String("prompt", "Explain the meaning of life in one sentence.", "prompt to send")
 	stream := flag.Bool("stream", true, "use streaming")
 	smoothMs := flag.Int("smooth-ms", 12, "typewriter delay per rune for stream output (0=off)")

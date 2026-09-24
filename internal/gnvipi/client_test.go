@@ -117,13 +117,13 @@ func TestBuildRequestRoutesPerModel(t *testing.T) {
 		endpoint string
 		fnID     string
 	}{
-		"deepseek-ai/deepseek-v4-flash-0731": {
-			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-flash-0731",
-			"281478d0-f307-49f4-9e0f-080b63b16c47",
+		"z-ai/glm-5-3": {
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/glm-5-3",
+			"0cd5c583-435c-4649-a621-f4e421fa12a0",
 		},
-		"deepseek-ai/deepseek-v4-pro": {
-			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/deepseek-v4-pro",
-			"74f02205-c7ba-438f-b81a-2537955bd7ec",
+		"nvidia/nemotron-3.5-lightning-30b-a3b": {
+			"https://buildapi.ngc.nvidia.com/v2/predict/models/qc69jvmznzxy/nemotron-3.5-lightning-30b-a3b",
+			"0a213807-640b-43fb-bfbf-2919f9b666ad",
 		},
 	}
 	for model, want := range cases {

@@ -30,6 +30,47 @@ func TestIsHardExtractFailure(t *testing.T) {
 	}
 }
 
+func TestNewBrowserGroupFallbackAdvancesURL(t *testing.T) {
+	provider := NewRotatingURLProvider([]string{"https://nvidia.test/first", "https://nvidia.test/second"})
+	var attempts []string
+	ready, _ := newTrackedBrowser()
+	factory := func(_ context.Context, cfg BrowserConfig) (*Browser, error) {
+		attempts = append(attempts, cfg.URLProvider.PlaygroundURL(context.Background()))
+		if len(attempts) == 1 {
+			return nil, errors.New("first model page is unavailable")
+		}
+		return ready, nil
+	}
+
+	group, err := newBrowserGroup(context.Background(), 1, BrowserConfig{URLProvider: provider}, factory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.Close()
+	if len(attempts) != 2 || attempts[0] != "https://nvidia.test/first" || attempts[1] != "https://nvidia.test/second" {
+		t.Fatalf("attempted URLs = %v, want first then second", attempts)
+	}
+}
+
+func TestBrowserGroupSnapshotDoesNotWaitForBusyBrowser(t *testing.T) {
+	b := &Browser{}
+	b.busy.Store(true)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	g := &BrowserGroup{browsers: []*Browser{b}}
+
+	done := make(chan []ChromeInfo, 1)
+	go func() { done <- g.Snapshot() }()
+	select {
+	case got := <-done:
+		if len(got) != 1 || !got[0].Busy {
+			t.Fatalf("Snapshot() = %#v, want one busy Chrome", got)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Snapshot blocked on busy Chrome")
+	}
+}
+
 func TestBrowserGroupRecycle_CloseDuringFactory(t *testing.T) {
 	// Given
 	old, _ := newTrackedBrowser()

@@ -69,7 +69,7 @@ func (m ModelInfo) PredictEndpoint() string {
 
 // DefaultModel is the project's default playground model (kept for backward
 // compatibility with pre-multi-model callers).
-const DefaultModel = "deepseek-ai/deepseek-v4-flash-0731"
+const DefaultModel = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 // playgroundModelsFile mirrors the structure of playground_models.json.
 type playgroundModelsFile struct {

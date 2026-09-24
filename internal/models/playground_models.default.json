@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "count": 62,
+    "count": 67,
     "namespaces": [
       "qc69jvmznzxy"
     ]
@@ -182,6 +182,12 @@
           "slug": "llama-4-maverick-17b-128e-instruct",
           "namespace": "qc69jvmznzxy",
           "function_id": "2f092df4-a732-4e88-b3a9-337829a9cde7"
+        },
+        {
+          "model": "meta/muse-glimmer-30b",
+          "slug": "muse-glimmer-30b",
+          "namespace": "qc69jvmznzxy",
+          "function_id": "fd21cc19-b4ff-4949-ba07-90dd663c416a"
         }
       ]
     },
@@ -264,6 +270,12 @@
           "function_id": "499210d3-3bf7-44bf-88b5-9460edfa8a38"
         },
         {
+          "model": "nvidia/kumo-relational",
+          "slug": "kumo-relational",
+          "namespace": "qc69jvmznzxy",
+          "function_id": "8127ae70-82c3-4bba-abcb-bc64a26034c7"
+        },
+        {
           "model": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
           "slug": "llama-3.1-nemotron-nano-vl-8b-v1",
           "namespace": "qc69jvmznzxy",
@@ -316,6 +328,12 @@
           "slug": "nemotron-3-ultra-550b-a55b",
           "namespace": "qc69jvmznzxy",
           "function_id": "948fe171-ce7a-4332-8bc0-5e14e90259f9"
+        },
+        {
+          "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+          "slug": "nemotron-3.5-lightning-30b-a3b",
+          "namespace": "qc69jvmznzxy",
+          "function_id": "0a213807-640b-43fb-bfbf-2919f9b666ad"
         },
         {
           "model": "nvidia/nemotron-4-340b-instruct",
@@ -459,6 +477,18 @@
     {
       "publisher": "z-ai",
       "models": [
+        {
+          "model": "z-ai/glm-5-3",
+          "slug": "glm-5-3",
+          "namespace": "qc69jvmznzxy",
+          "function_id": "0cd5c583-435c-4649-a621-f4e421fa12a0"
+        },
+        {
+          "model": "z-ai/glm-5-3-flash",
+          "slug": "glm-5-3-flash",
+          "namespace": "qc69jvmznzxy",
+          "function_id": "f7e3a881-2cde-455d-bbfd-fb8eb1bd1520"
+        },
         {
           "model": "z-ai/glm-5.2",
           "slug": "glm-5.2",

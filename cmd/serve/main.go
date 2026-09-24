@@ -61,7 +61,7 @@ func main() {
 	maxInflight := flag.Int("max-inflight", 4, "max concurrent upstream streams (0=unlimited)")
 	inflightWait := flag.Duration("inflight-wait", 500*time.Millisecond, "how long to wait for an in-flight slot before returning 503 (0=reject immediately)")
 	coalesceMs := flag.Int("coalesce-ms", 16, "merge consecutive SSE content deltas within this window (0=off); first token always flushes immediately")
-	warmTimeout := flag.Duration("warm-timeout", 3*time.Minute, "wait for at least one pooled captcha before serving (-auto); 0=skip")
+	warmTimeout := flag.Duration("warm-timeout", 3*time.Minute, "max wait for captcha pool warmup after serving starts (-auto); 0=skip")
 	poolTTL := flag.Duration("pool-ttl", 90*time.Second, "discard pooled captcha tokens older than this (-auto)")
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelsFile := flag.String("models-file", "internal/models/playground_models.json", "path to save hidden/deleted models and custom endpoints")
@@ -78,6 +78,7 @@ func main() {
 	if !*auto && *captchaFlag == "" {
 		log.Print("warning: no -auto/-captcha; each request must send nv-captcha-token")
 	}
+	setChromeAdminEnabled(*auto)
 
 	proxyURL := strings.TrimSpace(*chromeProxy)
 	if proxyURL == "" {
@@ -116,80 +117,6 @@ func main() {
 		browser *captcha.BrowserGroup
 		pool    *captcha.Pool
 	)
-	// urlProvider picks which playground page hosts the hCaptcha widget. The
-	// default is a single hardcoded URL; -captcha-select-budget > 0 runs a
-	// sliding-window benchmark across candidates and persists a champion to
-	// disk so restarts skip the benchmark.
-	var urlProvider captcha.URLProvider = captcha.NewDefaultURLProvider()
-	if *captchaSelectBudget > 0 {
-		candidates := playgroundCandidates(5)
-		log.Printf("captcha: running champion selection (%d candidates, budget=%s)",
-			len(candidates), *captchaSelectBudget)
-		state, err := captcha.SelectChampion(ctx, candidates, *captchaSelectBudget)
-		if err != nil {
-			log.Printf("warning: champion selection failed (%v); falling back to default URL", err)
-		} else {
-			urlProvider = state
-			log.Printf("captcha: champion=%s score=%dms", state.ChampionURL, state.ScoreMS)
-		}
-	} else if existing := captcha.LoadChampion(captcha.ChampionStateFile()); existing.ChampionURL != "" {
-		urlProvider = existing
-		log.Printf("captcha: loaded champion=%s from disk", existing.ChampionURL)
-	}
-	if *auto {
-		browserCfg := captcha.BrowserConfig{Proxy: proxyURL, URLProvider: urlProvider}
-		if *captchaHarness {
-			championURL := urlProvider.PlaygroundURL(ctx)
-			sitekey, err := captcha.ScrapeSitekey(ctx, championURL)
-			if err != nil {
-				log.Printf("warning: harness sitekey scrape failed (%v); falling back to playground mode", err)
-			} else {
-				browserCfg.HarnessPage = captcha.HarnessPageFor(sitekey, *poolBatch)
-				log.Printf("captcha: harness mode sitekey=%s batch=%d (RAM ~50MB/chrome)", sitekey, *poolBatch)
-			}
-		}
-		var err error
-		browser, err = captcha.NewBrowserGroup(ctx, *poolWorkers, browserCfg)
-		if err != nil {
-			log.Fatalf("captcha browser: %v", err)
-		}
-		chromeAdmin = browser // /admin/chromes pause/resume surface
-	}
-	if browser != nil {
-		batch := *poolBatch
-		if batch < 1 {
-			batch = 1
-		}
-		if !*captchaHarness && batch > 1 {
-			log.Printf("captcha: -pool-batch=%d clamped to 1 in playground mode (batching requires -captcha-harness=true to avoid worker starvation)", batch)
-			batch = 1
-		}
-		poolCfg := captcha.PoolConfig{
-			Size:    *poolSize,
-			Workers: *poolWorkers,
-			TTL:     *poolTTL,
-		}
-		if batch > 1 {
-			poolCfg.BatchSize = batch
-			poolCfg.ExtractN = browser.ExtractN
-		}
-		pool = captcha.NewPool(ctx, browser.Extract, poolCfg)
-		defer func() {
-			pool.Close()
-			browser.Close()
-		}()
-		log.Printf("captcha pool: size=%d workers=%d chromes=%d batch=%d ttl=%s captcha-wait=%s",
-			*poolSize, *poolWorkers, browser.Len(), batch, *poolTTL, *captchaWait)
-
-		if *warmTimeout > 0 {
-			log.Printf("warming captcha pool (timeout=%s)…", *warmTimeout)
-			if err := waitPoolReady(ctx, pool, 1, *warmTimeout); err != nil {
-				log.Printf("warning: %v — first requests may block on captcha extract", err)
-			} else {
-				log.Printf("captcha pool ready=%d (TTFT path unblocked)", pool.Ready())
-			}
-		}
-	}
 
 	exec := nvidia.NewExecutor(nvidia.Options{
 		Auto:         *auto,
@@ -280,6 +207,7 @@ func main() {
 		writeClaudeModelCache(*addr, getModels())
 	}
 
+	started := make(chan struct{})
 	hooks := cliproxy.Hooks{
 		OnAfterStart: func(_ *cliproxy.Service) {
 			ensureNvidiaAuth(core)
@@ -288,6 +216,7 @@ func main() {
 			startNvidiaReconciler(ctx, core, exec, getNvidiaModels)
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
 				version, *addr, len(models), n, execCoalesce(*coalesceMs), *maxInflight)
+			close(started)
 		},
 	}
 
@@ -297,7 +226,11 @@ func main() {
 		WithCoreAuthManager(core).
 		WithServerOptions(
 			api.WithMiddleware(
+				// Responses-only providers need a real Anthropic<->Responses adapter;
+				// keep it ahead of generic Messages sanitizing/fallback routing.
+				anthropicResponsesPassthrough(prefs),
 				sanitizeClaudeToolResults(),
+				customOpenAIResponsesPassthrough(prefs),
 				customOpenAICompatPassthrough(prefs),
 				claudeDefaultModelAlias(nvidia.DefaultAliasModel()),
 				messagesOnlyPassthrough(prefs),
@@ -395,9 +328,108 @@ func main() {
 		log.Fatalf("build gateway: %v", err)
 	}
 
-	if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
+	// Start the API/admin listener before any NVIDIA playground or Chrome work.
+	// A dead playground page must never keep the management console offline.
+	runErr := make(chan error, 1)
+	go func() { runErr <- svc.Run(ctx) }()
+	select {
+	case <-started:
+	case err := <-runErr:
+		if err != nil && ctx.Err() == nil {
+			log.Fatal(err)
+		}
+		return
+	case <-ctx.Done():
+		return
+	}
+
+	if *auto {
+		candidates := playgroundCandidates(8)
+		// Prefer a model-independent NVIDIA page when it exposes a usable
+		// CAPTCHA widget. The current home page does not, so drop it before
+		// starting Chrome and fall back to playground pages automatically.
+		if _, err := captcha.ScrapeSitekey(ctx, captcha.NVIDIAHomeURL); err == nil {
+			candidates = append([]string{captcha.NVIDIAHomeURL}, candidates...)
+		} else {
+			log.Printf("captcha: NVIDIA home page has no usable widget (%v); using playground fallback", err)
+		}
+		orderedURLs := append([]string(nil), candidates...)
+		if *captchaSelectBudget > 0 {
+			log.Printf("captcha: running champion selection (%d candidates, budget=%s)", len(candidates), *captchaSelectBudget)
+			if state, err := captcha.SelectChampion(ctx, candidates, *captchaSelectBudget); err != nil {
+				log.Printf("warning: champion selection failed (%v); rotating through playground candidates", err)
+			} else {
+				orderedURLs = append([]string{state.ChampionURL}, append(state.FallbackURLs, candidates...)...)
+				log.Printf("captcha: champion=%s score=%dms", state.ChampionURL, state.ScoreMS)
+			}
+		} else if state := captcha.LoadChampion(captcha.ChampionStateFile()); state.ChampionURL != "" {
+			orderedURLs = append([]string{state.ChampionURL}, append(state.FallbackURLs, candidates...)...)
+			log.Printf("captcha: loaded champion=%s from disk", state.ChampionURL)
+		}
+		urlProvider := captcha.NewRotatingURLProvider(uniqueURLs(orderedURLs))
+		browserCfg := captcha.BrowserConfig{Proxy: proxyURL, URLProvider: urlProvider}
+		if *captchaHarness {
+			championURL := urlProvider.PlaygroundURL(ctx)
+			sitekey, err := captcha.ScrapeSitekey(ctx, championURL)
+			if err != nil {
+				log.Printf("warning: harness sitekey scrape failed (%v); falling back to playground mode", err)
+			} else {
+				browserCfg.HarnessPage = captcha.HarnessPageFor(sitekey, *poolBatch)
+				log.Printf("captcha: harness mode sitekey=%s batch=%d (RAM ~50MB/chrome)", sitekey, *poolBatch)
+			}
+		}
+		var err error
+		browser, err = captcha.NewBrowserGroupWithProgress(ctx, *poolWorkers, browserCfg, setChromeAdmin)
+		if err != nil {
+			log.Printf("warning: captcha browser unavailable (%v); admin and custom providers remain available", err)
+		} else {
+			setChromeAdmin(browser)
+			batch := *poolBatch
+			if batch < 1 {
+				batch = 1
+			}
+			if !*captchaHarness && batch > 1 {
+				log.Printf("captcha: -pool-batch=%d clamped to 1 in playground mode (batching requires -captcha-harness=true to avoid worker starvation)", batch)
+				batch = 1
+			}
+			poolCfg := captcha.PoolConfig{Size: *poolSize, Workers: *poolWorkers, TTL: *poolTTL}
+			if batch > 1 {
+				poolCfg.BatchSize = batch
+				poolCfg.ExtractN = browser.ExtractN
+			}
+			pool = captcha.NewPool(ctx, browser.Extract, poolCfg)
+			exec.SetPool(pool)
+			defer func() {
+				pool.Close()
+				browser.Close()
+			}()
+			log.Printf("captcha pool: size=%d workers=%d chromes=%d batch=%d ttl=%s captcha-wait=%s", *poolSize, *poolWorkers, browser.Len(), batch, *poolTTL, *captchaWait)
+			if *warmTimeout > 0 {
+				log.Printf("warming captcha pool in background (timeout=%s)", *warmTimeout)
+				if err := waitPoolReady(ctx, pool, 1, *warmTimeout); err != nil {
+					log.Printf("warning: %v — admin remains available; first NVIDIA requests may wait for captcha", err)
+				} else {
+					log.Printf("captcha pool ready=%d (TTFT path unblocked)", pool.Ready())
+				}
+			}
+		}
+	}
+
+	if err := <-runErr; err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
+}
+
+func uniqueURLs(urls []string) []string {
+	seen := make(map[string]bool, len(urls))
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // writeClaudeModelCache refreshes Claude Code's gateway model discovery cache
