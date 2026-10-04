@@ -50,7 +50,10 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, _ := Lookup("nvidia/nemotron-3.5-lightning-30b-a3b")
+	info, err := Lookup("nvidia/nemotron-3.5-lightning-30b-a3b")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "https://buildapi.ngc.nvidia.com/v2/predict/models/" + Namespace + "/nemotron-3.5-lightning-30b-a3b"
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)

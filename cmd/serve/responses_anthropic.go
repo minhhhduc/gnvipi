@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -26,7 +27,7 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error(), "")
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		var in anthropicRequest
@@ -34,12 +35,12 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 			if err == nil {
 				err = fmt.Errorf("model and messages are required")
 			}
-			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error(), "")
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		prov := lookupCustomProvider(p, in.Model)
 		if prov == nil && customModelHidden(p, in.Model) {
-			writeAnthropicError(c, http.StatusNotFound, "not_found_error", "model is hidden", "")
+			writeAnthropicError(c, http.StatusNotFound, "not_found_error", "model is hidden")
 			return
 		}
 		if prov == nil {
@@ -53,17 +54,21 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 			return
 		}
 
-		out, err := anthropicToResponses(in, prov.Model)
+		out, err := anthropicToResponses(&in, prov.Model)
 		if err != nil {
-			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error(), "")
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
-		encoded, _ := json.Marshal(out)
+		encoded, err := json.Marshal(out)
+		if err != nil {
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
 		start := time.Now()
 		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, providerEndpoint(prov.BaseURL, "/responses"), bytes.NewReader(encoded))
 		if err != nil {
 			statFail(in.Model, start)
-			writeAnthropicError(c, http.StatusInternalServerError, "api_error", err.Error(), "")
+			writeAnthropicError(c, http.StatusInternalServerError, "api_error", err.Error())
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -74,12 +79,21 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(in.Model, start)
-			writeAnthropicError(c, http.StatusBadGateway, "api_error", "upstream: "+err.Error(), "")
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", "upstream: "+err.Error())
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("close upstream response: %v", err)
+			}
+		}()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			up, _ := io.ReadAll(resp.Body)
+			up, err := io.ReadAll(resp.Body)
+			if err != nil {
+				statFail(in.Model, start)
+				writeAnthropicError(c, http.StatusBadGateway, "api_error", "upstream read: "+err.Error())
+				return
+			}
 			nvidiaRecord(in.Model, up, start, false, true)
 			writeAnthropicUpstreamError(c, resp.StatusCode, up, resp.Header.Get("x-request-id"), prov.APIKey)
 			return
@@ -90,12 +104,12 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 			raw, err := io.ReadAll(resp.Body)
 			if err != nil {
 				statFail(in.Model, start)
-				writeAnthropicError(c, http.StatusBadGateway, "api_error", "upstream read: "+err.Error(), "")
+				writeAnthropicError(c, http.StatusBadGateway, "api_error", "upstream read: "+err.Error())
 				return
 			}
 			var upstream map[string]any
 			if err := json.Unmarshal(raw, &upstream); err != nil {
-				writeAnthropicError(c, http.StatusBadGateway, "api_error", "invalid upstream Responses payload", "")
+				writeAnthropicError(c, http.StatusBadGateway, "api_error", "invalid upstream Responses payload")
 				return
 			}
 			result := responsesToAnthropic(upstream, in.Model)
@@ -125,7 +139,7 @@ type anthropicMessage struct {
 	Content any    `json:"content"`
 }
 
-func anthropicToResponses(in anthropicRequest, model string) (map[string]any, error) {
+func anthropicToResponses(in *anthropicRequest, model string) (map[string]any, error) {
 	input := make([]any, 0, len(in.Messages)+1)
 	if in.System != nil {
 		blocks, err := anthropicContent(in.System, "system")
@@ -211,7 +225,10 @@ func anthropicContent(content any, role string) ([]any, error) {
 				out = append(out, map[string]any{"type": "input_image", "image_url": url})
 			}
 		case "tool_use":
-			args, _ := json.Marshal(b["input"])
+			args, err := json.Marshal(b["input"])
+			if err != nil {
+				return nil, fmt.Errorf("marshal tool input: %w", err)
+			}
 			out = append(out, map[string]any{"type": "function_call", "call_id": b["id"], "name": b["name"], "arguments": string(args)})
 		case "tool_result":
 			val := b["content"]
@@ -219,7 +236,7 @@ func anthropicContent(content any, role string) ([]any, error) {
 				var text strings.Builder
 				for _, p := range parts {
 					if m, ok := p.(map[string]any); ok && m["type"] == "text" {
-						text.WriteString(fmt.Sprint(m["text"]))
+						fmt.Fprint(&text, m["text"])
 					}
 				}
 				val = text.String()
@@ -306,8 +323,15 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 	c.Status(http.StatusOK)
 	flusher, _ := c.Writer.(http.Flusher)
 	emit := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, b)
+		b, err := json.Marshal(data)
+		if err != nil {
+			log.Printf("marshal Anthropic event: %v", err)
+			return
+		}
+		if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, b); err != nil {
+			log.Printf("write Anthropic event: %v", err)
+			return
+		}
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -352,7 +376,7 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 	nvidiaRecord(model, nil, start, true, s.Err() != nil)
 }
 
-func streamResponseEvent(event, data string, startMessage func(string, any), emit func(string, any), blocks map[int]bool, stopped, usedTool *bool) {
+func streamResponseEvent(event, data string, startMessage, emit func(string, any), blocks map[int]bool, stopped, usedTool *bool) {
 	var d map[string]any
 	if data == "[DONE]" || json.Unmarshal([]byte(data), &d) != nil {
 		return
@@ -375,10 +399,10 @@ func streamResponseEvent(event, data string, startMessage func(string, any), emi
 		if item == nil {
 			return
 		}
-		typ := item["type"]
-		if typ == "message" {
+		switch item["type"] {
+		case "message":
 			emit("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "text", "text": ""}})
-		} else if typ == "function_call" {
+		case "function_call":
 			*usedTool = true
 			emit("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "tool_use", "id": item["call_id"], "name": item["name"], "input": map[string]any{}}})
 		}
@@ -410,10 +434,7 @@ func streamResponseEvent(event, data string, startMessage func(string, any), emi
 	}
 }
 
-func writeAnthropicError(c *gin.Context, status int, typ, message, requestID string) {
-	if requestID != "" {
-		c.Header("request-id", requestID)
-	}
+func writeAnthropicError(c *gin.Context, status int, typ, message string) {
 	c.JSON(status, map[string]any{"type": "error", "error": map[string]any{"type": typ, "message": message}})
 	c.Abort()
 }

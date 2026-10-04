@@ -175,7 +175,11 @@ func customOpenAIResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("close upstream response: %v", err)
+			}
+		}()
 		copyProxyResponse(c, resp, payload.Model, start)
 		c.Abort()
 	}

@@ -18,7 +18,7 @@ func TestAnthropicToResponsesConversationAndTools(t *testing.T) {
 		{Role: "assistant", Content: []any{map[string]any{"type": "tool_use", "id": "call_1", "name": "read", "input": map[string]any{"path": "a"}}}},
 		{Role: "user", Content: []any{map[string]any{"type": "tool_result", "tool_use_id": "call_1", "content": "contents"}}},
 	}}
-	out, err := anthropicToResponses(in, "upstream-muse")
+	out, err := anthropicToResponses(&in, "upstream-muse")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,10 @@ func TestAnthropicToResponsesConversationAndTools(t *testing.T) {
 	if out["tool_choice"].(map[string]any)["name"] != "read" {
 		t.Fatalf("tool choice: %#v", out["tool_choice"])
 	}
-	b, _ := json.Marshal(out)
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := string(b)
 	for _, want := range []string{`"role":"system"`, `"also be safe"`, `"type":"input_image"`, `data:image/png;base64,AA==`, `"type":"function_call"`, `"call_id":"call_1"`, `"type":"function_call_output"`, `"output":"contents"`} {
 		if !strings.Contains(s, want) {
@@ -40,7 +43,10 @@ func TestAnthropicToResponsesConversationAndTools(t *testing.T) {
 func TestAnthropicErrorDoesNotLeakProviderKey(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		io.WriteString(w, `{"error":{"message":"key secret-token denied"}}`)
+		if _, err := io.WriteString(w, `{"error":{"message":"key secret-token denied"}}`); err != nil {
+			t.Error(err)
+			return
+		}
 	}))
 	defer up.Close()
 	gin.SetMode(gin.TestMode)
@@ -49,7 +55,7 @@ func TestAnthropicErrorDoesNotLeakProviderKey(t *testing.T) {
 	e.Use(anthropicResponsesPassthrough(p))
 	e.POST("/v1/messages", func(c *gin.Context) { t.Fatal("adapter fell through") })
 	w := httptest.NewRecorder()
-	e.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gateway/muse","messages":[{"role":"user","content":"ping"}]}`)))
+	e.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gateway/muse","messages":[{"role":"user","content":"ping"}]}`)))
 	if strings.Contains(w.Body.String(), "secret-token") || !strings.Contains(w.Body.String(), "[redacted]") {
 		t.Fatalf("secret leak: %s", w.Body.String())
 	}
@@ -80,9 +86,15 @@ func TestAnthropicResponsesPassthroughNonStreaming(t *testing.T) {
 		if r.URL.Path != "/v1/responses" {
 			t.Errorf("path=%s", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&got)
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"id":"r","model":"muse","status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}`)
+		if _, err := io.WriteString(w, `{"id":"r","model":"muse","status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}`); err != nil {
+			t.Error(err)
+			return
+		}
 	}))
 	defer up.Close()
 	w := runAnthropicAdapter(t, up.URL+"/v1", `{"model":"gateway/muse","max_tokens":8,"system":"sys","messages":[{"role":"user","content":"ping"}]}`)
@@ -97,14 +109,38 @@ func TestAnthropicResponsesPassthroughNonStreaming(t *testing.T) {
 func TestAnthropicResponsesPassthroughStreamingTextAndTool(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, "event: response.created\ndata: {\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":2}}}\n\n")
-		io.WriteString(w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n")
-		io.WriteString(w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"hi\"}\n\n")
-		io.WriteString(w, "event: response.output_item.done\ndata: {\"output_index\":0}\n\n")
-		io.WriteString(w, "event: response.output_item.added\ndata: {\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"read\"}}\n\n")
-		io.WriteString(w, "event: response.function_call_arguments.delta\ndata: {\"output_index\":1,\"delta\":\"{\"}\n\n")
-		io.WriteString(w, "event: response.output_item.done\ndata: {\"output_index\":1}\n\n")
-		io.WriteString(w, "event: response.completed\ndata: {\"response\":{\"status\":\"completed\",\"usage\":{\"output_tokens\":4}}}\n\n")
+		if _, err := io.WriteString(w, "event: response.created\ndata: {\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":2}}}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"hi\"}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.output_item.done\ndata: {\"output_index\":0}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.output_item.added\ndata: {\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"read\"}}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.function_call_arguments.delta\ndata: {\"output_index\":1,\"delta\":\"{\"}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.output_item.done\ndata: {\"output_index\":1}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err := io.WriteString(w, "event: response.completed\ndata: {\"response\":{\"status\":\"completed\",\"usage\":{\"output_tokens\":4}}}\n\n"); err != nil {
+			t.Error(err)
+			return
+		}
 	}))
 	defer up.Close()
 	w := runAnthropicAdapter(t, up.URL, `{"model":"gateway/muse","stream":true,"messages":[{"role":"user","content":"ping"}]}`)
@@ -122,7 +158,10 @@ func TestAnthropicResponsesPassthroughErrors(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("x-request-id", "req_up")
 				w.WriteHeader(status)
-				io.WriteString(w, `{"error":{"type":"FreeTierError","message":"upstream denied"}}`)
+				if _, err := io.WriteString(w, `{"error":{"type":"FreeTierError","message":"upstream denied"}}`); err != nil {
+					t.Error(err)
+					return
+				}
 			}))
 			defer up.Close()
 			w := runAnthropicAdapter(t, up.URL, `{"model":"gateway/muse","messages":[{"role":"user","content":"ping"}]}`)
@@ -154,7 +193,7 @@ func runAnthropicAdapter(t *testing.T, baseURL, body string) *httptest.ResponseR
 	e.Use(anthropicResponsesPassthrough(p))
 	e.POST("/v1/messages", func(c *gin.Context) { t.Fatal("adapter fell through") })
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	e.ServeHTTP(w, req)
 	return w

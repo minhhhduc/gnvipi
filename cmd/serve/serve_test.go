@@ -20,7 +20,7 @@ import (
 
 func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
-	if err := os.WriteFile(path, []byte(`{"groups":[{"publisher":"old","models":[{"model":"old/retired","slug":"retired","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000000"}]}],"providers":[]}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"groups":[{"publisher":"old","models":[{"model":"old/retired","slug":"retired","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000000"}]}],"providers":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var prefs modelPrefs

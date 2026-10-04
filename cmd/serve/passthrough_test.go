@@ -15,9 +15,9 @@ type testRoundTripper func(*http.Request) (*http.Response, error)
 func (f testRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestSetCustomProviderHeadersSpoofsAgentRouterClient(t *testing.T) {
-	src := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	src := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", http.NoBody)
 	src.Header.Set("User-Agent", "test-client")
-	dst := httptest.NewRequest(http.MethodPost, "https://agentrouter.org/v1/chat/completions", nil)
+	dst := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://agentrouter.org/v1/chat/completions", http.NoBody)
 	setCustomProviderHeaders(dst, src, &customProvider{BaseURL: "https://agentrouter.org/v1", APIKey: "secret"})
 	if got := dst.Header.Get("User-Agent"); got != "opencode/1.18.25" {
 		t.Fatalf("User-Agent = %q", got)
@@ -99,7 +99,7 @@ func TestResponsesPassthroughUsesResponsesEndpoint(t *testing.T) {
 	called := false
 	engine.POST("/v1/responses", func(c *gin.Context) { called = true; c.Status(http.StatusOK) })
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"opencode-zen/muse-spark-1.3","input":"ping"}`))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"opencode-zen/muse-spark-1.3","input":"ping"}`))
 	req.Header.Set("x-opencode-session", "session-test-1")
 	engine.ServeHTTP(w, req)
 	if called || w.Code != http.StatusOK || got == nil {
@@ -114,7 +114,10 @@ func TestResponsesPassthroughUsesResponsesEndpoint(t *testing.T) {
 	if got.Header.Get("x-opencode-session") != "session-test-1" {
 		t.Fatalf("x-opencode-session=%q", got.Header.Get("x-opencode-session"))
 	}
-	body, _ := io.ReadAll(got.Body)
+	body, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(body), `"model":"muse-spark-1.3"`) {
 		t.Fatalf("body=%s", body)
 	}
