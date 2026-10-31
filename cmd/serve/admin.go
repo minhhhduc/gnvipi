@@ -6,9 +6,9 @@ package main
 
 import (
 	"encoding/json"
-	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,6 +47,10 @@ type modelPrefs struct {
 	hidden       map[string]struct{}
 	deleted      map[string]struct{}
 	providers    []customProvider
+	autoModel    string
+	searchURL    string
+	cycle        *cycleConfig
+	cycleIndex   int
 	onChange     func([]customProvider) // rewrites config.yaml so cliproxy reloads
 	onMaskChange func()                 // triggers re-registration of models in cliproxy
 }
@@ -57,6 +61,9 @@ type prefsFile struct {
 	MasksID   []string         `json:"masks_id"`
 	DeletedID []string         `json:"deleted_id"`
 	Providers []customProvider `json:"providers,omitempty"` // kept for admin UI custom providers
+	AutoModel string           `json:"auto_model,omitempty"`
+	SearchURL string           `json:"search_url,omitempty"`
+	Cycle     *cycleConfig     `json:"cycle,omitempty"`
 }
 
 type ModelGroup struct {
@@ -106,7 +113,7 @@ func (p customProvider) modelID() string {
 func (p *modelPrefs) load(path string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.path, p.hidden, p.deleted, p.providers = path, map[string]struct{}{}, map[string]struct{}{}, nil
+	p.path, p.hidden, p.deleted, p.providers, p.autoModel, p.searchURL, p.cycle, p.cycleIndex = path, map[string]struct{}{}, map[string]struct{}{}, nil, "", "", &cycleConfig{Name: "cycle"}, 0
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -123,6 +130,11 @@ func (p *modelPrefs) load(path string) {
 		p.deleted[id] = struct{}{}
 	}
 	p.providers = file.Providers
+	p.autoModel = file.AutoModel
+	p.searchURL = file.SearchURL
+	if file.Cycle != nil {
+		p.cycle.Models = append([]string(nil), file.Cycle.Models...)
+	}
 	log.Printf("models file %s: %d model(s) off, %d deleted, %d custom endpoint(s)", path, len(p.hidden), len(p.deleted), len(p.providers))
 	// Merge catalog entries from the local file into the embedded registry.
 	// This preserves newly embedded models while still honoring a refreshed
@@ -237,6 +249,87 @@ func (p *modelPrefs) listProviders() []customProvider {
 	return append([]customProvider(nil), p.providers...)
 }
 
+func (p *modelPrefs) autoModelID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.autoModel != "" {
+		return p.autoModel
+	}
+	return models.DefaultModel
+}
+
+func (p *modelPrefs) setAutoModel(id string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
+	p.mu.Lock()
+	old := p.autoModel
+	p.autoModel = id
+	p.mu.Unlock()
+	if err := p.save(); err != nil {
+		p.mu.Lock()
+		p.autoModel = old
+		p.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (p *modelPrefs) searchTemplate() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.searchURL
+}
+
+func (p *modelPrefs) setSearchURL(raw string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
+	p.mu.Lock()
+	old := p.searchURL
+	p.searchURL = raw
+	p.mu.Unlock()
+	if err := p.save(); err != nil {
+		p.mu.Lock()
+		p.searchURL = old
+		p.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func validSearchURL(raw string) bool {
+	if !strings.Contains(raw, "{query}") {
+		return false
+	}
+	u, err := url.Parse(strings.ReplaceAll(raw, "{query}", "test"))
+	return err == nil && publicSearchHost(u) && u.Fragment == ""
+}
+
+func normalizeSearchURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "{query}") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !publicSearchHost(u) {
+		return raw
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case host == "scholar.google.com":
+		u.Path = "/scholar"
+	case strings.HasPrefix(host, "google.") || strings.Contains(host, ".google."):
+		u.Path = "/search"
+	case host == "bing.com" || strings.HasSuffix(host, ".bing.com"):
+		u.Path = "/search"
+	case host == "duckduckgo.com" || strings.HasSuffix(host, ".duckduckgo.com"):
+		u.Path = "/html/"
+	}
+	q := u.Query()
+	q.Set("q", "{query}")
+	u.RawQuery = strings.ReplaceAll(q.Encode(), "%7Bquery%7D", "{query}")
+	return u.String()
+}
+
 // setProviders replaces the custom endpoints and asks the gateway to reload them.
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
@@ -309,6 +402,9 @@ func (p *modelPrefs) save() error {
 		MasksID:   hiddenIDs,
 		DeletedID: deletedIDs,
 		Providers: append([]customProvider(nil), p.providers...),
+		AutoModel: p.autoModel,
+		SearchURL: p.searchURL,
+		Cycle:     p.cycle,
 	}
 	p.mu.RUnlock()
 	if path == "" {
@@ -510,6 +606,68 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"off": len(payload.MasksID)})
+	case "/admin/automode":
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		id := strings.TrimSpace(payload.Model)
+		valid := false
+		if id != "automode" && !prefs.isHidden(id) {
+			_, valid = models.Models[id]
+			if cycle, _ := prefs.cycleSnapshot(); cycle.Name == id && id != "" {
+				valid = true
+			}
+			if !valid {
+				for _, p := range prefs.listProviders() {
+					if p.modelID() == id {
+						valid = true
+						break
+					}
+				}
+			}
+		}
+		if !valid {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "choose an enabled gateway model"})
+			return
+		}
+		if err := prefs.setAutoModel(id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"model": id})
+	case "/admin/search":
+		var payload struct {
+			URL string `json:"url"`
+		}
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		payload.URL = normalizeSearchURL(payload.URL)
+		if payload.URL != "" && !validSearchURL(payload.URL) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "enter an HTTPS search URL containing {query}"})
+			return
+		}
+		if err := prefs.setSearchURL(payload.URL); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"url": payload.URL})
+	case "/admin/cycle":
+		var payload cycleConfig
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := prefs.setCycle(payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": "cycle", "models": payload.Models})
 	case "/admin/providers":
 		var list []customProvider
 		if err := c.ShouldBindJSON(&list); err != nil {
@@ -567,830 +725,3 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 		c.JSON(http.StatusNotFound, gin.H{"error": "unknown admin path"})
 	}
 }
-
-// modelRow renders one switch row; dead marks a model the upstream refused.
-func modelRow(id, name string, hidden, dead bool) string {
-	checked, badge := " checked", ""
-	if hidden {
-		checked = ""
-	}
-	if dead {
-		badge = `<span class=badge title="upstream reports no available function">upstream error</span>`
-	}
-	return modelRowHTML(id, name, checked, badge)
-}
-
-func modelRowHTML(id, name, checked, badge string) string {
-	return `<div class=row data-id="` + html.EscapeString(id) + `">` +
-		`<input type=checkbox class=sw` + checked + ` value="` + html.EscapeString(id) + `">` +
-		`<span class=name>` + html.EscapeString(name) + badge + `</span>` +
-		`<span class=id>` + html.EscapeString(id) + `</span>` +
-		`<button type=button class=del-btn title="Remove from list" onclick="deleteModel(event,'` + html.EscapeString(id) + `')">×</button>` +
-		`</div>`
-}
-
-// adminHTML renders one page per ?page= (dashboard | models | endpoints |
-// chromes) — one function per page.
-func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel) string {
-	browser := currentChromeAdmin()
-	ids := make([]string, 0, len(catalog))
-	for _, m := range catalog {
-		if m != nil {
-			ids = append(ids, m.ID)
-		}
-	}
-	sort.Strings(ids)
-
-	providers := prefs.listProviders()
-
-	// --- Models page: every model (NVIDIA + custom) ---
-	type renderModel struct {
-		Publisher string
-		Name      string
-		ID        string
-		IsCustom  bool
-		Index     int
-		BaseURL   string
-	}
-	var renderList []renderModel
-
-	for i, p := range providers {
-		renderList = append(renderList, renderModel{
-			Publisher: p.Name,
-			Name:      p.alias(),
-			ID:        p.modelID(),
-			IsCustom:  true,
-			Index:     i,
-			BaseURL:   p.BaseURL,
-		})
-	}
-
-	for _, id := range ids {
-		if prefs.isDeleted(id) {
-			continue
-		}
-		publisher, name, _ := strings.Cut(id, "/")
-		renderList = append(renderList, renderModel{
-			Publisher: publisher,
-			Name:      name,
-			ID:        id,
-			IsCustom:  false,
-		})
-	}
-
-	sort.SliceStable(renderList, func(i, j int) bool {
-		if renderList[i].Publisher != renderList[j].Publisher {
-			return renderList[i].Publisher < renderList[j].Publisher
-		}
-		return renderList[i].Name < renderList[j].Name
-	})
-
-	var rows strings.Builder
-	failed := 0
-	switch page {
-	case "dashboard":
-		rows.WriteString(`<h2>overview (all APIs, since server start)</h2><div id=charts></div>
-<h2>request log (200-request frames, kept across restarts)</h2><div id=frames></div><div id=framebox></div>`)
-	case "chromes":
-		if browser != nil {
-			rows.WriteString(`<h2>captcha chromes — kill to free RAM</h2><div id=chromes></div>`)
-		} else {
-			rows.WriteString(`<div class=row><span class=id>captcha Chrome is starting or unavailable</span></div>`)
-		}
-	default: // models + endpoints share one page
-		rows.WriteString(`<h2>add new endpoint</h2>` + providerForm)
-		group := ""
-		for _, rm := range renderList {
-			if rm.Publisher != group {
-				group = rm.Publisher
-				rows.WriteString(`<h2>` + html.EscapeString(rm.Publisher) + `</h2>`)
-			}
-			checked, badge := " checked", ""
-			if prefs.isHidden(rm.ID) {
-				checked = ""
-			}
-			if rm.IsCustom {
-				rows.WriteString(`<div class="row" data-id="` + html.EscapeString(rm.ID) + `">` +
-					`<input type=checkbox class=sw` + checked + ` value="` + html.EscapeString(rm.ID) + `">` +
-					`<span class=name title="` + html.EscapeString(rm.BaseURL) + `">` + html.EscapeString(rm.Name) + `</span>` +
-					`<span class=id>` + html.EscapeString(rm.ID) + `</span>` +
-					`<button type=button class=del-btn title="Delete endpoint" onclick="deleteProvider(event, ` + strconv.Itoa(rm.Index) + `)">×</button>` +
-					`</div>`)
-			} else {
-				_, isDead := deadModels.Load(rm.ID)
-				if isDead {
-					failed++
-					badge = `<span class=badge title="upstream reports no available function">upstream error</span>`
-				}
-				rows.WriteString(modelRowHTML(rm.ID, rm.Name, checked, badge))
-			}
-		}
-	}
-
-	if providers == nil {
-		providers = []customProvider{}
-	}
-	blob, err := json.Marshal(providers)
-	if err != nil {
-		blob = []byte("[]")
-	}
-
-	deletedList := prefs.listDeleted()
-	deletedBlob, err := json.Marshal(deletedList)
-	if err != nil {
-		deletedBlob = []byte("[]")
-	}
-
-	return adminHead(page, browser != nil || chromeAdminConfigured()) + `<main>` + rows.String() + `</main>
-<div id=toast></div>
-<script>
-const PAGE = ` + strconv.Quote(page) + `;
-const FAILED = ` + strconv.Itoa(failed) + `;
-const PROVIDERS = ` + string(blob) + `;
-const DELETED = ` + string(deletedBlob) + `;
-const CHROMES = ` + strconv.FormatBool(browser != nil) + `;
-` + adminScript
-}
-
-// adminHead renders the shared shell: nav tabs + CSS. active tab theo page.
-// adminHeadTabs renders just the nav tab bar.
-func adminHeadTabs(active string, chromes bool) string {
-	type tab struct{ id, label string }
-	tabs := []tab{{"dashboard", "stats"}, {"models", "models"}}
-	if chromes {
-		tabs = append(tabs, tab{"chromes", "chrome captcha"})
-	}
-	b := strings.Builder{}
-	for _, t := range tabs {
-		cls := "tab"
-		if t.id == active {
-			cls += " on"
-		}
-		b.WriteString(`<a class="` + cls + `" href="?page=` + t.id + `">` + t.label + `</a>`)
-	}
-	return b.String()
-}
-
-func adminHead(active string, chromes bool) string {
-	return `<!doctype html><meta charset="utf-8"><title>Gateway admin</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<style>
-:root{--bg:#0f1115;--card:#171a21;--line:#242833;--fg:#e6e8ee;--dim:#8b93a7;--on:#3fb27f;--bad:#e06c6c;--warn:#e0a84c}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",sans-serif}
-header{position:sticky;top:0;z-index:2;padding:1rem 1.25rem;border-bottom:1px solid var(--line);
-  background:rgba(15,17,21,.93);backdrop-filter:blur(8px)}
-.wrap,main{max-width:60rem;margin:0 auto}
-main{padding:1rem 1.25rem 4rem}
-h1{margin:0;font-size:1.15rem}
-.sub{color:var(--dim);font-size:.82rem;margin-top:.15rem}
-.bar{display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap}
-input[type=search]{flex:1;min-width:12rem;background:var(--card);border:1px solid var(--line);
-  color:var(--fg);border-radius:8px;padding:.45rem .7rem;font:inherit}
-button{background:var(--card);border:1px solid var(--line);color:var(--fg);border-radius:8px;
-  padding:.45rem .8rem;font:inherit;cursor:pointer}
-button:hover{background:#1d212b;border-color:#39405a}
-h2{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;
-  margin:1.4rem 0 .4rem;font-weight:600}
-.row{display:flex;align-items:center;gap:.75rem;padding:.5rem .75rem;margin-bottom:.35rem;
-  border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer}
-.row:hover{border-color:#333a4a}
-.row.hide{display:none}
-.name{flex:1;display:flex;align-items:center;gap:.5rem}
-.id{color:var(--dim);font-size:.75rem;font-family:ui-monospace,Consolas,monospace}
-.badge{color:var(--bad);border:1px solid var(--bad);border-radius:999px;font-size:.66rem;
-  padding:0 .4rem;line-height:1.4}
-.badge.ok{color:var(--on);border-color:var(--on)}
-.badge.warn{color:var(--warn);border-color:var(--warn)}
-.sw{appearance:none;flex:none;width:40px;height:22px;border:0;border-radius:999px;background:#2b3040;
-  position:relative;cursor:pointer;transition:background .15s}
-.sw:checked{background:var(--on)}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
-  background:#fff;transition:transform .15s}
-.sw:checked::after{transform:translateX(18px)}
-.row:has(.sw:not(:checked)) .name{color:var(--dim);text-decoration:line-through}
-.del-btn{flex:none;background:none;border:1px solid transparent;color:var(--dim);font-size:1.1rem;
-  padding:0 .4rem;border-radius:6px;line-height:1;cursor:pointer;opacity:0;transition:opacity .15s,color .15s}
-.row:hover .del-btn{opacity:1}
-.del-btn:hover{color:var(--bad);border-color:var(--bad)}
-.card{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.5rem;
-  padding:.75rem;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-bottom:.6rem}
-.card input{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:8px;
-  padding:.45rem .6rem;font:inherit;min-width:0}
-.card button{white-space:nowrap}
-
-#toast{position:fixed;right:1rem;bottom:1rem;padding:.5rem .8rem;border-radius:8px;
-  border:1px solid var(--line);background:var(--card);opacity:0;transition:opacity .2s}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:.5rem;margin-bottom:.6rem}
-.tile{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.7rem .8rem}
-.tile .big{font-size:1.35rem;font-weight:600;line-height:1.2}
-.tile .lbl{color:var(--dim);font-size:.72rem;margin-bottom:.1rem}
-.chartbox{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:.6rem .8rem .5rem;margin-bottom:.6rem}
-.chartrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(26rem,1fr));gap:.6rem;margin-bottom:.6rem}
-.chartrow .chartbox{margin-bottom:0}
-.note{color:var(--dim);font-size:.72rem;margin:.2rem 0 .5rem}
-.pb{border:1px solid;border-radius:999px;font-size:.66rem;padding:0 .4rem;line-height:1.4;white-space:nowrap;margin-right:.4rem}
-#frames{display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.5rem}
-#frames button{padding:.2rem .55rem;font-size:.78rem}
-.fp.on{background:#223044;border-color:#39405a}
-.logwrap{max-height:22rem;overflow:auto;border:1px solid var(--line);border-radius:10px}
-.chhead{display:flex;gap:1rem;margin-bottom:.3rem}
-.lg{color:var(--dim);font-size:.72rem;display:inline-flex;align-items:center;gap:.3rem}
-.chwrap{position:relative}
-.ax{fill:var(--dim);font-size:9px;font-family:ui-monospace,Consolas,monospace}
-.tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);
-  border-radius:8px;padding:.45rem .6rem;min-width:110px;font-size:.72rem;box-shadow:0 4px 14px rgba(0,0,0,.4);z-index:3}
-.tip.hidden{display:none}
-.tip-h{color:var(--dim);margin-bottom:.25rem;font-family:ui-monospace,Consolas,monospace}
-.tip-r{display:flex;justify-content:space-between;gap:1rem;line-height:1.5}
-.tip-k{color:var(--dim);display:inline-flex;align-items:center;gap:.35rem}
-.tip-sw{width:10px;height:2px;border-radius:1px;display:inline-block}
-.tip-r b{font-weight:600}
-table.stats{width:100%;border-collapse:collapse;font-size:.8rem;overflow:hidden;border-radius:10px}
-table.stats th,table.stats td{padding:.4rem .6rem;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
-table.stats thead th{cursor:pointer;user-select:none;color:var(--dim);background:var(--card);position:sticky;top:0}
-table.stats thead th:hover{color:var(--fg)}
-table.stats thead th.on{color:var(--fg)}
-table.stats thead th.on.asc::after{content:" ↑"}
-table.stats thead th.on:not(.asc)::after{content:" ↓"}
-table.stats td.nm{text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:.75rem}
-table.stats tbody tr:hover{background:#1d212b}
-table.stats tfoot th{color:var(--dim);background:var(--card)}
-#toast.show{opacity:1}
-#deleted-section{margin-top:1.5rem;border:1px solid var(--line);border-radius:10px;background:var(--card);overflow:hidden}
-#deleted-section.collapsed #deleted-list{display:none}
-#deleted-header{display:flex;align-items:center;gap:.6rem;padding:.65rem .85rem;cursor:pointer;user-select:none}
-#deleted-header:hover{background:#1d212b}
-#deleted-header .cnt{color:var(--warn);font-size:.78rem}
-#deleted-header .arrow{color:var(--dim);font-size:.7rem;transition:transform .15s}
-#deleted-section:not(.collapsed) #deleted-header .arrow{transform:rotate(90deg)}
-#deleted-list{border-top:1px solid var(--line)}
-.del-row{display:flex;align-items:center;gap:.6rem;padding:.4rem .85rem;border-bottom:1px solid var(--line)}
-.del-row:last-child{border-bottom:0}
-.del-row .id{flex:1}
-.del-row button{border-color:var(--on);color:var(--on);padding:.2rem .55rem;font-size:.8rem}
-/* NAV TABS */
-	.tab-bar{display:flex;gap:.4rem;padding-top:.5rem;border-top:1px solid var(--line);margin-top:.75rem}
-	.tab{color:var(--dim);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;
-	  padding:.3rem .6rem;border-radius:6px;text-decoration:none}
-	.tab:hover{color:var(--fg);background:#1d212b}
-	.tab.on{color:var(--fg);background:#223044}
-	/* hide search on non-models pages */
-	#q:not([data-page=models]){display:none}
-	</style>
-<header><div class=wrap>
-  <h1>Gateway admin</h1>
-  <div class=tab-bar>` + adminHeadTabs(active, chromes) + `</div>
-  <div class=sub id=counts></div>
-  <div class=bar>
-    <input type=search id=q placeholder="search models…" autofocus data-page="models">
-    <button id=all>Enable all</button>
-    <button id=none>Disable all</button>
-    <button id=retry>Retry failed models</button>
-  </div>
-</div></header>
-`
-}
-
-// providerForm is the "add an endpoint" card rendered above the model list.
-const providerForm = `<form id=addform class=card>
-  <input name=name placeholder="name (e.g. openrouter)" required>
-  <input name=base_url placeholder="base URL or full endpoint (https://opencode.ai/zen/v1/responses)" required>
-  <input name=api_key placeholder="api key" type=password>
-  <input name=model placeholder="their model id (e.g. x-ai/grok-4)" required>
-  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=responses_only>OpenAI Responses API (/v1/responses)</label>
-  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=messages_only>Anthropic Messages API (/v1/messages)</label>
-  <button type=submit>Add endpoint</button>
-</form>`
-
-// adminScript keeps the page and the mask file in sync: every toggle saves.
-const adminScript = `
-const rows = [...document.querySelectorAll('.row')];
-const sws = [...document.querySelectorAll('.sw')];
-const counts = document.getElementById('counts');
-const toastEl = document.getElementById('toast');
-let toastTimer;
-
-function flash(msg) {
-  toastEl.textContent = msg;
-  toastEl.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
-}
-
-function render() {
-  const on = sws.filter(s => s.checked).length;
-  counts.textContent = on + ' on · ' + (sws.length - on) + ' off · ' + FAILED + ' upstream errors';
-}
-
-async function save() {
-  render();
-  const hidden = sws.filter(s => !s.checked).map(s => s.value);
-  try {
-    const res = await fetch('/admin/models', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({masks_id: hidden}),
-    });
-    flash(res.ok ? 'saved' : 'save failed: ' + res.status);
-  } catch (err) {
-    flash('save failed: ' + err);
-  }
-}
-
-const addForm = document.getElementById('addform');
-if (addForm) addForm.addEventListener('submit', async e => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const list = (PROVIDERS || []).concat([{
-    name: f.get('name').trim(), base_url: f.get('base_url').trim(),
-    api_key: f.get('api_key').trim(), model: f.get('model').trim(),
-    responses_only: f.get('responses_only') === 'on',
-    messages_only: f.get('messages_only') === 'on',
-  }]);
-  try {
-    const res = await fetch('/admin/providers', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify(list),
-    });
-    if (res.ok) {
-      flash('added endpoint');
-      setTimeout(() => { location.href = '/admin?page=models'; }, 300);
-    } else {
-      const err = await res.json().catch(() => ({error: res.status}));
-      flash('add failed: ' + err.error);
-    }
-  } catch (err) {
-    flash('add failed: ' + err);
-  }
-});
-
-async function deleteProvider(e, idx) {
-  e.preventDefault();
-  e.stopPropagation();
-  const list = (PROVIDERS || []).filter((_, i) => i !== idx);
-  try {
-    const res = await fetch('/admin/providers', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify(list),
-    });
-    if (res.ok) {
-      flash('deleted endpoint');
-      setTimeout(() => { location.href = '/admin?page=models'; }, 300);
-    } else {
-      const err = await res.json().catch(() => ({error: res.status}));
-      flash('delete failed: ' + err.error);
-    }
-  } catch (err) {
-    flash('delete failed: ' + err);
-  }
-}
-
-// --- Delete model ---
-async function deleteModel(e, id) {
-  e.preventDefault();
-  e.stopPropagation();
-  try {
-    const res = await fetch('/admin/delete', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({id}),
-    });
-    if (res.ok) {
-      flash('deleted: ' + id);
-      setTimeout(() => location.reload(), 300);
-    } else {
-      const err = await res.json().catch(() => ({error: res.status}));
-      flash('delete failed: ' + err.error);
-    }
-  } catch (err) {
-    flash('delete failed: ' + err);
-  }
-}
-
-async function restoreModel(id) {
-  try {
-    const res = await fetch('/admin/delete', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({id, restore: true}),
-    });
-    if (res.ok) {
-      flash('restored: ' + id);
-      setTimeout(() => location.reload(), 300);
-    } else {
-      const err = await res.json().catch(() => ({error: res.status}));
-      flash('restore failed: ' + err.error);
-    }
-  } catch (err) {
-    flash('restore failed: ' + err);
-  }
-}
-
-// Deleted models section
-function drawDeleted() {
-  const deleted = DELETED || [];
-  if (deleted.length === 0) return;
-
-  const section = document.createElement('div');
-  section.id = 'deleted-section';
-  section.className = 'collapsed';
-
-  const header = document.createElement('div');
-  header.id = 'deleted-header';
-  header.innerHTML = '<span class=arrow>▶</span> <span>Deleted models</span> <span class=cnt>' + deleted.length + ' model</span>';
-  header.onclick = () => section.classList.toggle('collapsed');
-
-  const list = document.createElement('div');
-  list.id = 'deleted-list';
-  deleted.forEach(id => {
-    const row = document.createElement('div');
-    row.className = 'del-row';
-    row.innerHTML = '<span class=id>' + id + '</span>';
-    const btn = document.createElement('button');
-    btn.textContent = 'restore';
-    btn.onclick = () => restoreModel(id);
-    row.appendChild(btn);
-    list.appendChild(row);
-  });
-
-  section.appendChild(header);
-  section.appendChild(list);
-  document.querySelector('main').appendChild(section);
-}
-
-drawDeleted();
-// Click anywhere on row (except del-btn) toggles the switch.
-rows.forEach(r => {
-  r.addEventListener('click', e => {
-    if (e.target.classList.contains('del-btn')) return;
-    if (e.target.classList.contains('sw')) return;
-    const sw = r.querySelector('.sw');
-    if (sw) { sw.checked = !sw.checked; save(); }
-  });
-});
-sws.forEach(s => s.addEventListener('change', save));
-document.getElementById('all').onclick = () => { sws.forEach(s => s.checked = true); save(); };
-document.getElementById('none').onclick = () => { sws.forEach(s => s.checked = false); save(); };
-document.getElementById('retry').onclick = async () => {
-  await fetch('/admin/retry-failed', {method: 'POST'});
-  location.reload();
-};
-document.getElementById('q').addEventListener('input', e => {
-  const q = e.target.value.toLowerCase();
-  rows.forEach(r => r.classList.toggle('hide', !r.dataset.id.toLowerCase().includes(q)));
-});
-render();
-
-// Hide search input on non-models pages
-if (PAGE !== 'models') {
-  document.getElementById('q').style.display = 'none';
-  document.getElementById('all').style.display = 'none';
-  document.getElementById('none').style.display = 'none';
-  document.getElementById('retry').style.display = 'none';
-}
-
-// --- Model stats: KPI tiles + line charts (crosshair, tooltip). Refresh 5s.
-// Palette validated: #3987e5/#d95926 on the #171a21 surface; status badges
-// use --on/--bad.
-if (PAGE === 'dashboard') {
-  const charts = document.getElementById('charts');
-  const fmtTime = t => { const d = new Date(t); return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—'; };
-  const fmtMS = ms => ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : (ms || 0) + 'ms';
-  const fmtN = n => (n || 0).toLocaleString();
-  const fmtUp = ms => { if (!(ms > 0)) return '—'; const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
-    return (h ? h + 'g ' : '') + (h || m ? m + 'p ' : '') + (h ? '' : (s % 60) + 's'); };
-  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  // Provider badge colors: only from the validated palette / existing CSS tokens.
-  const PCOLS = ['#3987e5', '#d95926', 'var(--on)', 'var(--warn)', 'var(--dim)'];
-  function provCell(m) {
-    m = m || '';
-    const i = m.indexOf('/');
-    if (i < 1) return esc(m);
-    const p = m.slice(0, i);
-    let h = 0; for (let j = 0; j < p.length; j++) h = (h * 31 + p.charCodeAt(j)) >>> 0;
-    const c = PCOLS[h % PCOLS.length];
-    return '<span class=pb style="color:' + c + ';border-color:' + c + '">' + esc(p) + '</span>' + esc(m.slice(i + 1));
-  }
-  const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
-  const MCOLS = ['#3987e5', '#d95926', '#2da44e', '#bf4b52', '#8250df', '#1b7c83', '#e3b341', '#218bff']; // per-model chart lines
-  const LCOLS = [
-    ['time', 'time', 'when the gateway got the request'],
-    ['model', 'model', 'called model'],
-    ['streamed', 'stream', 'whether the request streamed'],
-    ['input_tokens', 'in tok', 'input tokens'],
-    ['output_tokens', 'out tok', 'output tokens'],
-    ['ms', 'latency', 'total upstream response time'],
-    ['ttfb_ms', 'TTFB', 'time to first token (stream only)'],
-    ['error', 'status', 'ok = upstream 2xx; error = >=400 or dropped connection'],
-  ];
-  let models = [], series = [], modelSeries = {}, events = [], startedAt = 0;
-
-  // Tile sparkline: last 12 points, series-coloured line, no fill.
-  function spark(vals, color) {
-    const v = vals.slice(-12), max = Math.max(1, ...v);
-    const W = 96, H = 26;
-    const x = i => 1 + i * (W - 2) / Math.max(1, v.length - 1);
-    const y = t => H - 2 - t * (H - 4) / max;
-    const pts = v.map((t, i) => x(i).toFixed(1) + ',' + y(t).toFixed(1)).join(' ');
-    return '<svg width=' + W + ' height=' + H + ' viewBox="0 0 ' + W + ' ' + H + '" style="display:block">' +
-      '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
-      '<circle cx="' + x(v.length - 1).toFixed(1) + '" cy="' + y(v[v.length - 1]).toFixed(1) + '" r="4" fill="' + color + '" stroke="#171a21" stroke-width="2"/>' +
-      '</svg>';
-  }
-
-  // Line chart with crosshair + tooltip. defs: [{key,label,color,fmt}].
-  // One Y axis per chart (no dual axis); tooltip shows that chart's series.
-  let chartDefs = [], chartData = [];
-  function lineChart(defs, data) {
-    const W = 640, H = 150, PADL = 38, PADR = 10, PADT = 8, PADB = 20;
-    if (!data) data = series;
-    const all = defs.map(d => data.map(p => p[d.key] || 0));
-    const max = Math.max(1, ...all.flat());
-    const tick = max > 4 ? Math.ceil(max / 4) : 1;
-    const yMax = Math.max(tick, Math.ceil(max / tick) * tick);
-    const x = i => PADL + i * (W - PADL - PADR) / Math.max(1, data.length - 1);
-    const y = v => H - PADB - v * (H - PADB - PADT) / yMax;
-    let grid = '';
-    for (let t = 0; t <= 4; t++) {
-      const v = yMax * t / 4, yy = y(v).toFixed(1);
-      grid += '<line x1=' + PADL + ' x2=' + (W - PADR) + ' y1=' + yy + ' y2=' + yy + ' stroke="#242833" stroke-width="1"/>' +
-        '<text x=' + (PADL - 6) + ' y=' + (yy * 1 + 4) + ' text-anchor="end" class=ax>' + fmtN(Math.round(v)) + '</text>';
-    }
-    let paths = '', legend = '';
-    defs.forEach((d, di) => {
-      const vals = data.map(p => p[d.key] || 0);
-      const pts = vals.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
-      paths += '<path d="M' + x(0).toFixed(1) + ',' + y(vals[0] || 0).toFixed(1) +
-        ' L' + pts.replace(/ /g, ' L') + '" fill="none" stroke="' + d.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-      // end-dot with a 2px surface ring
-      paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#171a21" stroke-width="2"/>';
-      legend += '<span class=lg><svg width=14 height=8><line x1=0 y1=4 x2=14 y2=4 stroke=' + d.color + ' stroke-width=2 stroke-linecap=round/></svg>' + d.label + '</span>';
-    });
-    chartDefs.push(defs); chartData.push(data);
-    return '<div class=chartbox><div class=chhead>' + legend + '</div>' +
-      '<div class=chwrap data-chart>' +
-      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:150px;display:block">' +
-      grid + paths +
-      '<line class=crosshair y1=' + PADT + ' y2=' + (H - PADB) + ' x1=-99 x2=-99 stroke="#8b93a7" stroke-width="1"/>' +
-      '</svg><div class=tip hidden></div></div></div>';
-  }
-
-  function sortHeader(cols, key, dir, attr) {
-    return '<tr>' + cols.map(c => '<th ' + attr + '="' + c[0] + '"' +
-      (c[2] ? ' title="' + esc(c[2]) + '"' : '') +
-      (c[0] === key ? ' class="on' + (dir > 0 ? ' asc' : '') + '"' : '') + '>' + c[1] + '</th>').join('') + '</tr>';
-  }
-
-  function drawCharts() {
-    chartDefs = []; chartData = [];
-    const tot = k => models.reduce((s, m) => s + (m[k] || 0), 0);
-    const last = series[series.length - 1] || {};
-    const reqS = series.map(p => p.requests || 0);
-    const errPct = tot('requests') ? Math.round(100 * tot('errors') / tot('requests')) : 0;
-    const ttfbAvg = tot('streamed')
-      ? Math.round(models.reduce((s, m) => s + (m.ttfb_avg_ms || 0) * (m.streamed || 0), 0) / tot('streamed')) : 0;
-    const mss = events.map(e => e.ms || 0).sort((a, b) => a - b);
-    const p95 = mss.length ? mss[Math.max(0, Math.ceil(0.95 * mss.length) - 1)] : 0;
-    const tiles = [
-      [fmtN(tot('requests')), 'total requests', reqS, C.req],
-      [fmtN(last.requests || 0), 'req / min', reqS, C.req],
-      [fmtN(tot('input_tokens')), 'in tokens', series.map(p => p.input_tokens || 0), C.in],
-      [fmtN(tot('output_tokens')), 'tokens ra', series.map(p => p.output_tokens || 0), C.out],
-      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'error', series.map(p => p.errors || 0), '#e66767'],
-      [ttfbAvg ? fmtMS(ttfbAvg) : '—', 'TTFB tb (stream)', null, null],
-      [mss.length ? fmtMS(p95) : '—', 'p95 latency', null, null],
-      [fmtUp(startedAt ? Date.now() - startedAt : 0), 'uptime', null, null],
-    ];
-    charts.innerHTML =
-      '<div class=tiles>' + tiles.map(t =>
-        '<div class=tile><div class=lbl>' + t[1] + '</div><div class=big>' + t[0] + '</div>' +
-        (t[2] ? spark(t[2], t[3]) : '') + '</div>').join('') + '</div>' +
-      '<div class=note>all metrics since server start' +
-        (startedAt ? ' (' + new Date(startedAt).toLocaleString() + ')' : '') +
-        ' — every API the gateway serves: both NVIDIA playground models and custom providers via passthrough (tokenharbor, justworker…) all count.</div>' +
-      '<div class=chartrow>' +
-      lineChart([{key:'requests', label:'requests / min', color:C.req}]) +
-      lineChart([{key:'input_tokens', label:'in tok / min', color:C.in}, {key:'output_tokens', label:'out tok / min', color:C.out}]) +
-      lineChart([{key:'ttfb_avg_ms', label:'avg TTFB / min', color:C.req, fmt:fmtMS}]) +
-      '</div>' +
-      '<div class=note>TTFB = time to first byte of the stream; minutes with no streamed requests show 0.</div>' +
-      '<div class=note><b>per-model charts — requests / min</b></div>' +
-      (Object.keys(modelSeries).length
-        ? (() => {
-            const top = Object.entries(modelSeries)
-              .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
-              .sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
-            // fixed colour by model-name hash — matches the provCell table, stable per render
-            const mcol = m => { let h = 0; for (let j = 0; j < m.length; j++) h = (h * 31 + m.charCodeAt(j)) >>> 0; return MCOLS[h % MCOLS.length]; };
-            const grid = series.map((p, i) => {
-              const o = {minute: p.minute};
-              top.forEach((m, k) => { o['m' + k] = (modelSeries[m] && modelSeries[m][i] && modelSeries[m][i].requests) || 0; });
-              return o;
-            });
-            return lineChart(top.map((m, k) => ({key: 'm' + k, label: esc(m), color: mcol(m)})), grid);
-          })()
-        : '<div class=row><span class=id>no requests yet</span></div>');
-    armCharts();
-  }
-
-  // Crosshair + tooltip: snap to nearest X, show that chart's series at X.
-  // Tooltip uses textContent (model id values are untrusted).
-  function armCharts() {
-    charts.querySelectorAll('.chwrap').forEach((w, ci) => {
-      const svg = w.querySelector('svg'), cross = svg.querySelector('.crosshair'), tip = w.querySelector('.tip');
-      const defs = chartDefs[ci] || [];
-      const move = e => {
-        const r = svg.getBoundingClientRect();
-        const px = (e.clientX - r.left) / r.width * 640;
-        const i = Math.max(0, Math.min(series.length - 1, Math.round((px - 38) / ((640 - 38 - 10) / Math.max(1, series.length - 1)))));
-        const vx = 38 + i * (640 - 38 - 10) / Math.max(1, series.length - 1);
-        cross.setAttribute('x1', vx); cross.setAttribute('x2', vx);
-        const p = (chartData[ci] || series)[i]; if (!p) return;
-        tip.textContent = '';
-        const head = document.createElement('div');
-        head.className = 'tip-h';
-        head.textContent = new Date(p.minute).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-        tip.appendChild(head);
-        defs.forEach(d => {
-          const row = document.createElement('div'); row.className = 'tip-r';
-          const key = document.createElement('span'); key.className = 'tip-k';
-          const sw = document.createElement('span'); sw.className = 'tip-sw'; sw.style.background = d.color;
-          key.appendChild(sw); key.appendChild(document.createTextNode(d.label));
-          const val = document.createElement('b'); val.textContent = (d.fmt || fmtN)(p[d.key] || 0);
-          row.appendChild(key); row.appendChild(val); tip.appendChild(row);
-        });
-        tip.classList.remove('hidden');
-        const tx = Math.min(r.width - 130, Math.max(4, e.clientX - r.left + 12));
-        tip.style.left = tx + 'px'; tip.style.top = '6px';
-      };
-      w.addEventListener('pointermove', move);
-      w.addEventListener('pointerleave', () => { cross.setAttribute('x1', -99); cross.setAttribute('x2', -99); tip.classList.add('hidden'); });
-    });
-  }
-
-  // Request table: shared by the live log and history frames.
-  function logTable(evs, key, dir) {
-    const lval = (e, k) => k === 'time' ? +new Date(e.time)
-      : k === 'model' ? (e.model || '')
-      : typeof e[k] === 'boolean' ? (e[k] ? 1 : 0) : (e[k] || 0);
-    const sorted = evs.slice().sort((a, b) => {
-      const va = lval(a, key), vb = lval(b, key);
-      return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * dir;
-    });
-    return '<div class=logwrap><table class=stats><thead>' + sortHeader(LCOLS, key, dir, 'data-lkey') + '</thead><tbody>' +
-      sorted.map(e => '<tr>' +
-        '<td>' + fmtTime(e.time) + '</td>' +
-        '<td class=nm>' + provCell(e.model) + '</td>' +
-        '<td>' + (e.streamed ? 'yes' : '—') + '</td>' +
-        '<td>' + fmtN(e.input_tokens) + '</td>' +
-        '<td>' + fmtN(e.output_tokens) + '</td>' +
-        '<td>' + fmtMS(e.ms) + '</td>' +
-        '<td>' + (e.ttfb_ms ? fmtMS(e.ttfb_ms) : '—') + '</td>' +
-        '<td>' + (e.error ? '<span class=badge>error</span>' : '<span class="badge ok">ok</span>') + '</td>' +
-      '</tr>').join('') + '</tbody></table></div>';
-  }
-  async function poll() {
-    try {
-      const res = await fetch('/admin/stats');
-      if (res.ok) {
-        const d = await res.json();
-        models = d.models || [];
-        series = d.series || [];
-        modelSeries = d.series_by_model || {};
-        events = d.events || [];
-        startedAt = d.started_at ? +new Date(d.started_at) : 0;
-        drawCharts();
-        totalFrames = d.total_frames || 0;
-        if (!curFrame && totalFrames) openFrame(1); else drawFrames(); // poll only updates chip counts (frame 1 = newest)
-      } else { charts.textContent = 'stats error: ' + res.status; }
-    } catch (err) { charts.textContent = 'stats error: ' + err; }
-  }
-
-  // History log frames: #frames = chips 1..total (frame 1 = newest), >12 the
-  // « » buttons slide a 12-chip window; content fetched once per click, no polling.
-  const framesBox = document.getElementById('frames');
-  const frameBox = document.getElementById('framebox');
-  let totalFrames = 0, curFrame = 0, fKey = 'time', fDir = -1, fEvents = [];
-  function drawFrames() {
-    if (!totalFrames) { framesBox.innerHTML = ''; return; }
-    let lo = 1, hi = totalFrames, nav = '';
-    if (totalFrames > 12) {
-      lo = Math.floor((curFrame - 1) / 12) * 12 + 1;
-      hi = Math.min(totalFrames, lo + 11);
-      nav = '<button type=button data-f="prev">«</button>';
-    }
-    let chips = '';
-    for (let f = lo; f <= hi; f++)
-      chips += '<button type=button class="fp' + (f === curFrame ? ' on' : '') + '" data-f=' + f + '>' + f + '</button>';
-    framesBox.innerHTML = nav + chips + (totalFrames > 12 ? '<button type=button data-f="next">»</button>' : '');
-  }
-  async function openFrame(n) {
-    n = Math.max(1, Math.min(totalFrames, n));
-    curFrame = n; drawFrames();
-    try {
-      const res = await fetch('/admin/stats?frames=' + n);
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) { frameBox.textContent = 'frame error: ' + (d.error || res.status); return; }
-      totalFrames = d.total_frames || totalFrames; drawFrames();
-      fEvents = d.events || [];
-      frameBox.innerHTML = logTable(fEvents, fKey, fDir);
-    } catch (err) { frameBox.textContent = 'frame error: ' + err; }
-  }
-  framesBox.addEventListener('click', e => {
-    const b = e.target.closest('button[data-f]');
-    if (!b) return;
-    const f = b.dataset.f;
-    openFrame(f === 'prev' ? curFrame - 12 : f === 'next' ? curFrame + 12 : +f);
-  });
-  frameBox.addEventListener('click', e => {
-    const th = e.target.closest('th[data-lkey]');
-    if (!th) return;
-    if (fKey === th.dataset.lkey) { fDir = -fDir; } else { fKey = th.dataset.lkey; fDir = -1; }
-    frameBox.innerHTML = logTable(fEvents, fKey, fDir);
-  });
-  poll();
-  setInterval(poll, 5000);
-} // dashboard block end
-
-// --- Captcha chromes (kill = free RAM, start = respawn) ---
-if (CHROMES && PAGE === 'chromes') {
-  const box = document.getElementById('chromes');
-  const fmtLast = t => {
-    const d = new Date(t);
-    return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—';
-  };
-  async function post(body) {
-    const res = await fetch('/admin/chromes', {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({error: res.status}));
-      throw new Error(err.error);
-    }
-  }
-  async function doMode(btn) {
-    btn.disabled = true;
-    try {
-      await post({index: +btn.dataset.index, mode: btn.dataset.mode});
-      flash(btn.dataset.mode === 'kill' ? 'killed chrome ' + btn.dataset.index + ' (RAM freed)'
-                                       : 'started chrome ' + btn.dataset.index);
-      drawChromes();
-    } catch (err) {
-      flash('error: ' + err.message);
-      btn.disabled = false;
-    }
-  }
-  async function drawChromes() {
-    try {
-      const res = await fetch('/admin/chromes');
-      if (!res.ok) { box.textContent = 'chromes error: ' + res.status; return; }
-      const list = (await res.json()).chromes || [];
-      box.innerHTML = (list.length
-        ? list.map(c =>
-            '<div class=row data-id="chrome' + c.index + '">' +
-              '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
-              (c.busy && !c.killed ? '<span class="badge warn">busy</span>' : '') +
-              (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">killed</span>'
-                        : '<span class="badge ok">running</span>') +
-              (c.warmed && !c.killed ? '<span class="badge ok">warm</span>' : '') +
-              '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
-                c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
-              '<button type=button data-index="' + c.index + '" data-mode="' +
-                (c.killed ? 'start' : 'kill') + '">' +
-                (c.killed ? 'start' : 'kill') + '</button>' +
-            '</div>').join('')
-        : '<div class=row><span class=id>no chromes</span>') +
-        (list.length ? '<div class=bar style="margin-top:.6rem">' +
-          '<button type=button data-mode-all=kill>kill all</button>' +
-          '<button type=button data-mode-all=start>start all</button></div>' : '');
-    } catch (err) {
-      box.textContent = 'chromes error: ' + err;
-    }
-  }
-  box.addEventListener('click', async e => {
-    const all = e.target.closest('button[data-mode-all]');
-    if (all) {
-      all.disabled = true;
-      try {
-        await post({mode: all.dataset.modeAll, all: true});
-        flash(all.dataset.modeAll === 'kill' ? 'killed all chromes (RAM freed)'
-                                            : 'started all chromes');
-        drawChromes();
-      } catch (err) {
-        flash('error: ' + err.message);
-        all.disabled = false;
-      }
-      return;
-    }
-    const btn = e.target.closest('button[data-mode]');
-    if (btn) doMode(btn);
-  });
-  drawChromes();
-  setInterval(drawChromes, 5000);
-}
-</script>`

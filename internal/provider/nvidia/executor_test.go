@@ -77,6 +77,58 @@ func leaseTestRequest() (clipexec.Request, clipexec.Options) {
 	}, clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 }
 
+func TestExecuteStreamRecordsUpstreamFailure(t *testing.T) {
+	req, opts := leaseTestRequest()
+	counts := func() (uint64, uint64) {
+		for _, row := range GlobalStats.Snapshot() {
+			if row.Model == req.Model {
+				return row.Requests, row.Errors
+			}
+		}
+		return 0, 0
+	}
+	beforeReq, beforeErr := counts()
+	e := NewExecutor(Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}})
+	if _, err := e.ExecuteStream(t.Context(), nil, req, opts); err == nil {
+		t.Fatal("expected upstream timeout")
+	}
+	afterReq, afterErr := counts()
+	if afterReq != beforeReq+1 || afterErr != beforeErr+1 {
+		t.Fatalf("request/error deltas=%d/%d, want 1/1", afterReq-beforeReq, afterErr-beforeErr)
+	}
+}
+
+func TestExecuteStreamRecordsCancellation(t *testing.T) {
+	req, opts := leaseTestRequest()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	before := GlobalStats.Snapshot()
+	e := NewExecutor(Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		cancel()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}})
+	stream, err := e.ExecuteStream(ctx, nil, req, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream.Chunks {
+	}
+	var beforeErr uint64
+	for _, row := range before {
+		if row.Model == req.Model {
+			beforeErr = row.Errors
+		}
+	}
+	for _, row := range GlobalStats.Snapshot() {
+		if row.Model == req.Model && row.Errors == beforeErr+1 {
+			return
+		}
+	}
+	t.Fatal("canceled stream was not counted as an error")
+}
+
 func requireReturnedPoolToken(t *testing.T, pool *captcha.Pool, extracts *atomic.Int32) {
 	t.Helper()
 

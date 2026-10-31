@@ -162,8 +162,10 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	upResp, release, err := e.doPredict(ctx, info, body, opts)
 	if err != nil {
+		GlobalStats.Observe(modelFrom(body), 0, 0, time.Since(start), 0, true, true)
 		return nil, err
 	}
 
@@ -173,7 +175,6 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 		defer release()
 		defer upResp.Body.Close()
 
-		start := time.Now()
 		statModel := modelFrom(body)
 		var inTok, outTok uint64
 		var sawErr bool
@@ -223,7 +224,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 		if !firstOut.IsZero() {
 			ttfb = firstOut.Sub(start)
 		}
-		GlobalStats.Observe(statModel, inTok, outTok, time.Since(start), ttfb, true, sawErr)
+		GlobalStats.Observe(statModel, inTok, outTok, time.Since(start), ttfb, true, sawErr || ctx.Err() != nil)
 	}()
 
 	return &clipexec.StreamResult{Headers: upResp.Header.Clone(), Chunks: out}, nil
@@ -307,6 +308,26 @@ func forceStreamFlag(body []byte, stream bool) ([]byte, error) {
 }
 
 func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []byte, opts clipexec.Options) (*http.Response, func(), error) {
+	// GLM's Playground slugs are hyphenated; NIM requires the dotted API model name.
+	if nimModel, ok := map[string]string{
+		"glm-5-3-flash": "z-ai/glm-5.3-flash",
+		"glm-5-3":       "z-ai/glm-5.3",
+	}[info.Slug]; ok {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, nil, requestErr(http.StatusBadRequest, "invalid json body")
+		}
+		raw, err := json.Marshal(nimModel)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload["model"] = raw
+		upstreamBody, err := json.Marshal(payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		body = upstreamBody
+	}
 	clientToken := ""
 	if opts.Headers != nil {
 		clientToken = opts.Headers.Get("nv-captcha-token")

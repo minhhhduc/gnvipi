@@ -27,3 +27,8 @@ internal/models/playground_models.json
 
 # python
 __pycache__/
+
+# Local tooling and smoke-test artifacts
+.pi/
+.tmp-smoke/
+scripts/Microsoft/

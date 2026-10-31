@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	utls "github.com/refraction-networking/utls"
+	"github.com/tidwall/sjson"
 	"golang.org/x/net/http2"
 )
 
@@ -285,12 +286,9 @@ func copyProxyResponse(c *gin.Context, resp *http.Response, model string, start 
 	statCopyDone(model, start, tee, resp.StatusCode, streamed, copyErr)
 }
 
-// claudeDefaultModelAlias rewrites requests whose model is a built-in Claude
-// model name (e.g. "claude-sonnet-5") — sent by Claude Code helpers that ignore
-// the user's /model choice, e.g. auto-mode permission checks — to the gateway's
-// default playground model so they route instead of 502ing on unknown model.
+// claudeAutoModelAlias replaces only the virtual automode model with its target.
 // ponytail: rewrites only /v1/messages; add /v1/chat/completions if helpers ever hit it too.
-func claudeDefaultModelAlias(defaultModel string) gin.HandlerFunc {
+func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method != http.MethodPost ||
 			!strings.HasPrefix(c.Request.URL.Path, "/v1/messages") {
@@ -306,9 +304,14 @@ func claudeDefaultModelAlias(defaultModel string) gin.HandlerFunc {
 		var payload struct {
 			Model string `json:"model"`
 		}
-		if json.Unmarshal(body, &payload) == nil &&
-			strings.HasPrefix(payload.Model, "claude-") {
-			if rewritten, changed := rewriteJSONModel(body, payload.Model, defaultModel); changed {
+		if json.Unmarshal(body, &payload) == nil && payload.Model == "automode" {
+			target := p.autoModelID()
+			if p.isHidden(target) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "automode target is hidden"})
+				c.Abort()
+				return
+			}
+			if rewritten, err := sjson.SetBytes(body, "model", target); err == nil {
 				body = rewritten
 			}
 		}

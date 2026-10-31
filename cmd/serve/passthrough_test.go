@@ -37,6 +37,43 @@ func TestRewriteJSONModelIgnoresFormatting(t *testing.T) {
 	}
 }
 
+func TestClaudeAutoModelAliasTracksSelectedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	p := &modelPrefs{}
+	engine := gin.New()
+	engine.Use(claudeAutoModelAlias(p))
+	engine.POST("/v1/messages", func(c *gin.Context) {
+		body, _ := io.ReadAll(c.Request.Body)
+		c.Data(http.StatusOK, "application/json", body)
+	})
+	request := func(model string) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"`+model+`"}`)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	if got := request("automode"); got != `{"model":"nvidia/nemotron-3.5-lightning-30b-a3b"}` {
+		t.Fatalf("default automode=%s", got)
+	}
+	if err := p.setAutoModel("z-ai/glm-5.2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"automode"} {
+		if got := request(model); got != `{"model":"z-ai/glm-5.2"}` {
+			t.Fatalf("%s routed to %s", model, got)
+		}
+	}
+	if got := request("moonshotai/kimi-k3"); got != `{"model":"moonshotai/kimi-k3"}` {
+		t.Fatalf("ordinary model changed: %s", got)
+	}
+	if got := request("claude-sonnet-5"); got != `{"model":"claude-sonnet-5"}` {
+		t.Fatalf("ordinary Claude model changed: %s", got)
+	}
+}
+
 func TestMessagesOnlyPassthroughStopsChain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldClient := messagesOnlyClient

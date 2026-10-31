@@ -33,6 +33,19 @@ func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
 	}
 }
 
+func TestAutoModelPersistsWithModelPrefs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	p := &modelPrefs{path: path}
+	if err := p.setAutoModel("z-ai/glm-5.2"); err != nil {
+		t.Fatal(err)
+	}
+	var loaded modelPrefs
+	loaded.load(path)
+	if got := loaded.autoModelID(); got != "z-ai/glm-5.2" {
+		t.Fatalf("loaded automode target = %q", got)
+	}
+}
+
 func TestParseListenAddr(t *testing.T) {
 	cases := []struct {
 		in       string

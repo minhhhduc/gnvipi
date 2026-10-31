@@ -172,6 +172,8 @@ func main() {
 	// models plus custom endpoints.
 	getModels := func() []*cliproxy.ModelInfo {
 		out := make([]*cliproxy.ModelInfo, 0, len(models)+4)
+		out = append(out, &cliproxy.ModelInfo{ID: "automode", Object: "model", OwnedBy: "gateway", Type: "virtual"})
+		out = append(out, &cliproxy.ModelInfo{ID: "cycle", Object: "model", OwnedBy: "gateway", Type: "virtual"})
 		for _, m := range getNvidiaModels() {
 			out = append(out, m)
 		}
@@ -232,13 +234,14 @@ func main() {
 				sanitizeClaudeToolResults(),
 				customOpenAIResponsesPassthrough(prefs),
 				customOpenAICompatPassthrough(prefs),
-				claudeDefaultModelAlias(nvidia.DefaultAliasModel()),
 				messagesOnlyPassthrough(prefs),
 				requestLogger(prefs),
 			),
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// Resolve automode before cycleRouter inspects the model field.
+				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
 					adminRoutes(c, models, func() []gatewayModel { return nil })
 				}
@@ -247,6 +250,11 @@ func main() {
 				engine.GET("/admin/chromes", adminHandler)
 				engine.POST("/admin/chromes", adminHandler)
 				engine.POST("/admin/models", adminHandler)
+				engine.POST("/admin/automode", adminHandler)
+				engine.POST("/admin/cycle", adminHandler)
+				engine.POST("/admin/search", adminHandler)
+				engine.POST("/mcp", searchMCP)
+				engine.GET("/mcp", searchMCP)
 				engine.POST("/admin/providers", adminHandler)
 				engine.POST("/admin/delete", adminHandler)
 				engine.POST("/admin/retry-failed", adminHandler)
@@ -566,7 +574,7 @@ func requestLogger(p *modelPrefs) gin.HandlerFunc {
 
 		if record {
 			nvidia.GlobalStats.RecordResponse(model, tee.buf.Bytes(), time.Since(start),
-				isEventStream(c.Writer.Header().Get("Content-Type")), c.Writer.Status() >= 400)
+				isEventStream(c.Writer.Header().Get("Content-Type")), c.Writer.Status() >= 400 || c.Request.Context().Err() != nil)
 		}
 
 		log.Printf("%d | %s | %s | %s %q model=%q",
