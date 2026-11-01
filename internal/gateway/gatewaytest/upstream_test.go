@@ -281,6 +281,20 @@ func TestSplitEvents(t *testing.T) {
 			}
 		}
 	})
+	t.Run("duplicate events before an unterminated tail", func(t *testing.T) {
+		// The tail check is by index, not value: an earlier event whose
+		// text equals the unterminated tail must still be terminated.
+		got := SplitEvents("event: ping\ndata: 1\n\nevent: ping\ndata: 2")
+		want := []string{"event: ping\ndata: 1\n\n", "event: ping\ndata: 2"}
+		if len(got) != len(want) {
+			t.Fatalf("SplitEvents() = %#v, want %#v", got, want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("event %d = %#v, want %#v", i, got[i], want[i])
+			}
+		}
+	})
 	t.Run("empty stream", func(t *testing.T) {
 		if got := SplitEvents(""); len(got) != 0 {
 			t.Errorf("SplitEvents(\"\") = %#v, want no events", got)

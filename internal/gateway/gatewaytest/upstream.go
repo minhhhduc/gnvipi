@@ -268,11 +268,14 @@ func SplitEvents(raw string) []string {
 	parts := strings.Split(raw, "\n\n")
 	var out []string
 	last := len(parts) - 1
-	for _, p := range parts {
+	for i, p := range parts {
 		if p == "" {
 			continue
 		}
-		if p == parts[last] && !strings.HasSuffix(raw, "\n\n") {
+		// The last element is the unterminated tail when the stream lacks
+		// a final blank line; compared by index, not value, so an earlier
+		// event with identical text still gets its terminator.
+		if i == last && !strings.HasSuffix(raw, "\n\n") {
 			out = append(out, p)
 		} else {
 			out = append(out, p+"\n\n")
