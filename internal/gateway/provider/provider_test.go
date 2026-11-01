@@ -121,7 +121,6 @@ func TestValidateIsDeterministic(t *testing.T) {
 	p.ID = ""
 	p.Name = ""
 	p.BaseURL = "nope"
-	p.Models = nil
 	p.Auth = Auth{Scheme: "basic"}
 	p.Headers = map[string]string{"Zz": "1", "Aa": "2", "Mm": "3", "Connection": "x"}
 	p.Models = []ModelMapping{{Alias: ""}, {Alias: ""}}
@@ -137,6 +136,22 @@ func TestValidateIsDeterministic(t *testing.T) {
 	// Sorted header names keep the message stable regardless of map order.
 	if !strings.Contains(joined, "first:") {
 		t.Fatalf("message = %q", joined)
+	}
+}
+
+func TestValidateReportsDuplicateHeadersBeforeValueCheck(t *testing.T) {
+	// One spelling carries an invalid value, so whichever value the randomized
+	// map iteration keeps, the duplicate must be what gets reported.
+	for i := 0; i < 100; i++ {
+		p := validProvider()
+		p.Headers = map[string]string{"x-foo": "ok", "X-Foo": "bad\nval"}
+		err := p.Validate()
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if got := err.Error(); !strings.Contains(got, "set more than once under different spellings") {
+			t.Fatalf("iteration %d: error = %q", i, got)
+		}
 	}
 }
 
@@ -209,6 +224,25 @@ func TestFromLegacyKeepsDifferentEndpointsApart(t *testing.T) {
 	}
 	if len(out) != 2 {
 		t.Fatalf("providers = %d, want 2", len(out))
+	}
+	if out[0].ID != "vendor" || out[1].ID != "vendor-2" {
+		t.Fatalf("ids = %q, %q, want vendor, vendor-2", out[0].ID, out[1].ID)
+	}
+}
+
+func TestFromLegacyKeepsDifferentProtocolsApart(t *testing.T) {
+	out, err := FromLegacy([]LegacyProvider{
+		{Name: "vendor", BaseURL: "https://up.invalid/v1", APIKey: "k", Model: "m1"},
+		{Name: "vendor", BaseURL: "https://up.invalid/v1", APIKey: "k", Model: "m2", ResponsesOnly: true},
+	})
+	if err != nil {
+		t.Fatalf("FromLegacy: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("providers = %d, want 2", len(out))
+	}
+	if out[0].Protocol != ir.ProtocolOpenAIChat || out[1].Protocol != ir.ProtocolOpenAIResponses {
+		t.Fatalf("protocols = %q, %q, want openai-chat and openai-responses", out[0].Protocol, out[1].Protocol)
 	}
 	if out[0].ID != "vendor" || out[1].ID != "vendor-2" {
 		t.Fatalf("ids = %q, %q, want vendor, vendor-2", out[0].ID, out[1].ID)

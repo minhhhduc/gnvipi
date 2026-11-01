@@ -205,10 +205,10 @@ func (p *Provider) validateHeaders(add func(field, problem string)) {
 			add(field, "invalid header name")
 		case hopByHopHeaders[name]:
 			add(field, "hop-by-hop headers belong to the transport, not to a provider")
-		case !httpguts.ValidHeaderFieldValue(canonical[name]):
-			add(field, "invalid header value")
 		case dupes[name]:
 			add(field, "set more than once under different spellings")
+		case !httpguts.ValidHeaderFieldValue(canonical[name]):
+			add(field, "invalid header value")
 		}
 	}
 }

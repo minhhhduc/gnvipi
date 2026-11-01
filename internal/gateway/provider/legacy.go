@@ -21,15 +21,19 @@ type LegacyProvider struct {
 }
 
 // FromLegacy converts the endpoints saved by the legacy admin page. Entries
-// that share a name, base URL and API key become one provider with one mapping
-// per model; entries that share only a name stay separate and get a numeric ID
-// suffix. Providers are returned in the order their first entry appeared.
+// that share a name, base URL, API key and protocol become one provider with
+// one mapping per model; entries that differ in any of those, including only in
+// protocol, stay separate and get a numeric ID suffix. Providers are returned
+// in the order their first entry appeared.
 //
 // Every converted provider is validated, and the conversion returns a
 // *ValidationError if any of them is invalid, including the case of an entry
 // with both MessagesOnly and ResponsesOnly set.
 func FromLegacy(list []LegacyProvider) ([]Provider, error) {
-	type identity struct{ name, baseURL, apiKey string }
+	type identity struct {
+		name, baseURL, apiKey string
+		protocol              ir.Protocol
+	}
 
 	out := make([]Provider, 0, len(list))
 	merged := make(map[identity]int, len(list))
@@ -48,7 +52,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			continue
 		}
 		mapping := ModelMapping{Alias: legacyAlias(e), UpstreamModel: e.Model}
-		key := identity{e.Name, e.BaseURL, e.APIKey}
+		key := identity{e.Name, e.BaseURL, e.APIKey, protocol}
 		if at, ok := merged[key]; ok {
 			out[at].Models = append(out[at].Models, mapping)
 			continue
