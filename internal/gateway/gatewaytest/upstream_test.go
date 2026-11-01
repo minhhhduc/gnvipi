@@ -1,6 +1,7 @@
 package gatewaytest
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,20 +19,26 @@ type reply struct {
 }
 
 // post sends one request to the fake upstream and returns the response
-// with its fully read body. Timeout bounds the call so stalled steps can
-// be exercised without hanging the suite.
-func post(t *testing.T, baseURL, path, body string, timeout time.Duration) reply {
+// with its fully read body. The call is bounded by a context timeout so
+// stalled steps can be exercised without hanging the suite.
+func post(t *testing.T, baseURL, path, body string) reply {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, baseURL+path, strings.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close %s body: %v", path, err)
+		}
+	}()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read %s body: %v", path, err)
@@ -43,7 +50,7 @@ func TestNonStreamChat(t *testing.T) {
 	u := New(t)
 	u.Script(RouteChat, Step{Body: Load(t, "sample-chat.json")})
 
-	r := post(t, u.URL(), RouteChat, `{"model":"gpt-4o"}`, 5*time.Second)
+	r := post(t, u.URL(), RouteChat, `{"model":"gpt-4o"}`)
 	if r.status != http.StatusOK {
 		t.Errorf("status = %d, want 200", r.status)
 	}
@@ -70,7 +77,7 @@ func TestRecorderSeesAuthHeader(t *testing.T) {
 	u := New(t)
 	u.Script(RouteMessages, Step{Body: `{}`})
 
-	req, err := http.NewRequest(http.MethodPost, u.URL()+RouteMessages, strings.NewReader(`{}`))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+RouteMessages, strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -79,7 +86,9 @@ func TestRecorderSeesAuthHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	_ = resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("close response body: %v", err)
+	}
 
 	auths := u.Authorizations()
 	if len(auths) != 1 || auths[0] != "Bearer sk-test-key" {
@@ -94,7 +103,7 @@ func TestAnthropicStreamFromFixture(t *testing.T) {
 	u := New(t)
 	u.Script(RouteMessages, Step{Events: SplitEvents(Load(t, "sample-events.sse")), EventDelay: time.Millisecond})
 
-	r := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
+	r := post(t, u.URL(), RouteMessages, `{}`)
 	if r.status != http.StatusOK {
 		t.Errorf("status = %d, want 200", r.status)
 	}
@@ -120,10 +129,10 @@ func TestResponsesStreamAndModels(t *testing.T) {
 	})
 	u.Script(RouteModels, Step{Body: `{"data":[{"id":"gpt-4o"}]}`})
 
-	if r := post(t, u.URL(), RouteResponses, `{"model":"gpt-4o"}`, 5*time.Second); !strings.Contains(r.body, "response.completed") {
+	if r := post(t, u.URL(), RouteResponses, `{"model":"gpt-4o"}`); !strings.Contains(r.body, "response.completed") {
 		t.Errorf("responses stream = %s, missing the terminator", r.body)
 	}
-	if r := post(t, u.URL(), RouteModels, "", 5*time.Second); !strings.Contains(r.body, "gpt-4o") {
+	if r := post(t, u.URL(), RouteModels, ""); !strings.Contains(r.body, "gpt-4o") {
 		t.Errorf("models body = %s", r.body)
 	}
 }
@@ -135,7 +144,7 @@ func TestHTTPErrorWithRetryAfter(t *testing.T) {
 		RetryAfter: "30",
 		Body:       `{"error":{"message":"quota exceeded","type":"rate_limit_error"}}`,
 	})
-	r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
+	r := post(t, u.URL(), RouteChat, `{}`)
 	if r.status != 429 {
 		t.Errorf("status = %d, want 429", r.status)
 	}
@@ -153,14 +162,14 @@ func TestMidStreamErrorEvent(t *testing.T) {
 		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"He\"}\n\n",
 		"event: error\ndata: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"provider exploded\"}\n\n",
 	}})
-	if r := post(t, u.URL(), RouteResponses, `{}`, 5*time.Second); !strings.Contains(r.body, "provider exploded") {
+	if r := post(t, u.URL(), RouteResponses, `{}`); !strings.Contains(r.body, "provider exploded") {
 		t.Errorf("stream = %s, missing the mid-stream error", r.body)
 	}
 }
 
 func TestUnscriptedRequestFailsLoudly(t *testing.T) {
 	u := New(t)
-	r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
+	r := post(t, u.URL(), RouteChat, `{}`)
 	if r.status != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 for an empty step queue", r.status)
 	}
@@ -173,14 +182,19 @@ func TestStallReadsAsClientTimeout(t *testing.T) {
 	u := New(t)
 	u.Script(RouteChat, Step{Stall: 400 * time.Millisecond, Body: `{}`})
 
-	client := &http.Client{Timeout: 50 * time.Millisecond}
-	resp, err := client.Post(u.URL()+RouteChat, "application/json", strings.NewReader(`{}`))
-	if err == nil {
-		_ = resp.Body.Close()
-		t.Fatal("stalled request with a 50 ms client timeout unexpectedly succeeded")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.URL()+RouteChat, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
 	}
-	if resp != nil {
-		t.Errorf("expected no response on timeout, got %v", resp.Status)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err == nil {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close body: %v", cerr)
+		}
+		t.Fatal("stalled request with a 50 ms client timeout unexpectedly succeeded")
 	}
 	// The request itself was still recorded: the gateway's side of a
 	// timeout is a request that left and never came back.
@@ -193,10 +207,18 @@ func TestDisconnect(t *testing.T) {
 	u := New(t)
 	u.Script(RouteChat, Step{Disconnect: true})
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(u.URL()+RouteChat, "application/json", strings.NewReader(`{}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.URL()+RouteChat, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
 	if err == nil {
-		_ = resp.Body.Close()
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close body: %v", cerr)
+		}
 		t.Error("disconnected request unexpectedly succeeded")
 	}
 }
@@ -207,14 +229,14 @@ func TestSequentialStepsConsumedInOrder(t *testing.T) {
 		Step{Status: 500, Body: `{"error":{"message":"try again"}}`},
 		Step{Body: `{"ok":true}`},
 	)
-	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 500 {
+	if r := post(t, u.URL(), RouteChat, `{}`); r.status != 500 {
 		t.Errorf("first step status = %d, want 500", r.status)
 	}
-	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 200 || r.body != `{"ok":true}` {
+	if r := post(t, u.URL(), RouteChat, `{}`); r.status != 200 || r.body != `{"ok":true}` {
 		t.Errorf("second step = %d %s, want 200 {\"ok\":true}", r.status, r.body)
 	}
 	// Third request drains the queue: the failure is named, not silent.
-	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 500 || !strings.Contains(r.body, "no scripted step") {
+	if r := post(t, u.URL(), RouteChat, `{}`); r.status != 500 || !strings.Contains(r.body, "no scripted step") {
 		t.Errorf("drained queue = %d %s, want a named failure", r.status, r.body)
 	}
 }
@@ -222,7 +244,7 @@ func TestSequentialStepsConsumedInOrder(t *testing.T) {
 func TestCustomResponseHeaders(t *testing.T) {
 	u := New(t)
 	u.Script(RouteMessages, Step{Headers: map[string]string{"X-Provider": "acme"}, Body: `{}`})
-	r := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
+	r := post(t, u.URL(), RouteMessages, `{}`)
 	if got := r.header.Get("X-Provider"); got != "acme" {
 		t.Errorf("X-Provider = %q, want acme", got)
 	}

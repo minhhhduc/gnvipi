@@ -32,6 +32,11 @@ import (
 	"time"
 )
 
+// noStepBody is the JSON a request receives when its route's step queue is
+// empty. The message is the contract: tests assert "no scripted step" so a
+// miscounted queue says what ran dry instead of hanging on a read.
+const noStepBody = `{"error":{"message":"gatewaytest: no scripted step for this request","type":"gatewaytest_error"}}`
+
 // Routes the emulators serve.
 const (
 	RouteChat      = "/v1/chat/completions"
@@ -144,14 +149,21 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = fmt.Fprint(w, `{"error":{"message":"gatewaytest: no scripted step for this request"}}`)
+		if _, err := fmt.Fprint(w, noStepBody); err != nil {
+			return
+		}
 		return
 	}
 
 	if step.Disconnect {
 		if hijacker, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hijacker.Hijack(); err == nil {
-				_ = conn.Close()
+				// The error is uninteresting — dropping the client is the
+				// step's whole purpose — but the close is still checked so
+				// a failing one is not silently swallowed.
+				if err := conn.Close(); err != nil {
+					return
+				}
 				return
 			}
 		}
@@ -185,7 +197,9 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !strings.HasSuffix(ev, "\n\n") {
-				_, _ = io.WriteString(w, "\n\n")
+				if _, err := io.WriteString(w, "\n\n"); err != nil {
+					return
+				}
 			}
 			if flusher != nil {
 				flusher.Flush()
@@ -201,7 +215,9 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Type", "application/json")
 	}
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, step.Body)
+	if _, err := io.WriteString(w, step.Body); err != nil {
+		return
+	}
 }
 
 func (u *Upstream) record(r *http.Request, body []byte) {
