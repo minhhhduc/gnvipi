@@ -175,7 +175,7 @@ func TestNewTextResponse(t *testing.T) {
 
 func exampleStream() []StreamEvent {
 	return []StreamEvent{
-		NewMessageStart(RoleAssistant, "glm-5.2", Usage{InputTokens: 5}),
+		NewMessageStart("msg_1", RoleAssistant, "glm-5.2", Usage{InputTokens: 5}),
 		NewBlockStart(0, NewTextBlock("")),
 		NewTextDelta(0, "hel"),
 		NewTextDelta(0, "lo"),
@@ -197,21 +197,21 @@ func TestValidateEventOrder(t *testing.T) {
 	}{
 		{"canonical tool-call stream", exampleStream(), false},
 		{"text-only minimal", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewMessageStop(StopEndTurn),
 		}, false},
 		{"no blocks, no usage", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewBlockStart(0, NewTextBlock("")),
 			NewBlockStop(0),
 			NewMessageStop(StopMaxTokens),
 		}, false},
 		{"error terminal", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewErrorEvent("rate_limit", "slow down"),
 		}, false},
 		{"usage before message_stop without blocks", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewUsageUpdate(Usage{}),
 			NewMessageStop(StopEndTurn),
 		}, false},
@@ -219,63 +219,74 @@ func TestValidateEventOrder(t *testing.T) {
 		{"missing message_start", []StreamEvent{NewMessageStop(StopEndTurn)}, true},
 		{"message_start not first", []StreamEvent{
 			NewBlockStart(0, NewTextBlock("")),
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"duplicate message_start", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"delta before block_start", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewTextDelta(0, "x"),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"block_stop for unopened block", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewBlockStop(0),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"duplicate block_start", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewBlockStart(0, NewTextBlock("")),
 			NewBlockStart(0, NewTextBlock("")),
 			NewBlockStop(0),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"delta for closed block", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewBlockStart(0, NewTextBlock("")),
 			NewBlockStop(0),
 			NewTextDelta(0, "x"),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"duplicate usage_update", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewUsageUpdate(Usage{}),
 			NewUsageUpdate(Usage{}),
 			NewMessageStop(StopEndTurn),
 		}, true},
 		{"message_stop without reason", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			{Type: EventMessageStop},
 		}, true},
 		{"event after terminal", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewMessageStop(StopEndTurn),
 			NewTextDelta(0, "x"),
 		}, true},
 		{"error then stop", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewErrorEvent("internal", "boom"),
 			NewMessageStop(StopError),
 		}, true},
 		{"missing terminal", []StreamEvent{
-			NewMessageStart(RoleAssistant, "m", Usage{}),
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
 			NewBlockStart(0, NewTextBlock("")),
 			NewBlockStop(0),
 		}, true},
+		{"message_stop with a block still open", []StreamEvent{
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
+			NewBlockStart(0, NewTextBlock("")),
+			NewTextDelta(0, "x"),
+			NewMessageStop(StopEndTurn),
+		}, true},
+		{"error terminal with a block still open", []StreamEvent{
+			NewMessageStart("msg_1", RoleAssistant, "m", Usage{}),
+			NewBlockStart(0, NewTextBlock("")),
+			NewErrorEvent("internal", "boom"),
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -305,6 +316,9 @@ func TestStreamEventJSON(t *testing.T) {
 	}
 	if len(got) != len(events) {
 		t.Fatalf("round trip lost events: %d vs %d", len(got), len(events))
+	}
+	if got[0].Message == nil || got[0].Message.ID != "msg_1" || got[0].Message.Model != "glm-5.2" {
+		t.Errorf("message_start does not carry the message ID and model: %+v", got[0])
 	}
 	if got[1].Block.Type != BlockText || got[5].Block.Type != BlockToolUse {
 		t.Errorf("block prototypes not preserved: %+v %+v", got[1], got[5])

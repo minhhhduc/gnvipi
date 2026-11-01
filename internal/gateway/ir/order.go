@@ -8,7 +8,8 @@ import "fmt"
 //   - exactly one message_start, and it comes first;
 //   - each block index is opened by block_start at most once, and its
 //     block_delta and block_stop events come after that block_start and
-//     before the terminal event;
+//     before the terminal event; every opened block must be closed by
+//     block_stop before message_stop;
 //   - at most one usage_update, and it comes after message_start;
 //   - exactly one terminal event (message_stop or error) and nothing after
 //     it; message_stop must carry a non-empty stop reason.
@@ -80,6 +81,11 @@ func ValidateEventOrder(events []StreamEvent) error {
 			}
 			if ev.StopReason == "" {
 				return fmt.Errorf("ir: message_stop at index %d has no stop reason", i)
+			}
+			for idx := range openBlocks {
+				if openBlocks[idx] {
+					return fmt.Errorf("ir: message_stop at index %d closes the stream with block %d still open", i, idx)
+				}
 			}
 			terminated = true
 		case EventError:

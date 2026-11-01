@@ -146,8 +146,14 @@ func NewReasoningBlock(content, signature string) Block {
 // Message is one conversational turn. Content may hold blocks of any type;
 // an assistant turn answering a tool call holds tool_result blocks, and an
 // assistant turn issuing tool calls holds tool_use blocks.
+//
+// ID and Model only name a response message: they are set by NewMessageStart
+// on the message a stream opens, and inbound encoders emit them on
+// message_start / response.created. Request messages leave them empty.
 type Message struct {
+	ID      string  `json:"id,omitempty"`
 	Role    Role    `json:"role"`
+	Model   string  `json:"model,omitempty"`
 	Content []Block `json:"content,omitempty"`
 }
 
