@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Event is one dispatched SSE event. Type is the "event:" field value
@@ -32,22 +33,38 @@ func (e Event) IsDone() bool {
 // Next honors the caller's context: when ctx is done while an event is
 // pending, Next returns ctx.Err() promptly. Canceling the context does
 // not stop the internal pump goroutine — it keeps reading the underlying
-// stream until that stream ends or errors. Closing the stream (for an
-// HTTP response, the body) is the supported way to release it.
+// stream until that stream ends or errors. Once buffered events are
+// waiting and the consumer has walked away, the pump would block forever
+// on its send, so Close is the supported way to release it: call it
+// (usually deferred) when the reader is abandoned, and the pump exits
+// without reading any more of the stream.
 type Reader struct {
 	events chan Event
 	term   chan error // buffered 1: the pump's terminal error, if any
-	err    error      // sticky, set from Next once the stream terminates
+	done   chan struct{}
+	once   sync.Once
+	err    error // sticky, set from Next once the stream terminates
 }
 
-// NewReader returns a Reader reading events from r.
+// NewReader returns a Reader reading events from r. The returned Reader
+// must be Closed when it is no longer consumed, to release the pump
+// goroutine; closing the underlying reader alone does not, because the
+// pump may be blocked sending an event the consumer never asked for.
 func NewReader(r io.Reader) *Reader {
 	rd := &Reader{
 		events: make(chan Event),
 		term:   make(chan error, 1),
+		done:   make(chan struct{}),
 	}
 	go rd.pump(r)
 	return rd
+}
+
+// Close releases the pump goroutine. It is safe to call any number of
+// times. After Close, Next reports the stream as ended: io.EOF when the
+// pump had not failed, or the sticky terminal error when it had.
+func (rd *Reader) Close() {
+	rd.once.Do(func() { close(rd.done) })
 }
 
 func (rd *Reader) pump(r io.Reader) {
@@ -56,10 +73,17 @@ func (rd *Reader) pump(r io.Reader) {
 	for {
 		ev, err := readEvent(br)
 		if err != nil {
-			rd.term <- err
+			select {
+			case rd.term <- err:
+			case <-rd.done:
+			}
 			return
 		}
-		rd.events <- ev
+		select {
+		case rd.events <- ev:
+		case <-rd.done:
+			return
+		}
 	}
 }
 

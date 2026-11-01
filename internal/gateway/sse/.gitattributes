@@ -1,0 +1,4 @@
+# The package's sources must keep LF in the working tree: gofmt flags CRLF
+# files, and the byte-exact stream tests assume "\n". Windows checkouts
+# would otherwise rewrite them (core.autocrlf).
+* text=auto eol=lf

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // chunkReader releases its data in fixed-size chunks to exercise streams
@@ -331,6 +332,81 @@ func TestReaderEOFBeforeFirstEvent(t *testing.T) {
 	rd := NewReader(strings.NewReader(""))
 	if _, err := rd.Next(context.Background()); !errors.Is(err, io.EOF) {
 		t.Fatalf("empty stream: Next = %v, want io.EOF", err)
+	}
+}
+
+func TestWriterNormalizesCRData(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w, err := NewWriter(rec)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	// CRLF and lone-CR endings inside Data must each split into their own
+	// "data:" line rather than carrying a stray \r or staying one line.
+	if err := w.WriteData("a\r\nb\rc"); err != nil {
+		t.Fatalf("WriteData: %v", err)
+	}
+	want := "data: a\ndata: b\ndata: c\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	// And the reader agrees: any \r is a line terminator per the SSE
+	// grammar, so the round trip yields one event with joined lines.
+	got := drain(t, strings.NewReader("data: a\r\ndata: b\rdata: c\r\n\r\n"))
+	if len(got) != 1 || got[0].Data != "a\nb\nc" {
+		t.Errorf("round trip = %+v, want one event with joined lines", got)
+	}
+}
+
+func TestReaderCloseReleasesPump(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() {
+		if err := pr.Close(); err != nil {
+			t.Errorf("close pipe reader: %v", err)
+		}
+		if err := pw.Close(); err != nil {
+			t.Errorf("close pipe writer: %v", err)
+		}
+	})
+	rd := NewReader(pr)
+	t.Cleanup(func() { rd.Close() })
+
+	go func() {
+		if _, err := fmt.Fprint(pw, "event: a\ndata: 1\n\nevent: b\ndata: 2\n\n"); err != nil {
+			t.Errorf("write to pipe: %v", err)
+		}
+	}()
+
+	// Take only the first of the two events: the pump parses both from one
+	// read and then blocks sending the second, which no one will ask for.
+	if _, err := rd.Next(context.Background()); err != nil {
+		t.Fatalf("first Next: %v", err)
+	}
+	rd.Close()
+
+	// The released pump closes the events channel, so a later Next sees
+	// the stream as ended instead of hanging on an event never sent.
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := rd.Next(context.Background())
+		nextDone <- err
+	}()
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("Next after Close = %v, want io.EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next after Close hung: Close did not release the pump")
+	}
+}
+
+func TestReaderCloseIsIdempotent(t *testing.T) {
+	rd := NewReader(strings.NewReader(""))
+	rd.Close()
+	rd.Close()
+	if _, err := rd.Next(context.Background()); !errors.Is(err, io.EOF) {
+		t.Errorf("Next after double Close = %v, want io.EOF", err)
 	}
 }
 

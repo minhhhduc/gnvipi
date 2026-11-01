@@ -38,7 +38,12 @@ func (w *Writer) WriteEvent(e Event) error {
 	if e.Type != "" {
 		writeField(&b, "event", e.Type)
 	}
-	for _, line := range strings.Split(e.Data, "\n") {
+	// Normalize CR line endings before splitting: splitting on "\n"
+	// alone would leave a trailing \r on CRLF lines and never split
+	// lone-CR lines at all, emitting one malformed "data:" line.
+	data := strings.ReplaceAll(e.Data, "\r\n", "\n")
+	data = strings.ReplaceAll(data, "\r", "\n")
+	for _, line := range strings.Split(data, "\n") {
 		writeField(&b, "data", line)
 	}
 	if e.ID != "" {
