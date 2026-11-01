@@ -9,10 +9,18 @@ import (
 	"time"
 )
 
+// reply is one response from the fake upstream, body fully read and
+// closed, so no *http.Response escapes for the caller to leak.
+type reply struct {
+	status int
+	header http.Header
+	body   string
+}
+
 // post sends one request to the fake upstream and returns the response
 // with its fully read body. Timeout bounds the call so stalled steps can
 // be exercised without hanging the suite.
-func post(t *testing.T, baseURL, path, body string, timeout time.Duration) (*http.Response, string) {
+func post(t *testing.T, baseURL, path, body string, timeout time.Duration) reply {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, baseURL+path, strings.NewReader(body))
 	if err != nil {
@@ -23,27 +31,27 @@ func post(t *testing.T, baseURL, path, body string, timeout time.Duration) (*htt
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read %s body: %v", path, err)
 	}
-	return resp, string(b)
+	return reply{status: resp.StatusCode, header: resp.Header, body: string(b)}
 }
 
 func TestNonStreamChat(t *testing.T) {
 	u := New(t)
 	u.Script(RouteChat, Step{Body: Load(t, "sample-chat.json")})
 
-	resp, body := post(t, u.URL(), RouteChat, `{"model":"gpt-4o"}`, 5*time.Second)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
+	r := post(t, u.URL(), RouteChat, `{"model":"gpt-4o"}`, 5*time.Second)
+	if r.status != http.StatusOK {
+		t.Errorf("status = %d, want 200", r.status)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+	if ct := r.header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want JSON", ct)
 	}
-	if !strings.Contains(body, "Hello from the fake upstream") {
-		t.Errorf("body = %s, missing the canned content", body)
+	if !strings.Contains(r.body, "Hello from the fake upstream") {
+		t.Errorf("body = %s, missing the canned content", r.body)
 	}
 
 	reqs := u.RequestsFor(RouteChat)
@@ -67,9 +75,11 @@ func TestRecorderSeesAuthHeader(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer sk-test-key")
-	if _, err := (&http.Client{Timeout: 5 * time.Second}).Do(req); err != nil {
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
+	_ = resp.Body.Close()
 
 	auths := u.Authorizations()
 	if len(auths) != 1 || auths[0] != "Bearer sk-test-key" {
@@ -84,19 +94,19 @@ func TestAnthropicStreamFromFixture(t *testing.T) {
 	u := New(t)
 	u.Script(RouteMessages, Step{Events: SplitEvents(Load(t, "sample-events.sse")), EventDelay: time.Millisecond})
 
-	resp, body := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
+	r := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
+	if r.status != http.StatusOK {
+		t.Errorf("status = %d, want 200", r.status)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+	if ct := r.header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
 	// Each written event is flushed; the read returns the whole stream.
-	if !strings.Contains(body, "message_start") || !strings.Contains(body, "text_delta") || !strings.Contains(body, "message_stop") {
-		t.Errorf("stream =\n%s\nmissing expected events", body)
+	if !strings.Contains(r.body, "message_start") || !strings.Contains(r.body, "text_delta") || !strings.Contains(r.body, "message_stop") {
+		t.Errorf("stream =\n%s\nmissing expected events", r.body)
 	}
-	if strings.Count(body, "\n\n") != 3 {
-		t.Errorf("stream has %d dispatched events, want 3", strings.Count(body, "\n\n"))
+	if strings.Count(r.body, "\n\n") != 3 {
+		t.Errorf("stream has %d dispatched events, want 3", strings.Count(r.body, "\n\n"))
 	}
 }
 
@@ -110,11 +120,11 @@ func TestResponsesStreamAndModels(t *testing.T) {
 	})
 	u.Script(RouteModels, Step{Body: `{"data":[{"id":"gpt-4o"}]}`})
 
-	if _, body := post(t, u.URL(), RouteResponses, `{"model":"gpt-4o"}`, 5*time.Second); !strings.Contains(body, "response.completed") {
-		t.Errorf("responses stream = %s, missing the terminator", body)
+	if r := post(t, u.URL(), RouteResponses, `{"model":"gpt-4o"}`, 5*time.Second); !strings.Contains(r.body, "response.completed") {
+		t.Errorf("responses stream = %s, missing the terminator", r.body)
 	}
-	if _, body := post(t, u.URL(), RouteModels, "", 5*time.Second); !strings.Contains(body, "gpt-4o") {
-		t.Errorf("models body = %s", body)
+	if r := post(t, u.URL(), RouteModels, "", 5*time.Second); !strings.Contains(r.body, "gpt-4o") {
+		t.Errorf("models body = %s", r.body)
 	}
 }
 
@@ -125,15 +135,15 @@ func TestHTTPErrorWithRetryAfter(t *testing.T) {
 		RetryAfter: "30",
 		Body:       `{"error":{"message":"quota exceeded","type":"rate_limit_error"}}`,
 	})
-	resp, body := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
-	if resp.StatusCode != 429 {
-		t.Errorf("status = %d, want 429", resp.StatusCode)
+	r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
+	if r.status != 429 {
+		t.Errorf("status = %d, want 429", r.status)
 	}
-	if got := resp.Header.Get("Retry-After"); got != "30" {
+	if got := r.header.Get("Retry-After"); got != "30" {
 		t.Errorf("Retry-After = %q, want 30", got)
 	}
-	if !strings.Contains(body, "rate_limit_error") {
-		t.Errorf("body = %s, missing the provider error", body)
+	if !strings.Contains(r.body, "rate_limit_error") {
+		t.Errorf("body = %s, missing the provider error", r.body)
 	}
 }
 
@@ -143,19 +153,19 @@ func TestMidStreamErrorEvent(t *testing.T) {
 		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"He\"}\n\n",
 		"event: error\ndata: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"provider exploded\"}\n\n",
 	}})
-	if _, body := post(t, u.URL(), RouteResponses, `{}`, 5*time.Second); !strings.Contains(body, "provider exploded") {
-		t.Errorf("stream = %s, missing the mid-stream error", body)
+	if r := post(t, u.URL(), RouteResponses, `{}`, 5*time.Second); !strings.Contains(r.body, "provider exploded") {
+		t.Errorf("stream = %s, missing the mid-stream error", r.body)
 	}
 }
 
 func TestUnscriptedRequestFailsLoudly(t *testing.T) {
 	u := New(t)
-	resp, body := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500 for an empty step queue", resp.StatusCode)
+	r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second)
+	if r.status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 for an empty step queue", r.status)
 	}
-	if !strings.Contains(body, "no scripted step") {
-		t.Errorf("body = %s, wants a named failure", body)
+	if !strings.Contains(r.body, "no scripted step") {
+		t.Errorf("body = %s, wants a named failure", r.body)
 	}
 }
 
@@ -166,7 +176,7 @@ func TestStallReadsAsClientTimeout(t *testing.T) {
 	client := &http.Client{Timeout: 50 * time.Millisecond}
 	resp, err := client.Post(u.URL()+RouteChat, "application/json", strings.NewReader(`{}`))
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatal("stalled request with a 50 ms client timeout unexpectedly succeeded")
 	}
 	if resp != nil {
@@ -184,7 +194,9 @@ func TestDisconnect(t *testing.T) {
 	u.Script(RouteChat, Step{Disconnect: true})
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	if _, err := client.Post(u.URL()+RouteChat, "application/json", strings.NewReader(`{}`)); err == nil {
+	resp, err := client.Post(u.URL()+RouteChat, "application/json", strings.NewReader(`{}`))
+	if err == nil {
+		_ = resp.Body.Close()
 		t.Error("disconnected request unexpectedly succeeded")
 	}
 }
@@ -195,23 +207,23 @@ func TestSequentialStepsConsumedInOrder(t *testing.T) {
 		Step{Status: 500, Body: `{"error":{"message":"try again"}}`},
 		Step{Body: `{"ok":true}`},
 	)
-	if resp, _ := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); resp.StatusCode != 500 {
-		t.Errorf("first step status = %d, want 500", resp.StatusCode)
+	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 500 {
+		t.Errorf("first step status = %d, want 500", r.status)
 	}
-	if resp, body := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); resp.StatusCode != 200 || body != `{"ok":true}` {
-		t.Errorf("second step = %d %s, want 200 {\"ok\":true}", resp.StatusCode, body)
+	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 200 || r.body != `{"ok":true}` {
+		t.Errorf("second step = %d %s, want 200 {\"ok\":true}", r.status, r.body)
 	}
 	// Third request drains the queue: the failure is named, not silent.
-	if resp, body := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); resp.StatusCode != 500 || !strings.Contains(body, "no scripted step") {
-		t.Errorf("drained queue = %d %s, want a named failure", resp.StatusCode, body)
+	if r := post(t, u.URL(), RouteChat, `{}`, 5*time.Second); r.status != 500 || !strings.Contains(r.body, "no scripted step") {
+		t.Errorf("drained queue = %d %s, want a named failure", r.status, r.body)
 	}
 }
 
 func TestCustomResponseHeaders(t *testing.T) {
 	u := New(t)
 	u.Script(RouteMessages, Step{Headers: map[string]string{"X-Provider": "acme"}, Body: `{}`})
-	resp, _ := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
-	if got := resp.Header.Get("X-Provider"); got != "acme" {
+	r := post(t, u.URL(), RouteMessages, `{}`, 5*time.Second)
+	if got := r.header.Get("X-Provider"); got != "acme" {
 		t.Errorf("X-Provider = %q, want acme", got)
 	}
 }

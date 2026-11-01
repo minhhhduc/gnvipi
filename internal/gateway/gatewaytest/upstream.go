@@ -144,14 +144,14 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, `{"error":{"message":"gatewaytest: no scripted step for this request"}}`)
+		_, _ = fmt.Fprint(w, `{"error":{"message":"gatewaytest: no scripted step for this request"}}`)
 		return
 	}
 
 	if step.Disconnect {
 		if hijacker, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hijacker.Hijack(); err == nil {
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
 		}
@@ -185,7 +185,7 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !strings.HasSuffix(ev, "\n\n") {
-				io.WriteString(w, "\n\n")
+				_, _ = io.WriteString(w, "\n\n")
 			}
 			if flusher != nil {
 				flusher.Flush()
@@ -201,7 +201,7 @@ func (u *Upstream) handle(w http.ResponseWriter, r *http.Request) {
 		h.Set("Content-Type", "application/json")
 	}
 	w.WriteHeader(status)
-	io.WriteString(w, step.Body)
+	_, _ = io.WriteString(w, step.Body)
 }
 
 func (u *Upstream) record(r *http.Request, body []byte) {
