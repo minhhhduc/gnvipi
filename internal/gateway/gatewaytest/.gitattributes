@@ -1,0 +1,4 @@
+# The harness's fixtures and sources must keep LF in the working tree:
+# SplitEvents and the byte-exact stream tests assume "\n", and gofmt flags
+# CRLF files. Windows checkouts would otherwise mangle them (autocrlf).
+* text=auto eol=lf

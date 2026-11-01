@@ -243,8 +243,12 @@ func Load(t testing.TB, name string) string {
 // SplitEvents chops a raw SSE stream into the per-event strings Step.Events
 // wants, each with its terminating blank line. The trailing fragment after
 // the last blank line is kept when non-empty, so streams without a final
-// terminator still yield their last event.
+// terminator still yield their last event. CRLF and lone-CR line endings
+// are normalized — the SSE grammar allows all three, and a fixture checked
+// out or pasted on Windows arrives as CRLF.
 func SplitEvents(raw string) []string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
 	parts := strings.Split(raw, "\n\n")
 	var out []string
 	last := len(parts) - 1

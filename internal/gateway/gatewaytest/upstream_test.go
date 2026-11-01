@@ -235,6 +235,18 @@ func TestSplitEvents(t *testing.T) {
 			t.Errorf("SplitEvents() = %#v, want the unterminated tail as its own event", got)
 		}
 	})
+	t.Run("CRLF stream", func(t *testing.T) {
+		got := SplitEvents("event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")
+		want := []string{"event: a\ndata: 1\n\n", "event: b\ndata: 2\n\n"}
+		if len(got) != len(want) {
+			t.Fatalf("SplitEvents() = %#v, want %#v", got, want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("event %d = %#v, want %#v", i, got[i], want[i])
+			}
+		}
+	})
 	t.Run("empty stream", func(t *testing.T) {
 		if got := SplitEvents(""); len(got) != 0 {
 			t.Errorf("SplitEvents(\"\") = %#v, want no events", got)
