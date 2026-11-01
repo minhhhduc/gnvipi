@@ -51,29 +51,48 @@ func mountChain(t *testing.T, p *modelPrefs, stub gin.HandlerFunc) *gin.Engine {
 	return engine
 }
 
-// echoStub answers with status/body, echoing the request body when it has
-// one, so what the chain passed on is visible in the response.
-func echoStub(status int, body string) gin.HandlerFunc {
+// echoStub answers 200 with the request body echoed back when it has one, so
+// what the chain passed on is visible in the response.
+func echoStub(body string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		in, err := io.ReadAll(c.Request.Body)
 		if err != nil || len(in) == 0 {
-			c.String(status, body)
+			c.String(http.StatusOK, body)
 			return
 		}
-		c.Data(status, "application/json", in)
+		c.Data(http.StatusOK, "application/json", in)
 	}
 }
 
+// requestModel returns the top-level "model" of c's request body, "" when the
+// body is unreadable or not JSON. Consumes the body either way.
+func requestModel(c *gin.Context) string {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return ""
+	}
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return payload.Model
+}
+
 // fakeUpstream replaces both package-level passthrough clients with a recorder
-// that answers status/body, and reports what the gateway actually sent.
-func fakeUpstream(t *testing.T, status int, body string) *upstreamLog {
+// that answers 200 with body, and reports what the gateway actually sent.
+func fakeUpstream(t *testing.T, body string) *upstreamLog {
 	t.Helper()
 	log := &upstreamLog{}
 	rt := testRoundTripper(func(r *http.Request) (*http.Response, error) {
-		b, _ := io.ReadAll(r.Body)
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			b = nil
+		}
 		log.entries = append(log.entries, upstreamCall{URL: r.URL.String(), Header: r.Header, Body: string(b)})
 		return &http.Response{
-			StatusCode: status,
+			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
@@ -129,10 +148,10 @@ func TestChatRoutePassthrough(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
 				Name: "vendor", Model: "gpt-5.6-terra", BaseURL: tc.baseURL, APIKey: "secret",
 			}}}
-			log := fakeUpstream(t, http.StatusOK, `{"id":"chat_1"}`)
-			engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+			log := fakeUpstream(t, `{"id":"chat_1"}`)
+			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions",
 				strings.NewReader(`{"model":"vendor/gpt-5.6-terra","messages":[]}`))
 			req.Header.Set("User-Agent", "test-client/1")
 			req.Header.Set("x-opencode-session", "sess-1")
@@ -180,10 +199,10 @@ func TestResponsesRoutePassthrough(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
 				Name: "opencode-zen", Model: "muse-spark-1.3", BaseURL: tc.baseURL, APIKey: "zen-key", ResponsesOnly: true,
 			}}}
-			log := fakeUpstream(t, http.StatusOK, `{"id":"resp_1"}`)
-			engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+			log := fakeUpstream(t, `{"id":"resp_1"}`)
+			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/responses",
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses",
 				strings.NewReader(`{"model":"opencode-zen/muse-spark-1.3","input":"ping"}`))
 			req.Header.Set("x-opencode-session", "sess-1")
 			engine.ServeHTTP(w, req)
@@ -217,10 +236,10 @@ func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{
 		Name: "justworker", Model: "gpt-5.6-terra", BaseURL: "https://up.invalid/v1", APIKey: "mw-key", MessagesOnly: true,
 	}}}
-	log := fakeUpstream(t, http.StatusOK, `{"type":"message","content":[{"type":"text","text":"hi"}]}`)
-	engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+	log := fakeUpstream(t, `{"type":"message","content":[{"type":"text","text":"hi"}]}`)
+	engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 		strings.NewReader(`{"model":"justworker/gpt-5.6-terra","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}`))
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("x-opencode-session", "sess-1")
@@ -261,10 +280,10 @@ func TestMessagesRouteResponsesAdapter(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{
 		Name: "gateway", Model: "muse", BaseURL: "https://up.invalid/v1", APIKey: "secret", ResponsesOnly: true,
 	}}}
-	log := fakeUpstream(t, http.StatusOK, `{"id":"r","model":"muse","status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}`)
-	engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+	log := fakeUpstream(t, `{"id":"r","model":"muse","status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}`)
+	engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 		strings.NewReader(`{"model":"gateway/muse","max_tokens":8,"messages":[{"role":"user","content":"ping"}]}`)))
 
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"stop_reason"`) || !strings.Contains(w.Body.String(), `"text":"pong"`) {
@@ -311,10 +330,10 @@ func TestHiddenModelsRejected(t *testing.T) {
 				hidden:    map[string]struct{}{"vendor/m": {}},
 				providers: []customProvider{tc.prov},
 			}
-			log := fakeUpstream(t, http.StatusOK, `{}`)
-			engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+			log := fakeUpstream(t, `{}`)
+			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 			w := httptest.NewRecorder()
-			engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, tc.route, strings.NewReader(tc.body)))
+			engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.route, strings.NewReader(tc.body)))
 
 			if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), tc.want) {
 				t.Fatalf("response=%d %s, want 404 containing %s", w.Code, w.Body.String(), tc.want)
@@ -329,8 +348,8 @@ func TestHiddenModelsRejected(t *testing.T) {
 // Models no custom provider owns fall through to CLIProxyAPI's own handlers.
 func TestUnknownModelsFallThrough(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{Name: "vendor", Model: "m", ResponsesOnly: true}}}
-	log := fakeUpstream(t, http.StatusOK, `{}`)
-	engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+	log := fakeUpstream(t, `{}`)
+	engine := mountChain(t, p, echoStub(`{}`))
 	for _, tc := range []struct{ route, body string }{
 		{"/v1/chat/completions", `{"model":"vendor/other","messages":[]}`},
 		{"/v1/messages", `{"model":"unknown/model","messages":[{"role":"user","content":"hi"}]}`},
@@ -338,7 +357,7 @@ func TestUnknownModelsFallThrough(t *testing.T) {
 	} {
 		t.Run(tc.route, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, tc.route, strings.NewReader(tc.body)))
+			engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.route, strings.NewReader(tc.body)))
 			// echoStub answers with the request body, so an exact round-trip
 			// is proof the stub — not an upstream or a middleware — answered.
 			if w.Code != http.StatusOK || w.Body.String() != tc.body {
@@ -360,10 +379,10 @@ func TestResponsesRouteHiddenModelFallsThrough(t *testing.T) {
 		hidden:    map[string]struct{}{"vendor/m": {}},
 		providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "https://up.invalid/v1", ResponsesOnly: true}},
 	}
-	log := fakeUpstream(t, http.StatusOK, `{}`)
-	engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+	log := fakeUpstream(t, `{}`)
+	engine := mountChain(t, p, echoStub(`{}`))
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses",
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses",
 		strings.NewReader(`{"model":"vendor/m","input":"ping"}`)))
 
 	if w.Code != http.StatusOK || w.Body.String() != `{"model":"vendor/m","input":"ping"}` {
@@ -389,10 +408,10 @@ func TestAgentRouterClientSpoofed(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
 				Name: "ar", Model: "agent", BaseURL: tc.baseURL, APIKey: "ar-key",
 			}}}
-			log := fakeUpstream(t, http.StatusOK, `{}`)
-			engine := mountChain(t, p, echoStub(http.StatusOK, `{"fell":"through"}`))
+			log := fakeUpstream(t, `{}`)
+			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"ar/agent","messages":[]}`))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"ar/agent","messages":[]}`))
 			req.Header.Set("User-Agent", "test-client/1")
 			engine.ServeHTTP(w, req)
 
@@ -418,9 +437,9 @@ func TestAutomodeRewritten(t *testing.T) {
 			autoModel: "vendor/m",
 			providers: []customProvider{{Name: "vendor", Model: "m"}},
 		}
-		engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+		engine := mountChain(t, p, echoStub(`{}`))
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 			strings.NewReader(`{"model":"automode","messages":[{"role":"user","content":"hi"}]}`)))
 
 		if w.Code != http.StatusOK {
@@ -436,9 +455,9 @@ func TestAutomodeRewritten(t *testing.T) {
 			hidden:    map[string]struct{}{"vendor/m": {}},
 			providers: []customProvider{{Name: "vendor", Model: "m"}},
 		}
-		engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+		engine := mountChain(t, p, echoStub(`{}`))
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 			strings.NewReader(`{"model":"automode","messages":[{"role":"user","content":"hi"}]}`)))
 
 		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "automode target is hidden") {
@@ -455,25 +474,21 @@ func TestCycleRetriesAndCommits(t *testing.T) {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			var calls []string
 			stub := func(c *gin.Context) {
-				var payload struct {
-					Model string `json:"model"`
-				}
-				body, _ := io.ReadAll(c.Request.Body)
-				_ = json.Unmarshal(body, &payload)
-				calls = append(calls, payload.Model)
-				switch payload.Model {
+				model := requestModel(c)
+				calls = append(calls, model)
+				switch model {
 				case "first":
 					c.JSON(status, gin.H{"error": "retry me"})
 				case "second":
 					c.JSON(http.StatusOK, gin.H{"model": "second"})
 				default:
-					c.String(http.StatusBadRequest, "stub does not know %q", payload.Model)
+					c.String(http.StatusBadRequest, "stub does not know %q", model)
 				}
 			}
 			p := &modelPrefs{cycle: &cycleConfig{Name: "cycle", Models: []string{"first", "second"}}}
 			engine := mountChain(t, p, stub)
 			w := httptest.NewRecorder()
-			engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+			engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 				strings.NewReader(`{"model":"cycle","messages":[{"role":"user","content":"hi"}]}`)))
 
 			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"model":"second"`) {
@@ -496,18 +511,14 @@ func TestCycleDoesNotRetryCommittedResponse(t *testing.T) {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			var calls []string
 			stub := func(c *gin.Context) {
-				var payload struct {
-					Model string `json:"model"`
-				}
-				body, _ := io.ReadAll(c.Request.Body)
-				_ = json.Unmarshal(body, &payload)
-				calls = append(calls, payload.Model)
-				c.JSON(status, gin.H{"model": payload.Model})
+				model := requestModel(c)
+				calls = append(calls, model)
+				c.JSON(status, gin.H{"model": model})
 			}
 			p := &modelPrefs{cycle: &cycleConfig{Name: "cycle", Models: []string{"first", "second"}}}
 			engine := mountChain(t, p, stub)
 			w := httptest.NewRecorder()
-			engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+			engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 				strings.NewReader(`{"model":"cycle","messages":[{"role":"user","content":"hi"}]}`)))
 
 			if w.Code != status || !strings.Contains(w.Body.String(), `"model":"first"`) {
@@ -528,18 +539,14 @@ func TestCycleDoesNotRetryCommittedResponse(t *testing.T) {
 func TestCycleCountTokensTriesFirstModelOnly(t *testing.T) {
 	var calls []string
 	stub := func(c *gin.Context) {
-		var payload struct {
-			Model string `json:"model"`
-		}
-		body, _ := io.ReadAll(c.Request.Body)
-		_ = json.Unmarshal(body, &payload)
-		calls = append(calls, payload.Model)
+		model := requestModel(c)
+		calls = append(calls, model)
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "retry me"})
 	}
 	p := &modelPrefs{cycle: &cycleConfig{Name: "cycle", Models: []string{"first", "second"}}}
 	engine := mountChain(t, p, stub)
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens",
 		strings.NewReader(`{"model":"cycle","messages":[{"role":"user","content":"hi"}]}`)))
 
 	if w.Code != http.StatusTooManyRequests {
@@ -558,9 +565,9 @@ func TestCycleCountTokensTriesFirstModelOnly(t *testing.T) {
 func TestToolResultsSanitized(t *testing.T) {
 	t.Run("wraps non-text parts", func(t *testing.T) {
 		p := &modelPrefs{}
-		engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+		engine := mountChain(t, p, echoStub(`{}`))
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages",
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 			strings.NewReader(`{"model":"unknown/model","messages":[{"role":"user","content":[
 				{"type":"tool_result","tool_use_id":"c1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}]}`)))
 
@@ -572,7 +579,7 @@ func TestToolResultsSanitized(t *testing.T) {
 				} `json:"content"`
 			} `json:"messages"`
 		}
-		if err := json.Unmarshal([]byte(w.Body.String()), &got); err != nil {
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("response=%d %s: %v", w.Code, w.Body.String(), err)
 		}
 		block := got.Messages[0].Content[0]
@@ -589,12 +596,12 @@ func TestToolResultsSanitized(t *testing.T) {
 	})
 	t.Run("leaves plain content alone", func(t *testing.T) {
 		p := &modelPrefs{}
-		engine := mountChain(t, p, echoStub(http.StatusOK, `{}`))
+		engine := mountChain(t, p, echoStub(`{}`))
 		body := `{"model":"unknown/model","messages":[{"role":"user","content":[
 			{"type":"tool_result","tool_use_id":"c1","content":"string is fine"},
 			{"type":"tool_result","tool_use_id":"c2","content":[{"type":"text","text":"plain"}]}]}]}`
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)))
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
 		if got := w.Body.String(); got != body {
 			t.Fatalf("body rewritten though no wrapping was needed:\n%s", got)
 		}
