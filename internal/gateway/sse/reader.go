@@ -130,9 +130,7 @@ func (eb *eventBuilder) apply(line string) {
 		field, value = line[:i], line[i+1:]
 	}
 	// The spec strips exactly one leading space after the colon.
-	if strings.HasPrefix(value, " ") {
-		value = value[1:]
-	}
+	value = strings.TrimPrefix(value, " ")
 	switch field {
 	case "event":
 		eb.ev.Type = value
@@ -169,11 +167,7 @@ func nextLine(br *bufio.Reader) (line string, eof bool, err error) {
 		}
 		switch c {
 		case '\n':
-			s := b.String()
-			if strings.HasSuffix(s, "\r") {
-				s = s[:len(s)-1]
-			}
-			return s, false, nil
+			return strings.TrimSuffix(b.String(), "\r"), false, nil
 		case '\r':
 			next, err := br.ReadByte()
 			if err == nil && next != '\n' {

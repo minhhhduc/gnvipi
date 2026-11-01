@@ -20,7 +20,7 @@ type chunkReader struct {
 }
 
 func (c *chunkReader) Read(p []byte) (int, error) {
-	if len(c.data) == 0 {
+	if c.data == "" {
 		return 0, io.EOF
 	}
 	n := len(p)
@@ -279,7 +279,7 @@ func TestReaderLargeEvent(t *testing.T) {
 func TestReaderErrorPropagation(t *testing.T) {
 	rd := NewReader(errReader{})
 	_, err := rd.Next(context.Background())
-	if err == nil || err == io.EOF {
+	if err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("first Next = %v, want the read error", err)
 	}
 	if !strings.Contains(err.Error(), "connection reset") {
@@ -287,7 +287,7 @@ func TestReaderErrorPropagation(t *testing.T) {
 	}
 	// The terminal error must replay, not become io.EOF.
 	for i := 0; i < 3; i++ {
-		if _, err := rd.Next(context.Background()); err == nil || err == io.EOF {
+		if _, err := rd.Next(context.Background()); err == nil || errors.Is(err, io.EOF) {
 			t.Errorf("follow-up Next #%d = %v, want the read error replayed", i, err)
 		}
 	}
@@ -295,7 +295,10 @@ func TestReaderErrorPropagation(t *testing.T) {
 
 func TestReaderContextCancellation(t *testing.T) {
 	pr, pw := io.Pipe()
-	t.Cleanup(func() { pr.Close(); pw.Close() })
+	t.Cleanup(func() {
+		_ = pr.Close()
+		_ = pw.Close()
+	})
 	rd := NewReader(pr)
 
 	// The pump is blocked reading an empty pipe; cancel before Next blocks.
@@ -307,7 +310,7 @@ func TestReaderContextCancellation(t *testing.T) {
 
 	// Cancellation does not stop the pump: a later Next still delivers.
 	go func() {
-		fmt.Fprint(pw, "event: ping\ndata: hi\n\n")
+		_, _ = fmt.Fprint(pw, "event: ping\ndata: hi\n\n")
 	}()
 	ev, err := rd.Next(context.Background())
 	if err != nil {
