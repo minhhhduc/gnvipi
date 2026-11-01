@@ -213,6 +213,9 @@ func TestWriteResponse(t *testing.T) {
 	if got := rec.Header().Get("X-Request-ID"); got != "req_abc" {
 		t.Errorf("X-Request-ID = %q, want req_abc", got)
 	}
+	if got := rec.Header().Get("request-id"); got != "req_abc" {
+		t.Errorf("request-id = %q, want req_abc (Anthropic convention)", got)
+	}
 	want := `{"type":"error","error":{"type":"rate_limit_error","message":"too many requests"}}`
 	if got := rec.Body.String(); got != want {
 		t.Errorf("body = %s, want %s", got, want)
@@ -232,6 +235,9 @@ func TestWriteOmitsOptionalHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("X-Request-ID"); got != "" {
 		t.Errorf("X-Request-ID = %q, want empty", got)
+	}
+	if got := rec.Header().Get("request-id"); got != "" {
+		t.Errorf("request-id = %q, want empty on non-Anthropic protocols", got)
 	}
 }
 
@@ -308,7 +314,7 @@ func TestWriteSSEErrorGoldenBodies(t *testing.T) {
 		want := "event: error\n" +
 			`data: {"type":"error","code":"server_error","message":"provider failed","param":null}` + "\n\n" +
 			"event: response.failed\n" +
-			`data: {"type":"response.failed","response":{"id":"resp_42","status":"failed","error":"provider failed"}}` + "\n\n"
+			`data: {"type":"response.failed","response":{"id":"resp_42","status":"failed","error":{"code":"server_error","message":"provider failed","param":null}}}` + "\n\n"
 		if got := sb.String(); got != want {
 			t.Errorf("SSE =\n%s\nwant\n%s", got, want)
 		}

@@ -33,7 +33,9 @@ func Encode(proto Protocol, e *Error) (body []byte, status int, err error) {
 
 // Write encodes e for proto and writes a complete HTTP error response:
 // status, JSON content type, Retry-After and X-Request-ID headers when the
-// error carries them, then the body.
+// error carries them, then the body. Anthropic Messages responses also set
+// the lowercase request-id header: that is the name Anthropic's API sends
+// and its clients read, whereas X-Request-ID is the OpenAI convention.
 func Write(w http.ResponseWriter, proto Protocol, e *Error) error {
 	body, status, err := Encode(proto, e)
 	if err != nil {
@@ -46,6 +48,9 @@ func Write(w http.ResponseWriter, proto Protocol, e *Error) error {
 	}
 	if e.UpstreamRequestID != "" {
 		h.Set("X-Request-ID", e.UpstreamRequestID)
+		if proto == ProtocolAnthropicMessages {
+			h.Set("request-id", e.UpstreamRequestID)
+		}
 	}
 	w.WriteHeader(status)
 	_, err = w.Write(body)
@@ -96,7 +101,10 @@ func WriteSSEError(w io.Writer, proto Protocol, e *Error, responseID string) err
 			Response: responsesStreamFailedResponse{
 				ID:     responseID,
 				Status: "failed",
-				Error:  msg,
+				Error: &responsesFailedError{
+					Code:    code,
+					Message: msg,
+				},
 			},
 		}
 		body, err = json.Marshal(failed)
@@ -222,8 +230,9 @@ func chatErrorType(k Kind) string {
 //	{"error":{"code":null,"message":"...","param":null,"type":"server_error"}}
 //
 // The streaming form is an "error" event and, to terminate, a
-// "response.failed" event whose response carries status "failed" and the
-// error message.
+// "response.failed" event whose response carries status "failed" and an
+// error object: the Responses API types response.error as an object, so a
+// bare string breaks typed SDK clients on response.failed.
 
 type responsesBody struct {
 	Error responsesDetail `json:"error"`
@@ -249,9 +258,18 @@ type responsesStreamFailed struct {
 }
 
 type responsesStreamFailedResponse struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  string `json:"error"`
+	ID     string                `json:"id"`
+	Status string                `json:"status"`
+	Error  *responsesFailedError `json:"error"`
+}
+
+// responsesFailedError is the error object embedded in a response.failed
+// event's response. Code and Message mirror the sibling "error" event so a
+// client can read either.
+type responsesFailedError struct {
+	Code    string  `json:"code"`
+	Message string  `json:"message"`
+	Param   *string `json:"param"`
 }
 
 func encodeResponses(e *Error) ([]byte, error) {
