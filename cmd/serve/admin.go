@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
@@ -419,26 +419,13 @@ func (p *modelPrefs) save() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".gnvipi-models-*.tmp")
-	if err == nil {
-		name := tmp.Name()
-		defer os.Remove(name)
-		if _, err = tmp.Write(append(out, '\n')); err == nil {
-			err = tmp.Close()
-		} else {
-			_ = tmp.Close()
-		}
-		if err == nil {
-			err = os.Rename(name, path)
-		}
+	if err := atomicWriteFile(path, append(out, '\n'), 0o600); err != nil {
+		return err
 	}
-	if err == nil {
-		if notify := p.onMaskChange; notify != nil {
-			notify()
-		}
+	if notify := p.onMaskChange; notify != nil {
+		notify()
 	}
-	return err
+	return nil
 }
 
 // compatProviders converts the saved endpoints into CLIProxyAPI provider
@@ -685,6 +672,21 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 				c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
 					": choose one API format: responses or messages"})
 				return
+			}
+			// Control characters (newline, tab, NUL) would let a value escape its
+			// YAML scalar and inject config keys, so they never reach the file.
+			for _, field := range []struct{ label, value string }{
+				{"name", p.Name},
+				{"base_url", p.BaseURL},
+				{"api_key", p.APIKey},
+				{"model", p.Model},
+				{"alias", p.Alias},
+			} {
+				if strings.ContainsFunc(field.value, unicode.IsControl) {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
+						": " + field.label + " contains control characters"})
+					return
+				}
 			}
 		}
 		if err := prefs.setProviders(list); err != nil {
