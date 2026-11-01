@@ -296,8 +296,12 @@ func TestReaderErrorPropagation(t *testing.T) {
 func TestReaderContextCancellation(t *testing.T) {
 	pr, pw := io.Pipe()
 	t.Cleanup(func() {
-		_ = pr.Close()
-		_ = pw.Close()
+		if err := pr.Close(); err != nil {
+			t.Errorf("close pipe reader: %v", err)
+		}
+		if err := pw.Close(); err != nil {
+			t.Errorf("close pipe writer: %v", err)
+		}
 	})
 	rd := NewReader(pr)
 
@@ -310,7 +314,9 @@ func TestReaderContextCancellation(t *testing.T) {
 
 	// Cancellation does not stop the pump: a later Next still delivers.
 	go func() {
-		_, _ = fmt.Fprint(pw, "event: ping\ndata: hi\n\n")
+		if _, err := fmt.Fprint(pw, "event: ping\ndata: hi\n\n"); err != nil {
+			t.Errorf("write to pipe: %v", err)
+		}
 	}()
 	ev, err := rd.Next(context.Background())
 	if err != nil {
