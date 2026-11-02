@@ -12,12 +12,12 @@ for model management and per-request statistics.
 
 Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
 inbound format translation; this repo provides the NVIDIA provider executor,
-the captcha automation, and the admin surface. **Inbound API-key authentication
-is disabled**, including for admin and MCP routes. The default `-addr :8080`,
-Windows helper, and Docker Compose port mapping expose the service on all
-interfaces. For local-only access, use `-addr 127.0.0.1:8080`; otherwise restrict
-access with a firewall or authenticated reverse proxy. The placeholder Claude
-credentials below do not secure the gateway.
+the captcha automation, and the admin surface. Client inference and MCP remain
+unauthenticated by default. Admin access is open only on loopback listeners;
+non-loopback listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default
+`-addr :8080`, Windows helper, and Docker Compose expose all interfaces. Use
+`-addr 127.0.0.1:8080`, or restrict client API access with a firewall or an
+authenticated reverse proxy. Placeholder Claude keys do not secure the gateway.
 
 ## Endpoints
 
@@ -91,6 +91,14 @@ captcha. NVIDIA `/v1/messages/count_tokens` is a local approximation, not an
 exact model-tokenizer or billing count.
 
 ## Admin console — `/admin`
+
+When an admin token is configured, visit `/admin` to sign in. API clients may
+send `Authorization: Bearer <token>` or `X-Admin-Token`. Browser sessions use
+HttpOnly, SameSite-strict cookies and expire after 12 hours or a server restart.
+Plain-HTTP cookie login is allowed only on loopback; remote browser login needs
+a real TLS connection, not an untrusted forwarded scheme header. All mutations
+require same-origin browser provenance. Explicit `-admin-token` values override
+the environment, including empty values; non-loopback access then stays closed.
 
 One page per tab (`?page=`), each doing exactly one thing:
 
@@ -175,6 +183,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -captcha-select-budget D  benchmark playground URLs, persist champion
 -addr HOST:PORT           listen address (default :8080 = all interfaces)
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
+-admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;

@@ -72,7 +72,13 @@ func main() {
 	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
+	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
 	flag.Parse()
+	adminTokenSet := false
+	flag.Visit(func(f *flag.Flag) { adminTokenSet = adminTokenSet || f.Name == "admin-token" })
+	if !adminTokenSet {
+		*adminToken = os.Getenv("GNVIPI_ADMIN_TOKEN")
+	}
 
 	if *modelsFile != "" {
 		prefs.load(*modelsFile)
@@ -243,6 +249,8 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// The SDK registers these routes before applying WithMiddleware.
+				engine.Use(adminAccess(*addr, *adminToken))
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
