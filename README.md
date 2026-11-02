@@ -15,9 +15,11 @@ inbound format translation; this repo provides the NVIDIA provider executor,
 the captcha automation, and the admin surface. **Client API-key authentication
 is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`,
 `/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth
-behavior remains. Admin routes remain separate. The default `-addr :8080`,
-Windows helper, and Docker Compose expose all interfaces; use a loopback bind
-or restrict access. Placeholder Claude credentials do not secure the gateway.
+behavior remains. Admin access is open only on loopback listeners; non-loopback
+listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default `-addr :8080`,
+Windows helper, and Docker Compose expose all interfaces. Use a loopback bind
+or restrict access with a firewall or authenticated reverse proxy. Placeholder
+Claude credentials do not secure the gateway.
 
 ## Endpoints
 
@@ -98,6 +100,14 @@ provider credentials stay separate. `/healthz` remains public. An explicit
 `-gateway-key` overrides the environment, including an empty value to disable it.
 
 ## Admin console — `/admin`
+
+When an admin token is configured, visit `/admin` to sign in. API clients may
+send `Authorization: Bearer <token>` or `X-Admin-Token`. Browser sessions use
+HttpOnly, SameSite-strict cookies and expire after 12 hours or a server restart.
+Plain-HTTP cookie login is allowed only on loopback; remote browser login needs
+a real TLS connection, not an untrusted forwarded scheme header. All mutations
+require same-origin browser provenance. Explicit `-admin-token` values override
+the environment, including empty values; non-loopback access then stays closed.
 
 One page per tab (`?page=`), each doing exactly one thing:
 
@@ -193,6 +203,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -max-body-bytes N         client API body limit (default 32 MiB)
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
 -gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
+-admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
