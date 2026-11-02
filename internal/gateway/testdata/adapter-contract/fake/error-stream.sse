@@ -1,0 +1,6 @@
+event: start
+data: {"id":"msg-1","model":"resolved-model"}
+
+event: failure
+data: {"kind":"rate_limit","message":"slow down"}
+
