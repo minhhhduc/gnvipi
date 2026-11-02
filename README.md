@@ -175,11 +175,18 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -captcha-select-budget D  benchmark playground URLs, persist champion
 -addr HOST:PORT           listen address (default :8080 = all interfaces)
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
+-max-body-bytes N         client API body limit (default 32 MiB)
+-max-admin-body-bytes N   admin body limit (default 1 MiB)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
 `run.ps1` uses 6 tokens and 3 workers. Run `go run ./cmd/serve -h` for all flags
 and defaults.
+
+Body limits apply before routing, including SDK inference aliases. Oversized
+requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
+and decoded `zstd` bodies; every layer of a supported encoding stack is bounded.
+Both limits must be positive.
 
 ## Data and configuration
 
