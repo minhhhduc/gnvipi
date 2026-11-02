@@ -3,6 +3,7 @@ package nvidia
 import (
 	"bufio"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -98,12 +99,22 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("GNVIPI_STATS_FILE", filepath.Join(dir, "stats.jsonl"))
+	if err := os.Setenv("GNVIPI_STATS_FILE", filepath.Join(dir, "stats.jsonl")); err != nil {
+		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+			log.Printf("stats test cleanup: %v", cleanupErr)
+		}
+		panic(err)
+	}
 	code := m.Run()
 	if statLog != nil {
 		statLog.close()
 	}
-	os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		log.Printf("stats test cleanup: %v", err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 
@@ -114,7 +125,7 @@ func TestStatsLogFrames(t *testing.T) {
 	t.Cleanup(l.close)
 	base := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 450; i++ {
-		l.append(RequestEvent{Time: base.Add(time.Duration(i) * time.Second), Model: "m", MS: uint64(i)})
+		l.append(&RequestEvent{Time: base.Add(time.Duration(i) * time.Second), Model: "m", MS: uint64(i)})
 	}
 	if got := l.framesCount(); got != 3 {
 		t.Fatalf("framesCount = %d, want 3", got)
@@ -153,7 +164,7 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
-				l.append(RequestEvent{Time: time.Now(), Model: "m"})
+				l.append(&RequestEvent{Time: time.Now(), Model: "m"})
 			}
 		}()
 	}
@@ -162,7 +173,11 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close stats log: %v", err)
+		}
+	}()
 	sc := bufio.NewScanner(f)
 	n := 0
 	for sc.Scan() {
@@ -171,6 +186,9 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 			t.Fatalf("line %d malformed: %v", n+1, err)
 		}
 		n++
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if n != 200 {
 		t.Fatalf("%d lines, want 200", n)

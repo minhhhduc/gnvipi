@@ -293,21 +293,25 @@ func (l *statsLog) load(now time.Time) error {
 // trimStatsSegment keeps a complete newest suffix, in place. SectionReader uses
 // ReadAt, so copying backwards to offset zero cannot overwrite unread bytes and
 // needs neither a second cap-sized file nor an open-file rename on Windows.
-func trimStatsSegment(s *statsSegment, limit int64) error {
+func trimStatsSegment(s *statsSegment, limit int64) (err error) {
 	f, err := os.OpenFile(s.path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	start := s.size - limit
 	r := bufio.NewReader(io.NewSectionReader(f, start-1, limit+1))
 	for {
 		chunk, readErr := r.ReadSlice('\n')
 		start += int64(len(chunk)) - 1
-		if readErr != nil && readErr != bufio.ErrBufferFull && readErr != io.EOF {
+		if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) && !errors.Is(readErr, io.EOF) {
 			return readErr
 		}
-		if readErr != bufio.ErrBufferFull {
+		if !errors.Is(readErr, bufio.ErrBufferFull) {
 			break
 		}
 		start++
@@ -332,7 +336,7 @@ func scanStatsLines(r io.Reader, offset int64, visit func(int64, int64)) error {
 		chunk, err := reader.ReadSlice('\n')
 		length += int64(len(chunk))
 		nonempty = nonempty || len(bytes.TrimSpace(chunk)) != 0
-		if err == bufio.ErrBufferFull {
+		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
 		if nonempty {
@@ -340,7 +344,7 @@ func scanStatsLines(r io.Reader, offset int64, visit func(int64, int64)) error {
 		}
 		start += length
 		length, nonempty = 0, false
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -349,12 +353,16 @@ func scanStatsLines(r io.Reader, offset int64, visit func(int64, int64)) error {
 	}
 }
 
-func indexStatsSegment(s *statsSegment) error {
+func indexStatsSegment(s *statsSegment) (err error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	s.lines, s.offsets = 0, nil
 	err = scanStatsLines(f, 0, func(offset, _ int64) {
 		if s.lines%frameSize == 0 {
@@ -403,7 +411,7 @@ func (l *statsLog) prune(now time.Time, reserve int64) error {
 	return nil
 }
 
-func (l *statsLog) append(ev RequestEvent) {
+func (l *statsLog) append(ev *RequestEvent) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -536,19 +544,22 @@ func (l *statsLog) framesCount() int {
 
 // readStatsRange seeks to the nearest sparse checkpoint and scans at most one
 // frame plus 199 preceding non-empty records. Handles close before rotation.
-func readStatsRange(s *statsSegment, lo, hi int, limit int64) ([]RequestEvent, error) {
+func readStatsRange(s *statsSegment, lo, hi int, limit int64) (out []RequestEvent, err error) {
 	f, err := os.Open(s.path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	block := lo / frameSize
 	if _, err := f.Seek(s.offsets[block], io.SeekStart); err != nil {
 		return nil, err
 	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, min(int(limit)+1, 32<<10)), int(limit)+1)
-	var out []RequestEvent
 	index := block * frameSize
 	for index < hi && scanner.Scan() {
 		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
@@ -615,6 +626,6 @@ func (l *statsLog) readFrame(n int) ([]RequestEvent, int, error) {
 	return append([]RequestEvent{}, out...), total, nil
 }
 
-func AppendLog(ev RequestEvent)                    { statsLogInstance().append(ev) }
+func AppendLog(ev *RequestEvent)                   { statsLogInstance().append(ev) }
 func FramesCount() int                             { return statsLogInstance().framesCount() }
 func ReadFrame(n int) ([]RequestEvent, int, error) { return statsLogInstance().readFrame(n) }

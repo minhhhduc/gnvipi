@@ -82,12 +82,15 @@ func TestStatsLogSizeRotationWithoutReaders(t *testing.T) {
 	opts := smallStatsOptions()
 	l := boundedStatsLog(t, path, opts)
 	for i := range 100 {
-		l.append(RequestEvent{Time: time.Now(), Model: "m", MS: uint64(i)})
+		l.append(&RequestEvent{Time: time.Now(), Model: "m", MS: uint64(i)})
 		if got := statsDiskBytes(t, path); got > opts.MaxBytes {
 			t.Fatalf("append %d: disk bytes %d exceed %d", i, got, opts.MaxBytes)
 		}
 	}
-	files, _ := filepath.Glob(path + ".*")
+	files, err := filepath.Glob(path + ".*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(files) == 0 {
 		t.Fatal("small segment size did not rotate")
 	}
@@ -123,7 +126,7 @@ func TestStatsLogConcurrentRotationAndRestart(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := range 30 {
-				l.append(RequestEvent{Time: time.Now(), Model: fmt.Sprintf("%d/%d", g, i)})
+				l.append(&RequestEvent{Time: time.Now(), Model: fmt.Sprintf("%d/%d", g, i)})
 			}
 		}(g)
 	}
@@ -141,7 +144,7 @@ func TestStatsLogConcurrentRotationAndRestart(t *testing.T) {
 		}
 		seen[ev.Model] = true
 	}
-	l.append(RequestEvent{Time: time.Now(), Model: "after-restart"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "after-restart"})
 	if got := statsHistory(t, l)[0].Model; got != "after-restart" {
 		t.Fatalf("newest event after restart = %q", got)
 	}
@@ -154,11 +157,11 @@ func TestStatsLogTimeRotationAndRetentionInvalidatesCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.jsonl")
 	opts := smallStatsOptions()
 	l := boundedStatsLog(t, path, opts)
-	l.append(RequestEvent{Time: time.Now(), Model: "old"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "old"})
 	l.mu.Lock()
 	l.segments[len(l.segments)-1].created = time.Now().Add(-opts.RotateInterval - time.Second)
 	l.mu.Unlock()
-	l.append(RequestEvent{Time: time.Now(), Model: "new"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "new"})
 	if got := len(statsHistory(t, l)); got != 2 {
 		t.Fatalf("time rotation lost events: %d", got)
 	}
@@ -168,7 +171,10 @@ func TestStatsLogTimeRotationAndRetentionInvalidatesCache(t *testing.T) {
 	if got := statsHistory(t, l); len(got) != 1 || got[0].Model != "new" {
 		t.Fatalf("retention returned stale cached history: %+v", got)
 	}
-	files, _ := filepath.Glob(path + ".*")
+	files, err := filepath.Glob(path + ".*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(files) != 0 {
 		t.Fatalf("expired archived segment remains: %v", files)
 	}
@@ -178,7 +184,7 @@ func TestStatsLogRetentionOnAppendAndRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.jsonl")
 	opts := smallStatsOptions()
 	l := boundedStatsLog(t, path, opts)
-	l.append(RequestEvent{Time: time.Now(), Model: "expired"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "expired"})
 	l.close()
 	old := time.Now().Add(-opts.Retention - time.Second)
 	if err := os.Chtimes(path, old, old); err != nil {
@@ -188,11 +194,11 @@ func TestStatsLogRetentionOnAppendAndRestart(t *testing.T) {
 	if got := l.framesCount(); got != 0 {
 		t.Fatalf("restart exposed %d expired frames", got)
 	}
-	l.append(RequestEvent{Time: time.Now(), Model: "fresh"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "fresh"})
 	l.mu.Lock()
 	l.segments[len(l.segments)-1].modified = old
 	l.mu.Unlock()
-	l.append(RequestEvent{Time: time.Now(), Model: "after-retention"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "after-retention"})
 	if got := statsHistory(t, l); len(got) != 1 || got[0].Model != "after-retention" {
 		t.Fatalf("append did not expire old log: %+v", got)
 	}
@@ -203,7 +209,10 @@ func TestStatsLogOversizedLegacyAndRecord(t *testing.T) {
 	opts := smallStatsOptions()
 	var raw strings.Builder
 	for i := range 100 {
-		line, _ := json.Marshal(RequestEvent{Time: time.Now(), Model: "legacy", MS: uint64(i)})
+		line, err := json.Marshal(RequestEvent{Time: time.Now(), Model: "legacy", MS: uint64(i)})
+		if err != nil {
+			t.Fatal(err)
+		}
 		raw.Write(line)
 		raw.WriteByte('\n')
 	}
@@ -218,14 +227,14 @@ func TestStatsLogOversizedLegacyAndRecord(t *testing.T) {
 	if len(events) == 0 || events[0].MS != 99 {
 		t.Fatalf("legacy normalization did not retain newest complete records: %+v", events)
 	}
-	l.append(RequestEvent{Time: time.Now(), Model: strings.Repeat("x", int(opts.SegmentBytes))})
+	l.append(&RequestEvent{Time: time.Now(), Model: strings.Repeat("x", int(opts.SegmentBytes))})
 	if got := statsDiskBytes(t, path); got > opts.MaxBytes {
 		t.Fatalf("oversized record broke disk cap: %d", got)
 	}
 	if got := statsHistory(t, l); len(got) != len(events) || got[0].MS != 99 {
 		t.Fatalf("oversized record was retained: %+v", got)
 	}
-	l.append(RequestEvent{Time: time.Now(), Model: "normal"})
+	l.append(&RequestEvent{Time: time.Now(), Model: "normal"})
 	if got := statsHistory(t, l)[0].Model; got != "normal" {
 		t.Fatalf("oversized record prevented subsequent append: %q", got)
 	}
@@ -233,13 +242,16 @@ func TestStatsLogOversizedLegacyAndRecord(t *testing.T) {
 
 func TestStatsLogCorruptAndPartialLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.jsonl")
-	line, _ := json.Marshal(RequestEvent{Model: "first"})
+	line, err := json.Marshal(RequestEvent{Model: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := append([]byte("\nnot-json\n \n"), line...)
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	l := boundedStatsLog(t, path, smallStatsOptions())
-	l.append(RequestEvent{Model: "second"})
+	l.append(&RequestEvent{Model: "second"})
 	events := statsHistory(t, l)
 	if len(events) != 2 || events[0].Model != "second" || events[1].Model != "first" {
 		t.Fatalf("corrupt/partial lines changed usable history: %+v", events)
@@ -252,14 +264,14 @@ func TestStatsLogBoundedHistoryReadRate(t *testing.T) {
 	opts.ReadInterval = time.Hour
 	l := boundedStatsLog(t, path, opts)
 	for i := range 201 {
-		l.append(RequestEvent{Model: "m", MS: uint64(i)})
+		l.append(&RequestEvent{Model: "m", MS: uint64(i)})
 	}
 	first, _, err := l.readFrame(1)
 	if err != nil || first[0].MS != 200 {
 		t.Fatalf("first read: %+v, %v", first, err)
 	}
 	first[0].MS = 999 // caller must not be able to mutate the cached response.
-	l.append(RequestEvent{Model: "m", MS: 201})
+	l.append(&RequestEvent{Model: "m", MS: 201})
 	cached, _, err := l.readFrame(1)
 	if err != nil || cached[0].MS != 200 {
 		t.Fatalf("repeated poll bypassed read interval or shared cache: %+v, %v", cached, err)
@@ -289,7 +301,7 @@ func TestStatsLogLazyAndInvalidOptions(t *testing.T) {
 			t.Fatalf("accepted invalid options: %+v", bad)
 		}
 	}
-	l.append(RequestEvent{Model: "still-valid"})
+	l.append(&RequestEvent{Model: "still-valid"})
 	if got := statsHistory(t, l)[0].Model; got != "still-valid" {
 		t.Fatalf("invalid configure changed working configuration: %q", got)
 	}
@@ -301,7 +313,7 @@ func TestStatsLogIdleRetentionWithoutDashboard(t *testing.T) {
 	opts := smallStatsOptions()
 	opts.Retention = 20 * time.Millisecond
 	l := boundedStatsLog(t, path, opts)
-	l.append(RequestEvent{Model: "idle"})
+	l.append(&RequestEvent{Model: "idle"})
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		_, err := os.Stat(path)
@@ -328,7 +340,7 @@ func TestStatsLogConcurrentEviction(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := range 30 {
-				l.append(RequestEvent{Model: fmt.Sprintf("%d/%d", g, i)})
+				l.append(&RequestEvent{Model: fmt.Sprintf("%d/%d", g, i)})
 			}
 		}(g)
 	}
