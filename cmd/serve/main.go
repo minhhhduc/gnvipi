@@ -73,11 +73,16 @@ func main() {
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
+	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
+	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	flag.Parse()
 	gatewayKeySet := false
 	flag.Visit(func(f *flag.Flag) { gatewayKeySet = gatewayKeySet || f.Name == "gateway-key" })
 	if !gatewayKeySet {
 		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
+	}
+	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
+		log.Fatal("request body limits must be positive")
 	}
 
 	if *modelsFile != "" {
@@ -259,6 +264,10 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// The SDK calls this before WithMiddleware and early route registration.
+				engine.Use(requestBodyLimit(*maxBodyBytes, *maxAdminBodyBytes))
+				// Attach identity before early routes or cycle dispatch can finish the request.
+				engine.Use(gatewayRequestContext())
 				// Guard the early catalog routes and cycle dispatch before WithMiddleware.
 				engine.Use(gatewayAuth(*gatewayKey))
 				// Resolve automode before cycleRouter inspects the model field.
