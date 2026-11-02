@@ -1,4 +1,4 @@
-﻿# gnvipi — NVIDIA Playground Gateway
+# gnvipi — NVIDIA Playground Gateway
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -12,12 +12,12 @@ for model management and per-request statistics.
 
 Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
 inbound format translation; this repo provides the NVIDIA provider executor,
-the captcha automation, and the admin surface. **Inbound API-key authentication
-is disabled**, including for admin and MCP routes. The default `-addr :8080`,
-Windows helper, and Docker Compose port mapping expose the service on all
-interfaces. For local-only access, use `-addr 127.0.0.1:8080`; otherwise restrict
-access with a firewall or authenticated reverse proxy. The placeholder Claude
-credentials below do not secure the gateway.
+the captcha automation, and the admin surface. **Client API-key authentication
+is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`,
+`/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth
+behavior remains. Admin routes remain separate. The default `-addr :8080`,
+Windows helper, and Docker Compose expose all interfaces; use a loopback bind
+or restrict access. Placeholder Claude credentials do not secure the gateway.
 
 ## Endpoints
 
@@ -89,6 +89,13 @@ Set `"stream":false` for a single JSON response. NVIDIA generation needs
 header. No NVIDIA API key is required; custom-provider requests do not use
 captcha. NVIDIA `/v1/messages/count_tokens` is a local approximation, not an
 exact model-tokenizer or billing count.
+
+With gateway authentication enabled, set your client's `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY` to a gateway key. Bearer `Authorization` and `x-api-key` are
+accepted; if both are sent, they must contain the same valid key. Comma-separated
+keys support rotation. Client credentials are removed before provider calls;
+provider credentials stay separate. `/healthz` remains public. An explicit
+`-gateway-key` overrides the environment, including an empty value to disable it.
 
 ## Admin console — `/admin`
 
@@ -185,6 +192,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
 -max-body-bytes N         client API body limit (default 32 MiB)
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
+-gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
