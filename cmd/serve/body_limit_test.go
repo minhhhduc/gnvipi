@@ -49,7 +49,10 @@ func TestRequestBodyLimitBoundaries(t *testing.T) {
 				if body.closes != 0 {
 					t.Fatal("request body closed before consumer")
 				}
-				got, _ := io.ReadAll(c.Request.Body)
+				got, err := io.ReadAll(c.Request.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if err := c.Request.Body.Close(); err != nil {
 					t.Fatal(err)
 				}

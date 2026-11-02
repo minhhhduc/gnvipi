@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -37,9 +38,11 @@ func requestBodyLimit(v1Limit, adminLimit int64) gin.HandlerFunc {
 		}
 		reject := func(status int, message string) {
 			c.Abort()
-			_ = gwerr.Write(c.Writer, proto, &gwerr.Error{
+			if err := gwerr.Write(c.Writer, proto, &gwerr.Error{
 				Status: status, Kind: gwerr.KindInvalidRequest, Message: message,
-			})
+			}); err != nil {
+				log.Printf("write body limit error: %v", err)
+			}
 		}
 		if c.Request.ContentLength > limit {
 			reject(http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
@@ -54,7 +57,7 @@ func requestBodyLimit(v1Limit, adminLimit int64) gin.HandlerFunc {
 		// MaxBytesReader alone can let a truncated oversized body reach them.
 		limited := http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		body, err := io.ReadAll(limited)
-		if encoding := strings.TrimSpace(c.GetHeader("Content-Encoding")); err == nil && clientAPIPath(path) && encoding != "" && !strings.EqualFold(encoding, "identity") {
+		if encoding := strings.TrimSpace(strings.Join(c.Request.Header.Values("Content-Encoding"), ",")); err == nil && clientAPIPath(path) && encoding != "" && !strings.EqualFold(encoding, "identity") {
 			body, err = decodeClientBody(body, encoding, limit)
 			if err == nil {
 				c.Request.Header.Del("Content-Encoding")
