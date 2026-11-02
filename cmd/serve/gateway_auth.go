@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"log"
 	"net/http"
 	"strings"
 
@@ -87,7 +88,9 @@ func gatewayAuth(keyList string) gin.HandlerFunc {
 			} else if path == "/v1/responses" || strings.HasPrefix(path, "/v1/responses/") || path == "/backend-api/codex/responses" || strings.HasPrefix(path, "/backend-api/codex/responses/") {
 				proto = gwerr.ProtocolOpenAIResponses
 			}
-			_ = gwerr.Write(c.Writer, proto, &gwerr.Error{Kind: gwerr.KindAuthentication, Message: message})
+			if err := gwerr.Write(c.Writer, proto, &gwerr.Error{Kind: gwerr.KindAuthentication, Message: message}); err != nil {
+				log.Printf("write gateway authentication error: %v", err)
+			}
 			return
 		}
 
