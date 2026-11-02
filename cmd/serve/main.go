@@ -250,6 +250,8 @@ func main() {
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
 				// The SDK calls this before WithMiddleware and early route registration.
 				engine.Use(requestBodyLimit(*maxBodyBytes, *maxAdminBodyBytes))
+				// Attach identity before early routes or cycle dispatch can finish the request.
+				engine.Use(gatewayRequestContext())
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {

@@ -160,6 +160,11 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 - **Claude Code**: mask changes refresh `/v1/models` and write a best-effort
   Claude model-discovery cache; `.\scripts\run.ps1 -Claude` sets the base URL
   and launches Claude Code.
+- **Request identity**: safe inbound `X-Request-Id` values are echoed and forwarded
+  to custom upstreams; otherwise a random ID is generated. Upstream response IDs
+  cannot replace the canonical client ID. The normalized core exposes an opt-in,
+  once-only IR usage recorder with first-byte timing and JSON access logs; legacy
+  traffic keeps its existing recorder and is not counted twice.
 
 ## Notable flags
 
