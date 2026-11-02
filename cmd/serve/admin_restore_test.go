@@ -45,7 +45,7 @@ func TestAdminDeleteRestorePreservesIndependentMasks(t *testing.T) {
 			}
 			post := func(path, body string, want int) {
 				t.Helper()
-				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
 				out := httptest.NewRecorder()
 				engine.ServeHTTP(out, req)
