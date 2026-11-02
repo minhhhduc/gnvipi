@@ -104,6 +104,9 @@ One page per tab (`?page=`), each doing exactly one thing:
 - **`?page=models`** — toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom endpoints (including
   `messages_only` and `responses_only` upstream modes; select only one).
+  Delete/restore does not change an independent on/off mask. Historical files
+  that already stored a deleted model in `masks_id` keep that explicit mask;
+  if it was only deletion-generated, re-enable the model once after restoring.
 - **`?page=config`** — select the target for virtual `automode` (Anthropic
   Messages requests only), configure `cycle`, and choose web-search settings.
   `automode` may target an enabled real model or `cycle`; the alias rewrite
@@ -180,11 +183,18 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -captcha-select-budget D  benchmark playground URLs, persist champion
 -addr HOST:PORT           listen address (default :8080 = all interfaces)
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
+-max-body-bytes N         client API body limit (default 32 MiB)
+-max-admin-body-bytes N   admin body limit (default 1 MiB)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
 `run.ps1` uses 6 tokens and 3 workers. Run `go run ./cmd/serve -h` for all flags
 and defaults.
+
+Body limits apply before routing, including SDK inference aliases. Oversized
+requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
+and decoded `zstd` bodies; every layer of a supported encoding stack is bounded.
+Both limits must be positive.
 
 ## Data and configuration
 
