@@ -1,0 +1,5 @@
+{
+  "kind": "rate_limit",
+  "message": "slow down",
+  "upstream_status": 429
+}

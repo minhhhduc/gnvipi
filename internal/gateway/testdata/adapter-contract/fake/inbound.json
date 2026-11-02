@@ -1,0 +1,44 @@
+{
+  "decode": [
+    {
+      "name": "text",
+      "request": {
+        "body": "request.json"
+      },
+      "ir": "../canonical/request.json"
+    },
+    {
+      "name": "invalid",
+      "request": {
+        "body": "invalid-request.json"
+      },
+      "error": "../canonical/invalid-request.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "text",
+      "ir": "../canonical/response.json",
+      "golden": "response.golden.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "text",
+      "ir": "../canonical/events.json",
+      "golden": "stream.golden.sse"
+    },
+    {
+      "name": "upstream-error",
+      "ir": "../canonical/error-events.json",
+      "golden": "error-stream.golden.sse"
+    }
+  ],
+  "errors": [
+    {
+      "name": "invalid-request",
+      "error": "../canonical/invalid-request.json",
+      "golden": "error.golden.json"
+    }
+  ]
+}

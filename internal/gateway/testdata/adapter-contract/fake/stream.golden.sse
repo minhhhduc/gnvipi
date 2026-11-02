@@ -1,0 +1,12 @@
+event: start
+data: {"id":"msg-1","model":"resolved-model"}
+
+event: token
+data: {"text":"Hello world"}
+
+event: usage
+data: {"tokens":2}
+
+event: end
+data: {"finish":"complete"}
+

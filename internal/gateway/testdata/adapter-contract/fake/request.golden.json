@@ -1,0 +1,20 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/prefix/complete",
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ],
+    "X-Fixture": [
+      "one",
+      "two"
+    ],
+    "Authorization": [
+      "Bearer fixture-only"
+    ]
+  },
+  "body": {
+    "model": "resolved-model",
+    "prompt": "Hello"
+  }
+}

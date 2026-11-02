@@ -1,0 +1,78 @@
+{
+  "requests": [
+    {
+      "name": "target-model-and-prefix",
+      "ir": "../canonical/request.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/prefix",
+        "Model": "resolved-model",
+        "Headers": {
+          "X-Fixture": [
+            "one",
+            "two"
+          ],
+          "Authorization": [
+            "Bearer fixture-only"
+          ]
+        }
+      },
+      "golden": "request.golden.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "text",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "body": "response.json"
+      },
+      "ir": "../canonical/response.json"
+    },
+    {
+      "name": "rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "body": "upstream-error.json"
+      },
+      "error": "../canonical/upstream-error.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "text",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "text/event-stream"
+          ]
+        },
+        "body": "stream.sse"
+      },
+      "ir": "../canonical/events.json"
+    },
+    {
+      "name": "rate-limit",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": [
+            "text/event-stream"
+          ]
+        },
+        "body": "error-stream.sse"
+      },
+      "ir": "../canonical/error-events.json"
+    }
+  ]
+}
