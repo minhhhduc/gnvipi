@@ -6,7 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
@@ -152,6 +154,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel
 <div id=toast></div>
 <script>
 const PAGE = ` + strconv.Quote(page) + `;
+const STATS_READ_MS = ` + strconv.FormatInt(int64((nvidia.StatsReadInterval()-1)/time.Millisecond+1), 10) + `;
 const FAILED = ` + strconv.Itoa(failed) + `;
 const PROVIDERS = ` + string(blob) + `;
 const DELETED = ` + string(deletedBlob) + `;

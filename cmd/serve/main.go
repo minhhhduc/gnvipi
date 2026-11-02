@@ -72,7 +72,16 @@ func main() {
 	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
+	statsOptions := nvidia.DefaultStatsLogOptions()
+	flag.Int64Var(&statsOptions.MaxBytes, "stats-max-bytes", statsOptions.MaxBytes, "maximum bytes of retained stats history")
+	flag.Int64Var(&statsOptions.SegmentBytes, "stats-segment-bytes", statsOptions.SegmentBytes, "maximum bytes per stats log segment")
+	flag.DurationVar(&statsOptions.RotateInterval, "stats-rotate-interval", statsOptions.RotateInterval, "maximum age of an active stats segment")
+	flag.DurationVar(&statsOptions.Retention, "stats-retention", statsOptions.Retention, "retention period for stats history")
+	flag.DurationVar(&statsOptions.ReadInterval, "stats-read-interval", statsOptions.ReadInterval, "minimum dashboard polling and uncached history read interval")
 	flag.Parse()
+	if err := nvidia.ConfigureStatsLog(statsOptions); err != nil {
+		log.Fatalf("stats configuration: %v", err)
+	}
 
 	if *modelsFile != "" {
 		prefs.load(*modelsFile)
