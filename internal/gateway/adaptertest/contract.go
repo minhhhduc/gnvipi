@@ -92,7 +92,7 @@ type errorFixture struct {
 	RetryAfterMS      int64      `json:"retry_after_ms,omitempty"`
 }
 
-func (e errorFixture) gatewayError() *gwerr.Error {
+func (e *errorFixture) gatewayError() *gwerr.Error {
 	return &gwerr.Error{Kind: e.Kind, Message: e.Message, Status: e.Status, Code: e.Code,
 		UpstreamStatus: e.UpstreamStatus, UpstreamRequestID: e.UpstreamRequestID, RetryAfter: time.Duration(e.RetryAfterMS) * time.Millisecond}
 }
@@ -128,9 +128,9 @@ func RunInboundContract(t *testing.T, a adapter.Inbound, fixturesDir string) {
 			if url == "" {
 				url = "http://client.invalid/"
 			}
-			req, err := http.NewRequest(method, url, bytes.NewReader(body))
+			req, err := http.NewRequestWithContext(t.Context(), method, url, bytes.NewReader(body))
 			must(t, err)
-			defer req.Body.Close()
+			defer func(body io.ReadCloser) { must(t, body.Close()) }(req.Body)
 			req.Header = c.Request.Headers.Clone()
 			got, err := a.DecodeRequest(req)
 			if c.Error != "" {
@@ -207,11 +207,13 @@ func RunOutboundContract(t *testing.T, a adapter.Outbound, fixturesDir string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			req, err := a.BuildRequest(ctx, &input, target)
+			if req != nil && req.Body != nil {
+				defer func(body io.ReadCloser) { must(t, body.Close()) }(req.Body)
+			}
 			must(t, err)
 			if req == nil || req.URL == nil || req.Body == nil {
 				t.Fatal("BuildRequest returned an incomplete HTTP request")
 			}
-			defer req.Body.Close()
 			if !reflect.DeepEqual(target.Headers, c.Target.Headers) {
 				t.Fatal("BuildRequest mutated Target.Headers")
 			}
@@ -230,6 +232,7 @@ func RunOutboundContract(t *testing.T, a adapter.Outbound, fixturesDir string) {
 	for _, c := range f.Responses {
 		t.Run("response/"+c.Name, func(t *testing.T) {
 			resp, _ := fixtureResponse(t, fixturesDir, c.Response)
+			defer func() { must(t, resp.Body.Close()) }()
 			got, err := a.ParseResponse(resp)
 			if c.Error != "" {
 				must(t, compareError(err, readError(t, resolve(fixturesDir, c.Error))))
@@ -247,12 +250,23 @@ func RunOutboundContract(t *testing.T, a adapter.Outbound, fixturesDir string) {
 	for _, c := range f.Streams {
 		t.Run("stream/"+c.Name, func(t *testing.T) {
 			resp, body := fixtureResponse(t, fixturesDir, c.Response)
+			defer func() { must(t, resp.Body.Close()) }()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			stream, err := a.ParseStream(ctx, resp)
+			if stream != nil {
+				// This later defer checks stream ownership before the fallback body close.
+				defer func() {
+					if err := stream.Close(); err != nil {
+						t.Error(err)
+					}
+					if !body.closed {
+						t.Error("Stream.Close did not close the upstream response body")
+					}
+				}()
+			}
 			if c.Error != "" {
 				if stream != nil {
-					t.Cleanup(func() { _ = stream.Close() })
 					t.Fatal("ParseStream returned a stream alongside an error")
 				}
 				must(t, compareError(err, readError(t, resolve(fixturesDir, c.Error))))
@@ -262,12 +276,6 @@ func RunOutboundContract(t *testing.T, a adapter.Outbound, fixturesDir string) {
 			if stream == nil {
 				t.Fatal("ParseStream returned nil stream")
 			}
-			t.Cleanup(func() {
-				must(t, stream.Close())
-				if !body.closed {
-					t.Error("Stream.Close did not close the upstream response body")
-				}
-			})
 			want, err := readEvents(resolve(fixturesDir, c.IR))
 			must(t, err)
 			var got []ir.StreamEvent
@@ -428,7 +436,7 @@ func readBytes(t *testing.T, path string) []byte {
 	must(t, err)
 	return body
 }
-func readError(t *testing.T, path string) errorFixture {
+func readError(t *testing.T, path string) *errorFixture {
 	t.Helper()
 	var e errorFixture
 	must(t, readStrict(path, &e))
@@ -440,14 +448,20 @@ func readError(t *testing.T, path string) errorFixture {
 	if e.Message == "" || e.RetryAfterMS < 0 {
 		t.Fatalf("fixture %s has invalid error payload", path)
 	}
-	return e
+	return &e
 }
-func compareError(err error, want errorFixture) error {
-	var e *gwerr.Error
-	if !errors.As(err, &e) || e == nil {
-		return fmt.Errorf("error mismatch: want *gwerr.Error, got %v", err)
+func compareError(err error, want *errorFixture) error {
+	if err == nil {
+		return fmt.Errorf("error mismatch: want *gwerr.Error, got nil")
 	}
-	got := errorFixture{Kind: e.Kind, Message: e.ScrubbedMessage(), Status: e.Status, Code: e.Code,
+	var e *gwerr.Error
+	if !errors.As(err, &e) {
+		return fmt.Errorf("error mismatch: want *gwerr.Error, got %w", err)
+	}
+	if e == nil {
+		return fmt.Errorf("error mismatch: want non-nil *gwerr.Error, got nil *gwerr.Error")
+	}
+	got := &errorFixture{Kind: e.Kind, Message: e.ScrubbedMessage(), Status: e.Status, Code: e.Code,
 		UpstreamStatus: e.UpstreamStatus, UpstreamRequestID: e.UpstreamRequestID, RetryAfterMS: e.RetryAfter.Milliseconds()}
 	if !reflect.DeepEqual(got, want) {
 		return fmt.Errorf("error mismatch: got %+v, want %+v", got, want)
@@ -529,7 +543,6 @@ func (b *trackedBody) Close() error { b.closed = true; return nil }
 func fixtureResponse(t *testing.T, dir string, in wireInput) (*http.Response, *trackedBody) {
 	t.Helper()
 	body := &trackedBody{Reader: bytes.NewReader(readBytes(t, resolve(dir, in.Body)))}
-	t.Cleanup(func() { _ = body.Close() })
 	return &http.Response{StatusCode: in.Status, Status: fmt.Sprintf("%d %s", in.Status, http.StatusText(in.Status)),
 		Header: in.Headers.Clone(), Body: body}, body
 }
@@ -663,7 +676,7 @@ func compareGolden(path string, got []byte, stream, update bool) error {
 			}
 			got = append(pretty.Bytes(), '\n')
 		}
-		return os.WriteFile(path, got, 0644)
+		return os.WriteFile(path, got, 0o644)
 	}
 	want, err := os.ReadFile(path)
 	if err != nil {

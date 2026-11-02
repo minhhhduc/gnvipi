@@ -50,7 +50,7 @@ func TestViolatingAdapters(t *testing.T) {
 		{"inbound-missing-output", "golden mismatch"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestViolatingAdapterChild$", "-test.v")
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestViolatingAdapterChild$", "-test.v")
 			cmd.Env = append(os.Environ(), "ADAPTER_CONTRACT_VIOLATION="+tc.mode)
 			out, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
@@ -102,7 +102,7 @@ func TestMalformedFixtures(t *testing.T) {
 	for _, body := range []string{`null`, `{}`, `{"decode":[],"typo":true}`, `{} {}`, `{"decode":"wrong"}`} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "inbound.json")
-		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := loadInbound(dir); err == nil {
@@ -111,7 +111,7 @@ func TestMalformedFixtures(t *testing.T) {
 	}
 	for _, body := range []string{`null`, `[]`, `[{"type":"message_start"}]`, `[{"type":"message_start","typo":1}]`} {
 		path := filepath.Join(t.TempDir(), "events.json")
-		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := readEvents(path); err == nil {
@@ -152,7 +152,7 @@ func TestGoldenUpdate(t *testing.T) {
 func TestSSEGoldenSemantics(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.sse")
 	want := "event: token\ndata: {\"b\":2,\"a\":1}\n\ndata: [DONE]\n\n"
-	if err := os.WriteFile(path, []byte(want), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got := ": keepalive\r\nevent: token\r\ndata: {\"a\":1.0,\"b\":2}\r\n\r\ndata: [DONE]\r\n\r\n"
@@ -206,13 +206,22 @@ func (f wireInbound) EncodeStream(ctx context.Context, events adapter.Stream, w 
 		var frame sse.Event
 		switch ev.Type {
 		case ir.EventMessageStart:
-			b, _ := json.Marshal(map[string]string{"id": ev.Message.ID, "model": ev.Message.Model})
+			b, err := json.Marshal(map[string]string{"id": ev.Message.ID, "model": ev.Message.Model})
+			if err != nil {
+				return err
+			}
 			frame = sse.Event{Type: "start", Data: string(b)}
 		case ir.EventBlockDelta:
-			b, _ := json.Marshal(map[string]string{"text": ev.Delta.Text})
+			b, err := json.Marshal(map[string]string{"text": ev.Delta.Text})
+			if err != nil {
+				return err
+			}
 			frame = sse.Event{Type: "token", Data: string(b)}
 		case ir.EventUsageUpdate:
-			b, _ := json.Marshal(map[string]int{"tokens": ev.Usage.OutputTokens})
+			b, err := json.Marshal(map[string]int{"tokens": ev.Usage.OutputTokens})
+			if err != nil {
+				return err
+			}
 			frame = sse.Event{Type: "usage", Data: string(b)}
 		case ir.EventMessageStop:
 			if ev.StopReason != ir.StopEndTurn {
@@ -220,7 +229,10 @@ func (f wireInbound) EncodeStream(ctx context.Context, events adapter.Stream, w 
 			}
 			frame = sse.Event{Type: "end", Data: `{"finish":"complete"}`}
 		case ir.EventError:
-			b, _ := json.Marshal(map[string]string{"kind": ev.Error.Kind, "message": ev.Error.Message})
+			b, err := json.Marshal(map[string]string{"kind": ev.Error.Kind, "message": ev.Error.Message})
+			if err != nil {
+				return err
+			}
 			frame = sse.Event{Type: "failure", Data: string(b)}
 		default:
 			continue
@@ -233,7 +245,9 @@ func (f wireInbound) EncodeStream(ctx context.Context, events adapter.Stream, w 
 		}
 		if terminal {
 			if f.mode == "inbound-after-terminal" {
-				_, _ = events.Next(ctx)
+				if _, err := events.Next(ctx); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
