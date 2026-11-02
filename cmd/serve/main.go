@@ -76,6 +76,12 @@ func main() {
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
 	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
 	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
+	statsOptions := nvidia.DefaultStatsLogOptions()
+	flag.Int64Var(&statsOptions.MaxBytes, "stats-max-bytes", statsOptions.MaxBytes, "maximum bytes of retained stats history")
+	flag.Int64Var(&statsOptions.SegmentBytes, "stats-segment-bytes", statsOptions.SegmentBytes, "maximum bytes per stats log segment")
+	flag.DurationVar(&statsOptions.RotateInterval, "stats-rotate-interval", statsOptions.RotateInterval, "maximum age of an active stats segment")
+	flag.DurationVar(&statsOptions.Retention, "stats-retention", statsOptions.Retention, "retention period for stats history")
+	flag.DurationVar(&statsOptions.ReadInterval, "stats-read-interval", statsOptions.ReadInterval, "minimum dashboard polling and uncached history read interval")
 	flag.Parse()
 	adminTokenSet := false
 	flag.Visit(func(f *flag.Flag) { adminTokenSet = adminTokenSet || f.Name == "admin-token" })
@@ -89,6 +95,9 @@ func main() {
 	}
 	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
 		log.Fatal("request body limits must be positive")
+	}
+	if err := nvidia.ConfigureStatsLog(statsOptions); err != nil {
+		log.Fatalf("stats configuration: %v", err)
 	}
 
 	if *modelsFile != "" {

@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +27,12 @@ import (
 )
 
 var deadModels sync.Map // model id -> struct{}
+
+var adminStatsCache struct {
+	sync.Mutex
+	at   time.Time
+	data gin.H
+}
 
 type gatewayModel struct {
 	Type        string `json:"type"`
@@ -560,23 +568,36 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not supported"})
 		}
 	case "/admin/stats":
+		interval := nvidia.StatsReadInterval()
 		if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {
 			ev, tf, err := nvidia.ReadFrame(n)
 			if err != nil {
+				if errors.Is(err, nvidia.ErrStatsReadLimited) {
+					c.Header("Retry-After", strconv.FormatInt(int64((interval-1)/time.Second+1), 10))
+					c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+					return
+				}
 				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"frame": n, "total_frames": tf, "events": ev})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"models":          nvidia.GlobalStats.Snapshot(),
-			"series":          nvidia.GlobalStats.Series(60),
-			"series_by_model": nvidia.GlobalStats.ModelSeries(60),
-			"events":          nvidia.GlobalStats.Events(200),
-			"started_at":      nvidia.GlobalStats.StartedAt(),
-			"total_frames":    nvidia.FramesCount(),
-		})
+		adminStatsCache.Lock()
+		if adminStatsCache.data == nil || time.Since(adminStatsCache.at) >= interval {
+			adminStatsCache.data = gin.H{
+				"models":          nvidia.GlobalStats.Snapshot(),
+				"series":          nvidia.GlobalStats.Series(60),
+				"series_by_model": nvidia.GlobalStats.ModelSeries(60),
+				"events":          nvidia.GlobalStats.Events(200),
+				"started_at":      nvidia.GlobalStats.StartedAt(),
+				"total_frames":    nvidia.FramesCount(),
+			}
+			adminStatsCache.at = time.Now()
+		}
+		data := adminStatsCache.data
+		adminStatsCache.Unlock()
+		c.JSON(http.StatusOK, data)
 	case "/admin/models":
 		var payload prefsFile
 		if err := c.ShouldBindJSON(&payload); err != nil {

@@ -3,6 +3,7 @@ package nvidia
 import (
 	"bufio"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -93,24 +94,44 @@ func TestModelSeries(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	// Observe() appends to the global stats log — keep test events out of the
-	// real %LocalAppData%\gnvipi\stats.jsonl the dashboard reads.
-	os.Setenv("GNVIPI_STATS_FILE", filepath.Join(os.TempDir(), "gnvipi-test-stats.jsonl"))
-	os.Exit(m.Run())
+	// Observe persists events; every package run gets an isolated log.
+	dir, err := os.MkdirTemp("", "gnvipi-stats-test-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("GNVIPI_STATS_FILE", filepath.Join(dir, "stats.jsonl")); err != nil {
+		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+			log.Printf("stats test cleanup: %v", cleanupErr)
+		}
+		panic(err)
+	}
+	code := m.Run()
+	if statLog != nil {
+		statLog.close()
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Printf("stats test cleanup: %v", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
 
 func TestStatsLogFrames(t *testing.T) {
-	l := openStatsLogAt(t.TempDir() + "/stats.jsonl")
+	opts := DefaultStatsLogOptions()
+	opts.ReadInterval = time.Nanosecond
+	l := boundedStatsLog(t, filepath.Join(t.TempDir(), "stats.jsonl"), opts)
 	t.Cleanup(l.close)
 	base := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 450; i++ {
-		l.append(RequestEvent{Time: base.Add(time.Duration(i) * time.Second), Model: "m", MS: uint64(i)})
+		l.append(&RequestEvent{Time: base.Add(time.Duration(i) * time.Second), Model: "m", MS: uint64(i)})
 	}
 	if got := l.framesCount(); got != 3 {
 		t.Fatalf("framesCount = %d, want 3", got)
 	}
 	// frame 1 = newest entries, newest-first
-	ev, total, err := l.readFrame(1)
+	ev, total, err := readStatsFrame(t, l, 1)
 	if err != nil || total != 3 {
 		t.Fatalf("readFrame(1) = total %d, err %v", total, err)
 	}
@@ -122,7 +143,7 @@ func TestStatsLogFrames(t *testing.T) {
 			t.Fatalf("frame 1 event %d: MS = %d, want %d", i, e.MS, want)
 		}
 	}
-	if ev3, _, err := l.readFrame(3); err != nil || len(ev3) != 50 || ev3[0].MS != 49 {
+	if ev3, _, err := readStatsFrame(t, l, 3); err != nil || len(ev3) != 50 || ev3[0].MS != 49 {
 		t.Fatalf("readFrame(3) = %d events/oldest, err %v", len(ev3), err)
 	}
 	if _, _, err := l.readFrame(4); err == nil {
@@ -143,7 +164,7 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 20; i++ {
-				l.append(RequestEvent{Time: time.Now(), Model: "m"})
+				l.append(&RequestEvent{Time: time.Now(), Model: "m"})
 			}
 		}()
 	}
@@ -152,7 +173,11 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close stats log: %v", err)
+		}
+	}()
 	sc := bufio.NewScanner(f)
 	n := 0
 	for sc.Scan() {
@@ -161,6 +186,9 @@ func TestStatsLogConcurrentAppends(t *testing.T) {
 			t.Fatalf("line %d malformed: %v", n+1, err)
 		}
 		n++
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if n != 200 {
 		t.Fatalf("%d lines, want 200", n)

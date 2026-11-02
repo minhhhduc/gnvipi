@@ -1,7 +1,7 @@
 package main
 
 const adminStatsScript = `
-// --- Model stats: KPI tiles + line charts (crosshair, tooltip). Refresh 5s.
+// --- Model stats: KPI tiles + line charts (crosshair, tooltip).
 // Palette validated: #3987e5/#d95926 on the #171a21 surface; status badges
 // use --on/--bad.
 if (PAGE === 'dashboard') {
@@ -214,15 +214,17 @@ if (PAGE === 'dashboard') {
         drawCharts();
         totalFrames = d.total_frames || 0;
         if (!curFrame && totalFrames) openFrame(1); else drawFrames(); // poll only updates chip counts (frame 1 = newest)
-      } else { charts.textContent = 'stats error: ' + res.status; }
-    } catch (err) { charts.textContent = 'stats error: ' + err; }
-  }
+	    } else { charts.textContent = 'stats error: ' + res.status; }
+	  } catch (err) { charts.textContent = 'stats error: ' + err; }
+	  finally { setTimeout(poll, STATS_READ_MS); }
+	}
 
   // History log frames: #frames = chips 1..total (frame 1 = newest), >12 the
   // « » buttons slide a 12-chip window; content fetched once per click, no polling.
   const framesBox = document.getElementById('frames');
   const frameBox = document.getElementById('framebox');
   let totalFrames = 0, curFrame = 0, fKey = 'time', fDir = -1, fEvents = [];
+  let frameReadAt = 0, frameTimer, frameLoading = false;
   function drawFrames() {
     if (!totalFrames) { framesBox.innerHTML = ''; return; }
     let lo = 1, hi = totalFrames, nav = '';
@@ -239,14 +241,25 @@ if (PAGE === 'dashboard') {
   async function openFrame(n) {
     n = Math.max(1, Math.min(totalFrames, n));
     curFrame = n; drawFrames();
+    clearTimeout(frameTimer);
+    const wait = frameReadAt + STATS_READ_MS - Date.now();
+    if (wait > 0 || frameLoading) { frameTimer = setTimeout(() => openFrame(n), Math.max(wait, STATS_READ_MS)); return; }
+    frameReadAt = Date.now();
     try {
+      frameLoading = true;
       const res = await fetch('/admin/stats?frames=' + n);
       const d = await res.json().catch(() => ({}));
+      if (n !== curFrame) return;
+      if (res.status === 429) {
+        frameTimer = setTimeout(() => openFrame(curFrame), Math.max(STATS_READ_MS, (+res.headers.get('Retry-After') || 1) * 1000));
+        return;
+      }
       if (!res.ok) { frameBox.textContent = 'frame error: ' + (d.error || res.status); return; }
       totalFrames = d.total_frames || totalFrames; drawFrames();
       fEvents = d.events || [];
       frameBox.innerHTML = logTable(fEvents, fKey, fDir);
     } catch (err) { frameBox.textContent = 'frame error: ' + err; }
+    finally { frameLoading = false; }
   }
   framesBox.addEventListener('click', e => {
     const b = e.target.closest('button[data-f]');
@@ -261,5 +274,4 @@ if (PAGE === 'dashboard') {
     frameBox.innerHTML = logTable(fEvents, fKey, fDir);
   });
   poll();
-  setInterval(poll, 5000);
 } // dashboard block end`

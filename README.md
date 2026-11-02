@@ -118,6 +118,8 @@ One page per tab (`?page=`), each doing exactly one thing:
   frames**. Request history survives restarts; aggregate counters and charts
   do not. Logs default to `gnvipi/stats.jsonl` under the OS user cache directory
   (override with `GNVIPI_STATS_FILE`).
+  History is size/time rotated and retained within a configurable disk cap;
+  frame reads use a sparse in-memory index rather than rescanning all history.
 - **`?page=models`** — toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom endpoints (including
   `messages_only` and `responses_only` upstream modes; select only one).
@@ -204,6 +206,11 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
 -gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
 -admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
+-stats-max-bytes N        total retained history bytes (default 16 MiB)
+-stats-segment-bytes N    bytes per log segment (default 4 MiB)
+-stats-rotate-interval D  active segment age (default 24h)
+-stats-retention D        history retention (default 7d)
+-stats-read-interval D    dashboard/history cadence (default 1s)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
@@ -214,6 +221,12 @@ Body limits apply before routing, including SDK inference aliases. Oversized
 requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
 and decoded `zstd` bodies; every layer of a supported encoding stack is bounded.
 Both limits must be positive.
+
+Stats limits and intervals must be positive, with segment bytes no greater than
+the total cap. Read intervals cannot exceed the browser timer limit
+(`2147483647ms`, about 24.8 days). Repeated frame polls are cached; rapid switches
+to a different uncached frame return HTTP 429 with `Retry-After`, which the UI
+honors. Rotation and retention work even without an open dashboard.
 
 ## Data and configuration
 
@@ -229,11 +242,14 @@ file paths; the default stats log lives beside the captcha state file.
 A missing models file uses the embedded catalog, but its parent directory
 must exist and be writable for admin changes to save. Use separate models
 files for simultaneously running instances.
+Use a distinct `GNVIPI_STATS_FILE` per simultaneous gateway process: each process
+owns its active stats file and numeric retained segments.
 
 Provider API keys are saved in **plaintext**. Only the default models-file
-path is Git-ignored here; protect custom paths and backups. The stats log is
-append-only and stores request metadata, not prompt bodies; archive it while
-the gateway is stopped if needed. Inference runs on the selected NVIDIA or
+path is Git-ignored here; protect custom paths and backups. Stats logs store
+request metadata, not prompt bodies. Active and numeric segment files are bounded
+to 16 MiB by default, rotate at 4 MiB or 24h, and expire after seven days.
+Inference runs on the selected NVIDIA or
 custom upstream, and request content is forwarded there—not processed by a
 local model inside this gateway.
 
