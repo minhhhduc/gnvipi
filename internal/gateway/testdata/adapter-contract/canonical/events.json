@@ -1,0 +1,37 @@
+[
+  {
+    "type": "message_start",
+    "message": {
+      "id": "msg-1",
+      "role": "assistant",
+      "model": "resolved-model"
+    },
+    "usage": {}
+  },
+  {
+    "type": "block_start",
+    "block": {
+      "type": "text"
+    }
+  },
+  {
+    "type": "block_delta",
+    "delta": {
+      "type": "text_delta",
+      "text": "Hello world"
+    }
+  },
+  {
+    "type": "block_stop"
+  },
+  {
+    "type": "usage_update",
+    "usage": {
+      "output_tokens": 2
+    }
+  },
+  {
+    "type": "message_stop",
+    "stop_reason": "end_turn"
+  }
+]

@@ -7,7 +7,7 @@
 //	POST /v1/responses
 //	POST /v1/messages
 //
-// No inbound gateway API keys. Captcha via -auto pool, -captcha, or nv-captcha-token.
+// Optional inbound keys via -gateway-key. Captcha via -auto, -captcha, or nv-captcha-token.
 //
 // Usage:
 //
@@ -72,6 +72,10 @@ func main() {
 	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
+	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
+	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
+	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
+	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	statsOptions := nvidia.DefaultStatsLogOptions()
 	flag.Int64Var(&statsOptions.MaxBytes, "stats-max-bytes", statsOptions.MaxBytes, "maximum bytes of retained stats history")
 	flag.Int64Var(&statsOptions.SegmentBytes, "stats-segment-bytes", statsOptions.SegmentBytes, "maximum bytes per stats log segment")
@@ -79,6 +83,19 @@ func main() {
 	flag.DurationVar(&statsOptions.Retention, "stats-retention", statsOptions.Retention, "retention period for stats history")
 	flag.DurationVar(&statsOptions.ReadInterval, "stats-read-interval", statsOptions.ReadInterval, "minimum dashboard polling and uncached history read interval")
 	flag.Parse()
+	adminTokenSet := false
+	flag.Visit(func(f *flag.Flag) { adminTokenSet = adminTokenSet || f.Name == "admin-token" })
+	if !adminTokenSet {
+		*adminToken = os.Getenv("GNVIPI_ADMIN_TOKEN")
+	}
+	gatewayKeySet := false
+	flag.Visit(func(f *flag.Flag) { gatewayKeySet = gatewayKeySet || f.Name == "gateway-key" })
+	if !gatewayKeySet {
+		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
+	}
+	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
+		log.Fatal("request body limits must be positive")
+	}
 	if err := nvidia.ConfigureStatsLog(statsOptions); err != nil {
 		log.Fatalf("stats configuration: %v", err)
 	}
@@ -146,6 +163,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	defer os.RemoveAll(cfg.AuthDir)
+	hasGatewayKey := false
+	for _, key := range strings.Split(*gatewayKey, ",") {
+		if strings.TrimSpace(key) != "" {
+			hasGatewayKey = true
+			break
+		}
+	}
+	if !hasGatewayKey && !strings.EqualFold(cfg.Host, "localhost") && !net.ParseIP(cfg.Host).IsLoopback() {
+		log.Print("warning: non-loopback listener has no gateway key; /v1 and /mcp are unauthenticated (set -gateway-key or GNVIPI_GATEWAY_KEY)")
+	}
 
 	// Register /admin custom endpoints (e.g. OpenRouter) as OpenAI-compat
 	// providers so CLIProxyAPI routes their aliases.
@@ -252,6 +279,14 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// The SDK calls this before WithMiddleware and early route registration.
+				engine.Use(requestBodyLimit(*maxBodyBytes, *maxAdminBodyBytes))
+				// Attach identity before early routes or cycle dispatch can finish the request.
+				engine.Use(gatewayRequestContext())
+				// Guard the early catalog routes and cycle dispatch before WithMiddleware.
+				engine.Use(gatewayAuth(*gatewayKey))
+				// The SDK registers these routes before applying WithMiddleware.
+				engine.Use(adminAccess(*addr, *adminToken))
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {

@@ -1,0 +1,24 @@
+[
+  {
+    "type": "message_start",
+    "message": {
+      "id": "msg-1",
+      "role": "assistant",
+      "model": "resolved-model"
+    },
+    "usage": {}
+  },
+  {
+    "type": "block_start",
+    "block": {
+      "type": "text"
+    }
+  },
+  {
+    "type": "error",
+    "error": {
+      "kind": "rate_limit",
+      "message": "slow down"
+    }
+  }
+]

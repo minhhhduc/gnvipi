@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	utls "github.com/refraction-networking/utls"
 	"github.com/tidwall/sjson"
@@ -247,7 +248,8 @@ func statCopyDone(model string, start time.Time, t *statTee, status int, streame
 
 func copyProxyResponse(c *gin.Context, resp *http.Response, model string, start time.Time) {
 	for k, vv := range resp.Header {
-		if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+		if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") ||
+			strings.EqualFold(k, core.RequestIDHeader) && core.RequestContextFrom(c.Request.Context()) != nil {
 			continue
 		}
 		for _, v := range vv {
@@ -541,7 +543,8 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 
 		outH := c.Writer.Header()
 		for k, vv := range resp.Header {
-			if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+			if strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") ||
+				strings.EqualFold(k, core.RequestIDHeader) && core.RequestContextFrom(c.Request.Context()) != nil {
 				continue
 			}
 			for _, v := range vv {
@@ -588,6 +591,7 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 // x-opencode-session; dropping it while proxying makes direct calls work but
 // gateway calls fail with MissingSessionID.
 func forwardOpenCodeHeaders(dst, src *http.Request) {
+	core.PropagateRequestID(dst)
 	for name, values := range src.Header {
 		if !strings.HasPrefix(strings.ToLower(name), "x-opencode-") {
 			continue

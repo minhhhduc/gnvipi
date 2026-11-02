@@ -219,11 +219,6 @@ func (p *modelPrefs) addDeleted(id string) error {
 		p.deleted = map[string]struct{}{}
 	}
 	p.deleted[id] = struct{}{}
-	// Also hide it so it won't be served.
-	if p.hidden == nil {
-		p.hidden = map[string]struct{}{}
-	}
-	p.hidden[id] = struct{}{}
 	p.mu.Unlock()
 	return p.save()
 }
