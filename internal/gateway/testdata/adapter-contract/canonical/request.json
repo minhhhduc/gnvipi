@@ -1,0 +1,14 @@
+{
+  "model": "client-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ]
+}

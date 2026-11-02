@@ -1,0 +1,14 @@
+{
+  "id": "msg-1",
+  "model": "resolved-model",
+  "content": [
+    {
+      "type": "text",
+      "text": "Hello world"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "output_tokens": 2
+  }
+}

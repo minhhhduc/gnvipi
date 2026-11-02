@@ -45,7 +45,7 @@ func main() {
 			log.Fatalf("Failed to auto-extract captcha token: %v", err)
 		}
 		token = t
-		fmt.Printf("✓ Extracted captcha token: %s...\n", token[:30])
+		fmt.Printf("✓ Extracted captcha token: %s...\n", tokenPreview(token))
 
 	case *captcha != "":
 		token = *captcha
@@ -133,6 +133,15 @@ func writeSmooth(s string, delay time.Duration) {
 		s = s[size:]
 		time.Sleep(delay)
 	}
+}
+
+// tokenPreview shortens a token for diagnostic output without panicking on
+// tokens shorter than the preview length.
+func tokenPreview(token string) string {
+	if len(token) > 30 {
+		return token[:30]
+	}
+	return token
 }
 
 // extractCaptchaToken loads the NVIDIA Playground, triggers hCaptcha, and

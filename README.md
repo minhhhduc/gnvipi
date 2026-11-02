@@ -1,4 +1,4 @@
-﻿# gnvipi — NVIDIA Playground Gateway
+# gnvipi — NVIDIA Playground Gateway
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -12,12 +12,14 @@ for model management and per-request statistics.
 
 Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
 inbound format translation; this repo provides the NVIDIA provider executor,
-the captcha automation, and the admin surface. Client inference and MCP remain
-unauthenticated by default. Admin access is open only on loopback listeners;
-non-loopback listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default
-`-addr :8080`, Windows helper, and Docker Compose expose all interfaces. Use
-`-addr 127.0.0.1:8080`, or restrict client API access with a firewall or an
-authenticated reverse proxy. Placeholder Claude keys do not secure the gateway.
+the captcha automation, and the admin surface. **Client API-key authentication
+is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`,
+`/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth
+behavior remains. Admin access is open only on loopback listeners; non-loopback
+listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default `-addr :8080`,
+Windows helper, and Docker Compose expose all interfaces. Use a loopback bind
+or restrict access with a firewall or authenticated reverse proxy. Placeholder
+Claude credentials do not secure the gateway.
 
 ## Endpoints
 
@@ -90,6 +92,13 @@ header. No NVIDIA API key is required; custom-provider requests do not use
 captcha. NVIDIA `/v1/messages/count_tokens` is a local approximation, not an
 exact model-tokenizer or billing count.
 
+With gateway authentication enabled, set your client's `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY` to a gateway key. Bearer `Authorization` and `x-api-key` are
+accepted; if both are sent, they must contain the same valid key. Comma-separated
+keys support rotation. Client credentials are removed before provider calls;
+provider credentials stay separate. `/healthz` remains public. An explicit
+`-gateway-key` overrides the environment, including an empty value to disable it.
+
 ## Admin console — `/admin`
 
 When an admin token is configured, visit `/admin` to sign in. API clients may
@@ -112,6 +121,9 @@ One page per tab (`?page=`), each doing exactly one thing:
 - **`?page=models`** — toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom endpoints (including
   `messages_only` and `responses_only` upstream modes; select only one).
+  Delete/restore does not change an independent on/off mask. Historical files
+  that already stored a deleted model in `masks_id` keep that explicit mask;
+  if it was only deletion-generated, re-enable the model once after restoring.
 - **`?page=config`** — select the target for virtual `automode` (Anthropic
   Messages requests only), configure `cycle`, and choose web-search settings.
   `automode` may target an enabled real model or `cycle`; the alias rewrite
@@ -165,6 +177,11 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 - **Claude Code**: mask changes refresh `/v1/models` and write a best-effort
   Claude model-discovery cache; `.\scripts\run.ps1 -Claude` sets the base URL
   and launches Claude Code.
+- **Request identity**: safe inbound `X-Request-Id` values are echoed and forwarded
+  to custom upstreams; otherwise a random ID is generated. Upstream response IDs
+  cannot replace the canonical client ID. The normalized core exposes an opt-in,
+  once-only IR usage recorder with first-byte timing and JSON access logs; legacy
+  traffic keeps its existing recorder and is not counted twice.
 
 ## Notable flags
 
@@ -183,12 +200,20 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -captcha-select-budget D  benchmark playground URLs, persist champion
 -addr HOST:PORT           listen address (default :8080 = all interfaces)
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
+-max-body-bytes N         client API body limit (default 32 MiB)
+-max-admin-body-bytes N   admin body limit (default 1 MiB)
+-gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
 -admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
 ```
 
 With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
 `run.ps1` uses 6 tokens and 3 workers. Run `go run ./cmd/serve -h` for all flags
 and defaults.
+
+Body limits apply before routing, including SDK inference aliases. Oversized
+requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
+and decoded `zstd` bodies; every layer of a supported encoding stack is bounded.
+Both limits must be positive.
 
 ## Data and configuration
 
