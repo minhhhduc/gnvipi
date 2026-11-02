@@ -243,6 +243,8 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// Attach identity before early routes or cycle dispatch can finish the request.
+				engine.Use(gatewayRequestContext())
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
