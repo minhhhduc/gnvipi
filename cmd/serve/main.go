@@ -7,7 +7,7 @@
 //	POST /v1/responses
 //	POST /v1/messages
 //
-// No inbound gateway API keys. Captcha via -auto pool, -captcha, or nv-captcha-token.
+// Optional inbound keys via -gateway-key. Captcha via -auto, -captcha, or nv-captcha-token.
 //
 // Usage:
 //
@@ -72,7 +72,13 @@ func main() {
 	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
+	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
 	flag.Parse()
+	gatewayKeySet := false
+	flag.Visit(func(f *flag.Flag) { gatewayKeySet = gatewayKeySet || f.Name == "gateway-key" })
+	if !gatewayKeySet {
+		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
+	}
 
 	if *modelsFile != "" {
 		prefs.load(*modelsFile)
@@ -137,6 +143,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 	defer os.RemoveAll(cfg.AuthDir)
+	hasGatewayKey := false
+	for _, key := range strings.Split(*gatewayKey, ",") {
+		if strings.TrimSpace(key) != "" {
+			hasGatewayKey = true
+			break
+		}
+	}
+	if !hasGatewayKey && !strings.EqualFold(cfg.Host, "localhost") && !net.ParseIP(cfg.Host).IsLoopback() {
+		log.Print("warning: non-loopback listener has no gateway key; /v1 and /mcp are unauthenticated (set -gateway-key or GNVIPI_GATEWAY_KEY)")
+	}
 
 	// Register /admin custom endpoints (e.g. OpenRouter) as OpenAI-compat
 	// providers so CLIProxyAPI routes their aliases.
@@ -243,6 +259,8 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// Guard the early catalog routes and cycle dispatch before WithMiddleware.
+				engine.Use(gatewayAuth(*gatewayKey))
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
