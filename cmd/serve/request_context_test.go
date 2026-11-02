@@ -19,10 +19,10 @@ import (
 
 type requestContextRecorder struct {
 	calls atomic.Int32
-	done  chan core.Completion
+	done  chan *core.Completion
 }
 
-func (r *requestContextRecorder) Record(c core.Completion) {
+func (r *requestContextRecorder) Record(c *core.Completion) {
 	r.calls.Add(1)
 	r.done <- c
 }
@@ -43,7 +43,7 @@ func TestGatewayRequestContextAcceptsAndGeneratesSafeIDs(t *testing.T) {
 				c.String(http.StatusOK, "second byte")
 			})
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/messages", http.NoBody)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", http.NoBody)
 			req.Header.Set(core.RequestIDHeader, inbound)
 			e.ServeHTTP(w, req)
 			id := w.Header().Get(core.RequestIDHeader)
@@ -67,7 +67,7 @@ func TestGatewayRequestContextRejectsAmbiguousIDs(t *testing.T) {
 	e.GET("/v1/models", func(c *gin.Context) { c.Status(http.StatusOK) })
 	seen := make(map[string]bool)
 	for range 32 {
-		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", http.NoBody)
 		req.Header.Add(core.RequestIDHeader, "first")
 		req.Header.Add(core.RequestIDHeader, "second")
 		w := httptest.NewRecorder()
@@ -84,7 +84,7 @@ func TestGatewayRequestContextCompletesOptedInTrafficOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, outcome := range []string{"success", "error", "cancel"} {
 		t.Run(outcome, func(t *testing.T) {
-			r := &requestContextRecorder{done: make(chan core.Completion, 8)}
+			r := &requestContextRecorder{done: make(chan *core.Completion, 8)}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			e := gin.New()
@@ -125,7 +125,7 @@ func TestGatewayRequestContextCompletesOptedInTrafficOnce(t *testing.T) {
 func TestGatewayRequestContextReusesCycleContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rc := core.NewRequestContext("original-cycle-request")
-	r := &requestContextRecorder{done: make(chan core.Completion, 8)}
+	r := &requestContextRecorder{done: make(chan *core.Completion, 8)}
 	rc.BeginRecording(t.Context(), r)
 	e := gin.New()
 	e.Use(gatewayRequestContext())
@@ -166,7 +166,9 @@ func TestGatewayRequestContextPropagatesIDsWithoutDoubleCountingLegacy(t *testin
 				observed <- struct{ id, path string }{req.Header.Get(core.RequestIDHeader), req.URL.Path}
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set(core.RequestIDHeader, "different-upstream-id")
-				io.WriteString(w, `{"id":"resp_1","output":[],"usage":{"input_tokens":7,"output_tokens":3}}`)
+				if _, err := io.WriteString(w, `{"id":"resp_1","output":[],"usage":{"input_tokens":7,"output_tokens":3}}`); err != nil {
+					t.Errorf("write upstream response: %v", err)
+				}
 			}))
 			defer upstream.Close()
 			oldCompat, oldMessages := compatClient, messagesOnlyClient
@@ -183,7 +185,7 @@ func TestGatewayRequestContextPropagatesIDsWithoutDoubleCountingLegacy(t *testin
 			e := gin.New()
 			e.Use(gatewayRequestContext(), anthropicResponsesPassthrough(p), customOpenAIResponsesPassthrough(p), customOpenAICompatPassthrough(p), messagesOnlyPassthrough(p), requestLogger(p))
 			e.POST(tc.path, func(c *gin.Context) { t.Fatal("passthrough did not handle request") })
-			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.path, strings.NewReader(tc.body))
 			req.Header.Set(core.RequestIDHeader, "request-"+tc.name)
 			w := httptest.NewRecorder()
 			e.ServeHTTP(w, req)

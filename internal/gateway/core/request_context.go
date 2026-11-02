@@ -42,7 +42,7 @@ type RequestContext struct {
 // NewRequestContext accepts a bounded, visible ASCII client ID; invalid IDs
 // are replaced using crypto/rand, never timestamps or a process counter.
 func NewRequestContext(id string) *RequestContext {
-	valid := len(id) > 0 && len(id) <= 128
+	valid := id != "" && len(id) <= 128
 	for i := 0; valid && i < len(id); i++ {
 		valid = id[i] >= 0x21 && id[i] <= 0x7e
 	}
@@ -84,8 +84,9 @@ type Completion struct {
 // Recorder consumes normalized usage, without inspecting response bytes.
 // Callers must go through BeginRecording/Complete rather than invoking Record
 // directly: the request context arbitrates competing terminal paths.
+// Record receives a non-nil completion; treat it and Request as immutable.
 type Recorder interface {
-	Record(Completion)
+	Record(*Completion)
 }
 
 // BeginRecording opts only normalized pipeline requests into the recorder.
@@ -138,7 +139,7 @@ func (r *RequestContext) Complete(usage ir.Usage, err error) bool {
 		UpstreamProtocol: r.UpstreamProtocol, Start: r.Start, FirstByte: r.FirstByte,
 		Stream: r.Stream,
 	}
-	completion := Completion{Request: request, Usage: usage, Duration: max(time.Since(r.Start), 0), Err: err}
+	completion := &Completion{Request: request, Usage: usage, Duration: max(time.Since(r.Start), 0), Err: err}
 	if !r.FirstByte.IsZero() {
 		completion.TTFB = max(r.FirstByte.Sub(r.Start), 0)
 	}
@@ -156,14 +157,14 @@ func (r *RequestContext) Complete(usage ir.Usage, err error) bool {
 // The existing collector's success/error accounting semantics are preserved.
 type DefaultRecorder struct{}
 
-func (DefaultRecorder) Record(c Completion) {
+func (DefaultRecorder) Record(c *Completion) {
 	r := c.Request
 	model := r.ClientModel
 	if model == "" {
 		model = r.UpstreamModel
 	}
 	nvidia.GlobalStats.Observe(model, uint64(max(c.Usage.InputTokens, 0)), uint64(max(c.Usage.OutputTokens, 0)), c.Duration, c.TTFB, r.Stream, c.Err != nil)
-	line, _ := json.Marshal(struct {
+	line, err := json.Marshal(struct {
 		RequestID        string      `json:"request_id"`
 		InboundProtocol  ir.Protocol `json:"inbound_protocol"`
 		ClientModel      string      `json:"client_model"`
@@ -177,5 +178,9 @@ func (DefaultRecorder) Record(c Completion) {
 		Error            bool        `json:"error"`
 	}{r.ID, r.InboundProtocol, r.ClientModel, r.ResolvedProvider, r.UpstreamModel,
 		r.UpstreamProtocol, r.Stream, c.Duration.Milliseconds(), c.TTFB.Milliseconds(), c.Usage, c.Err != nil})
+	if err != nil {
+		log.Print("gateway access log: JSON encoding failed")
+		return
+	}
 	log.Print(string(line))
 }

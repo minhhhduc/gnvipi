@@ -22,28 +22,30 @@ import (
 func TestMain(m *testing.M) {
 	// The collector keeps its append handle open for the process lifetime.
 	// Match the NVIDIA tests' stable temp-file convention on Windows.
-	os.Setenv("GNVIPI_STATS_FILE", filepath.Join(os.TempDir(), "gnvipi-core-test-stats.jsonl"))
+	if err := os.Setenv("GNVIPI_STATS_FILE", filepath.Join(os.TempDir(), "gnvipi-core-test-stats.jsonl")); err != nil {
+		log.Fatalf("set test stats environment: %v", err)
+	}
 	os.Exit(m.Run())
 }
 
 type captureRecorder struct {
 	calls atomic.Int32
-	done  chan Completion
+	done  chan *Completion
 }
 
-func (r *captureRecorder) Record(c Completion) {
+func (r *captureRecorder) Record(c *Completion) {
 	r.calls.Add(1)
 	r.done <- c
 }
 
-func receiveCompletion(t *testing.T, r *captureRecorder) Completion {
+func receiveCompletion(t *testing.T, r *captureRecorder) *Completion {
 	t.Helper()
 	select {
 	case c := <-r.done:
 		return c
 	case <-time.After(5 * time.Second):
 		t.Fatal("request did not complete")
-		return Completion{}
+		return nil
 	}
 }
 
@@ -58,7 +60,7 @@ func TestRequestCompletionRecordsOneTerminalOutcome(t *testing.T) {
 		{"client_cancel", context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &captureRecorder{done: make(chan Completion, 8)}
+			r := &captureRecorder{done: make(chan *Completion, 8)}
 			rc := NewRequestContext("terminal-" + tc.name)
 			rc.ClientModel = "provider/client-model"
 			rc.ResolvedProvider = "provider"
@@ -86,7 +88,7 @@ func TestRequestCompletionRecordsOneTerminalOutcome(t *testing.T) {
 
 func TestRequestCancellationRecordsWithoutExplicitCompletion(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	r := &captureRecorder{done: make(chan Completion, 8)}
+	r := &captureRecorder{done: make(chan *Completion, 8)}
 	rc := NewRequestContext("cancel")
 	rc.BeginRecording(ctx, r)
 	cancel()
@@ -99,7 +101,7 @@ func TestRequestCancellationRecordsWithoutExplicitCompletion(t *testing.T) {
 func TestRequestSuccessDisarmsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	r := &captureRecorder{done: make(chan Completion, 8)}
+	r := &captureRecorder{done: make(chan *Completion, 8)}
 	rc := NewRequestContext("success-before-cancel")
 	rc.BeginRecording(ctx, r)
 	rc.Complete(ir.Usage{InputTokens: 2}, nil)
@@ -113,7 +115,7 @@ func TestRequestSuccessDisarmsCancellation(t *testing.T) {
 func TestRequestCanceledBeforeSuccessCannotRecordSuccess(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	r := &captureRecorder{done: make(chan Completion, 8)}
+	r := &captureRecorder{done: make(chan *Completion, 8)}
 	rc := NewRequestContext("already-canceled")
 	rc.BeginRecording(ctx, r)
 	rc.Complete(ir.Usage{}, nil)
@@ -124,7 +126,7 @@ func TestRequestCanceledBeforeSuccessCannotRecordSuccess(t *testing.T) {
 
 func TestRequestCompletionConcurrentRequestsAndTerminalPaths(t *testing.T) {
 	const requests = 64
-	r := &captureRecorder{done: make(chan Completion, requests*4)}
+	r := &captureRecorder{done: make(chan *Completion, requests*4)}
 	var wg sync.WaitGroup
 	for i := range requests {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -150,7 +152,7 @@ func TestRequestCompletionConcurrentRequestsAndTerminalPaths(t *testing.T) {
 }
 
 func TestRequestFirstByteIsNotOverwritten(t *testing.T) {
-	r := &captureRecorder{done: make(chan Completion, 8)}
+	r := &captureRecorder{done: make(chan *Completion, 8)}
 	rc := NewRequestContext("first-byte")
 	first := rc.Start.Add(10 * time.Millisecond)
 	rc.FirstByte = first
