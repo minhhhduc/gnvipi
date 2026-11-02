@@ -104,6 +104,9 @@ One page per tab (`?page=`), each doing exactly one thing:
 - **`?page=models`** — toggle every model on/off (persisted), delete/restore
   models from the catalog, add/remove custom endpoints (including
   `messages_only` and `responses_only` upstream modes; select only one).
+  Delete/restore does not change an independent on/off mask. Historical files
+  that already stored a deleted model in `masks_id` keep that explicit mask;
+  if it was only deletion-generated, re-enable the model once after restoring.
 - **`?page=config`** — select the target for virtual `automode` (Anthropic
   Messages requests only), configure `cycle`, and choose web-search settings.
   `automode` may target an enabled real model or `cycle`; the alias rewrite
