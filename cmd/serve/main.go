@@ -72,7 +72,12 @@ func main() {
 	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
+	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
+	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	flag.Parse()
+	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
+		log.Fatal("request body limits must be positive")
+	}
 
 	if *modelsFile != "" {
 		prefs.load(*modelsFile)
@@ -243,6 +248,8 @@ func main() {
 			// CLIProxyAPI already registers GET/HEAD /healthz; re-registering panics.
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
+				// The SDK calls this before WithMiddleware and early route registration.
+				engine.Use(requestBodyLimit(*maxBodyBytes, *maxAdminBodyBytes))
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
