@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -262,7 +263,9 @@ func adminAccessError(c *gin.Context, status int, message string) {
 		c.Data(status, "text/html; charset=utf-8", []byte("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Admin access</title><h1>Admin access</h1><p>"+html.EscapeString(message)+"</p></html>"))
 		return
 	}
-	_ = gwerr.Write(c.Writer, gwerr.ProtocolOpenAIChat, &gwerr.Error{Status: status, Kind: gwerr.KindFromHTTPStatus(status), Message: message})
+	if err := gwerr.Write(c.Writer, gwerr.ProtocolOpenAIChat, &gwerr.Error{Status: status, Kind: gwerr.KindFromHTTPStatus(status), Message: message}); err != nil {
+		log.Printf("write admin access error: %v", err)
+	}
 }
 
 func adminLoginPage(c *gin.Context, status int, message string) {

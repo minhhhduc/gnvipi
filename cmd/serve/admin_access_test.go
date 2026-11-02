@@ -22,8 +22,12 @@ func adminAccessTestEngine(addr, token string) *gin.Engine {
 	return engine
 }
 
-func adminAccessRequest(engine *gin.Engine, method, target string, body io.Reader, headers map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, target, body)
+func adminAccessRequest(t *testing.T, engine *gin.Engine, method, target string, body io.Reader, headers map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	if body == nil {
+		body = http.NoBody
+	}
+	req := httptest.NewRequestWithContext(t.Context(), method, target, body)
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
@@ -57,7 +61,7 @@ func TestAdminAccessBindProtection(t *testing.T) {
 		{"not-an-address", http.StatusForbidden},
 	} {
 		t.Run(tc.addr, func(t *testing.T) {
-			response := adminAccessRequest(adminAccessTestEngine(tc.addr, ""), http.MethodGet, "http://localhost:8080/admin", nil, nil)
+			response := adminAccessRequest(t, adminAccessTestEngine(tc.addr, ""), http.MethodGet, "http://localhost:8080/admin", nil, nil)
 			if response.Code != tc.want {
 				t.Fatalf("status = %d, want %d", response.Code, tc.want)
 			}
@@ -67,7 +71,7 @@ func TestAdminAccessBindProtection(t *testing.T) {
 		})
 	}
 	engine := adminAccessTestEngine("127.0.0.1:8080", "")
-	response := adminAccessRequest(engine, http.MethodPost, "http://attacker.example:8080/admin/providers", nil, map[string]string{"Origin": "http://attacker.example:8080"})
+	response := adminAccessRequest(t, engine, http.MethodPost, "http://attacker.example:8080/admin/providers", nil, map[string]string{"Origin": "http://attacker.example:8080"})
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("loopback access accepted a non-loopback Host: %d", response.Code)
 	}
@@ -104,7 +108,7 @@ func TestAdminAccessMutationOrigins(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := adminAccessTestEngine("localhost:8080", "")
 			for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-				response := adminAccessRequest(engine, method, tc.target, nil, tc.headers)
+				response := adminAccessRequest(t, engine, method, tc.target, nil, tc.headers)
 				if response.Code != tc.want {
 					t.Fatalf("%s status = %d, want %d", method, response.Code, tc.want)
 				}
@@ -113,7 +117,7 @@ func TestAdminAccessMutationOrigins(t *testing.T) {
 	}
 	engine := adminAccessTestEngine("localhost:8080", "")
 	for _, name := range []string{"Origin", "Sec-Fetch-Site"} {
-		req := httptest.NewRequest(http.MethodPost, "http://localhost:8080/admin/providers", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://localhost:8080/admin/providers", http.NoBody)
 		req.Header.Add(name, map[string]string{"Origin": "http://localhost:8080", "Sec-Fetch-Site": "same-origin"}[name])
 		req.Header.Add(name, map[string]string{"Origin": "http://evil.example", "Sec-Fetch-Site": "cross-site"}[name])
 		response := httptest.NewRecorder()
@@ -145,7 +149,7 @@ func TestAdminAccessTokens(t *testing.T) {
 			{"token cannot bypass origin", map[string]string{"Authorization": "Bearer " + token, "Origin": "http://evil.example"}, http.StatusForbidden},
 		} {
 			t.Run(addr+"/"+tc.name, func(t *testing.T) {
-				response := adminAccessRequest(engine, http.MethodPost, "http://localhost:8080/admin/providers", nil, tc.headers)
+				response := adminAccessRequest(t, engine, http.MethodPost, "http://localhost:8080/admin/providers", nil, tc.headers)
 				if response.Code != tc.want {
 					t.Fatalf("status = %d, want %d", response.Code, tc.want)
 				}
@@ -154,11 +158,11 @@ func TestAdminAccessTokens(t *testing.T) {
 				}
 			})
 		}
-		response := adminAccessRequest(engine, http.MethodGet, "http://localhost:8080/admin?token="+token, nil, nil)
+		response := adminAccessRequest(t, engine, http.MethodGet, "http://localhost:8080/admin?token="+token, nil, nil)
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("query token granted access: %d", response.Code)
 		}
-		response = adminAccessRequest(engine, http.MethodGet, "http://localhost:8080/admin", nil, map[string]string{"Accept": "text/html", "Sec-Fetch-Mode": "navigate"})
+		response = adminAccessRequest(t, engine, http.MethodGet, "http://localhost:8080/admin", nil, map[string]string{"Accept": "text/html", "Sec-Fetch-Mode": "navigate"})
 		if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin/login" {
 			t.Fatalf("browser was not directed to login: %d %q", response.Code, response.Header().Get("Location"))
 		}
@@ -180,7 +184,7 @@ func TestAdminAccessLoginSession(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := adminAccessTestEngine(tc.addr, token)
-			response := adminAccessRequest(engine, http.MethodGet, tc.origin+"/admin/login", nil, map[string]string{"Accept": "text/html"})
+			response := adminAccessRequest(t, engine, http.MethodGet, tc.origin+"/admin/login", nil, map[string]string{"Accept": "text/html"})
 			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `action="/admin/login"`) || !strings.Contains(response.Body.String(), `type="password"`) || strings.Contains(response.Body.String(), token) {
 				t.Fatalf("unusable or leaking login form: %d %s", response.Code, response.Body.String())
 			}
@@ -188,11 +192,11 @@ func TestAdminAccessLoginSession(t *testing.T) {
 				t.Fatal("login response allows caching")
 			}
 			headers := map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Accept": "text/html", "Origin": tc.origin, "Sec-Fetch-Site": "same-origin"}
-			response = adminAccessRequest(engine, http.MethodPost, tc.origin+"/admin/login", strings.NewReader(url.Values{"token": {"wrong"}}.Encode()), headers)
+			response = adminAccessRequest(t, engine, http.MethodPost, tc.origin+"/admin/login", strings.NewReader(url.Values{"token": {"wrong"}}.Encode()), headers)
 			if response.Code != http.StatusUnauthorized || len(response.Result().Cookies()) != 0 {
 				t.Fatalf("invalid login granted a session: %d", response.Code)
 			}
-			response = adminAccessRequest(engine, http.MethodPost, tc.origin+"/admin/login", strings.NewReader(url.Values{"token": {token}}.Encode()), headers)
+			response = adminAccessRequest(t, engine, http.MethodPost, tc.origin+"/admin/login", strings.NewReader(url.Values{"token": {token}}.Encode()), headers)
 			cookies := response.Result().Cookies()
 			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin" || len(cookies) != 1 {
 				t.Fatalf("login failed: %d %q, cookies=%d", response.Code, response.Header().Get("Location"), len(cookies))
@@ -201,35 +205,35 @@ func TestAdminAccessLoginSession(t *testing.T) {
 			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure != tc.secure || cookie.Path != "/admin" || cookie.Domain != "" || cookie.MaxAge <= 0 || cookie.Expires.IsZero() || strings.Contains(cookie.Value, token) {
 				t.Fatal("session cookie is insecure, unbounded, or contains the admin token")
 			}
-			response = adminAccessRequest(engine, http.MethodGet, tc.origin+"/admin", nil, nil, cookie)
+			response = adminAccessRequest(t, engine, http.MethodGet, tc.origin+"/admin", nil, nil, cookie)
 			if response.Code != http.StatusOK {
 				t.Fatalf("session cannot open admin: %d", response.Code)
 			}
 			if tc.secure {
-				response = adminAccessRequest(engine, http.MethodGet, strings.Replace(tc.origin, "https://", "http://", 1)+"/admin", nil, nil, cookie)
+				response = adminAccessRequest(t, engine, http.MethodGet, strings.Replace(tc.origin, "https://", "http://", 1)+"/admin", nil, nil, cookie)
 				if response.Code != http.StatusUnauthorized {
 					t.Fatalf("remote cookie authenticated over plaintext HTTP: %d", response.Code)
 				}
 			}
-			response = adminAccessRequest(engine, http.MethodPost, tc.origin+"/admin/providers", nil, map[string]string{"Origin": tc.origin, "Sec-Fetch-Site": "same-origin"}, cookie)
+			response = adminAccessRequest(t, engine, http.MethodPost, tc.origin+"/admin/providers", nil, map[string]string{"Origin": tc.origin, "Sec-Fetch-Site": "same-origin"}, cookie)
 			if response.Code != http.StatusOK {
 				t.Fatalf("session cannot mutate admin: %d", response.Code)
 			}
-			response = adminAccessRequest(engine, http.MethodPost, tc.origin+"/admin/providers", nil, map[string]string{"Origin": "https://evil.example"}, cookie)
+			response = adminAccessRequest(t, engine, http.MethodPost, tc.origin+"/admin/providers", nil, map[string]string{"Origin": "https://evil.example"}, cookie)
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("session bypassed CSRF: %d", response.Code)
 			}
-			response = adminAccessRequest(engine, http.MethodGet, tc.origin+"/admin", nil, map[string]string{"Authorization": "Bearer wrong"}, cookie)
+			response = adminAccessRequest(t, engine, http.MethodGet, tc.origin+"/admin", nil, map[string]string{"Authorization": "Bearer wrong"}, cookie)
 			if response.Code != http.StatusUnauthorized {
 				t.Fatalf("invalid explicit credentials fell back to cookie: %d", response.Code)
 			}
-			response = adminAccessRequest(adminAccessTestEngine(tc.addr, token), http.MethodGet, tc.origin+"/admin", nil, nil, cookie)
+			response = adminAccessRequest(t, adminAccessTestEngine(tc.addr, token), http.MethodGet, tc.origin+"/admin", nil, nil, cookie)
 			if response.Code != http.StatusUnauthorized {
 				t.Fatalf("session survived server key rotation: %d", response.Code)
 			}
 			tampered := *cookie
 			tampered.Value = "0" + cookie.Value
-			response = adminAccessRequest(engine, http.MethodGet, tc.origin+"/admin", nil, nil, &tampered)
+			response = adminAccessRequest(t, engine, http.MethodGet, tc.origin+"/admin", nil, nil, &tampered)
 			if response.Code != http.StatusUnauthorized {
 				t.Fatalf("tampered session accepted: %d", response.Code)
 			}
@@ -240,7 +244,7 @@ func TestAdminAccessLoginSession(t *testing.T) {
 func TestAdminAccessLoginBoundaries(t *testing.T) {
 	const token = "login-boundary-secret"
 	engine := adminAccessTestEngine(":8080", token)
-	response := adminAccessRequest(engine, http.MethodPost, "http://gateway.example:8080/admin/login", strings.NewReader("token="+token), map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": "http://gateway.example:8080"})
+	response := adminAccessRequest(t, engine, http.MethodPost, "http://gateway.example:8080/admin/login", strings.NewReader("token="+token), map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": "http://gateway.example:8080"})
 	if response.Code != http.StatusForbidden || len(response.Result().Cookies()) != 0 {
 		t.Fatalf("remote plaintext login issued a cookie: %d", response.Code)
 	}
@@ -250,13 +254,13 @@ func TestAdminAccessLoginBoundaries(t *testing.T) {
 		{"Content-Type": "application/x-www-form-urlencoded", "Origin": "http://localhost:8080", "Sec-Fetch-Site": "cross-site"},
 		{"Content-Type": "application/x-www-form-urlencoded", "Origin": "null"},
 	} {
-		response = adminAccessRequest(engine, http.MethodPost, "http://localhost:8080/admin/login", strings.NewReader("token="+token), headers)
+		response = adminAccessRequest(t, engine, http.MethodPost, "http://localhost:8080/admin/login", strings.NewReader("token="+token), headers)
 		if response.Code != http.StatusForbidden || len(response.Result().Cookies()) != 0 {
 			t.Fatalf("cross-site login issued a cookie: %d", response.Code)
 		}
 	}
 	for _, body := range []string{"", "token=wrong&token=" + token, "token=" + strings.Repeat("a", 9000)} {
-		response = adminAccessRequest(engine, http.MethodPost, "http://localhost:8080/admin/login", strings.NewReader(body), map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": "http://localhost:8080"})
+		response = adminAccessRequest(t, engine, http.MethodPost, "http://localhost:8080/admin/login", strings.NewReader(body), map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": "http://localhost:8080"})
 		if response.Code != http.StatusBadRequest && response.Code != http.StatusUnauthorized {
 			t.Fatalf("invalid login form accepted: %d", response.Code)
 		}
@@ -265,7 +269,7 @@ func TestAdminAccessLoginBoundaries(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"/v1/models", "/administrator"} {
-		response = adminAccessRequest(adminAccessTestEngine(":8080", ""), http.MethodGet, "http://localhost:8080"+path, nil, nil)
+		response = adminAccessRequest(t, adminAccessTestEngine(":8080", ""), http.MethodGet, "http://localhost:8080"+path, nil, nil)
 		if response.Code != http.StatusOK {
 			t.Fatalf("non-admin path %s was blocked: %d", path, response.Code)
 		}
@@ -283,7 +287,7 @@ func TestAdminAccessSessionExpiration(t *testing.T) {
 		{"1.session-nonce", false},
 		{"4102444800.session-nonce", true},
 	} {
-		req := httptest.NewRequest(http.MethodGet, "https://gateway.example/admin", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://gateway.example/admin", http.NoBody)
 		req.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: tc.payload + "." + adminSessionSignature(tc.payload, key)})
 		if got := adminValidSession(req, key); got != tc.want {
 			t.Fatalf("session %q valid = %v, want %v", tc.payload, got, tc.want)

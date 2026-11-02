@@ -19,7 +19,7 @@ func TestAdminAccessEmptyConnectionStateIsPlainHTTP(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := adminAccessTestEngine(tc.addr, "transport-token")
-			req := httptest.NewRequest(http.MethodPost, tc.target+"/admin/login", strings.NewReader(url.Values{"token": {"transport-token"}}.Encode()))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.target+"/admin/login", strings.NewReader(url.Values{"token": {"transport-token"}}.Encode()))
 			// Go 1.26 net.Conn wrappers may expose an empty ConnectionState on HTTP.
 			req.TLS = &tls.ConnectionState{}
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
