@@ -24,12 +24,12 @@ type ChampionState struct {
 	mu sync.Mutex
 
 	ChampionURL  string    `json:"champion_url"`
-	ScoreMS      int64     `json:"score_ms"`        // median steady-state extract latency
-	SuccessRate  float64   `json:"success_rate"`    // 1.0 if every trial minted a token
+	ScoreMS      int64     `json:"score_ms"`     // median steady-state extract latency
+	SuccessRate  float64   `json:"success_rate"` // 1.0 if every trial minted a token
 	LastOK       time.Time `json:"last_ok"`
 	LastFailed   time.Time `json:"last_failed"`
 	FailStreak   int       `json:"fail_streak"`
-	FallbackURLs []string  `json:"fallback_urls"`   // ranked by ScoreMS ascending
+	FallbackURLs []string  `json:"fallback_urls"` // ranked by ScoreMS ascending
 	Updated      time.Time `json:"updated"`
 }
 
@@ -43,7 +43,10 @@ func ChampionStateFile() string {
 	// ~/Library/Caches on macOS — same convention as nvpi.
 	base, err := os.UserCacheDir()
 	if err != nil || base == "" {
-		base, _ = os.UserHomeDir()
+		base, err = os.UserHomeDir()
+		if err != nil {
+			log.Printf("champion state: neither user cache nor home directory could be resolved; persisting relative to current directory: %v", err)
+		}
 	}
 	return filepath.Join(base, "gnvipi", "playground-state.json")
 }

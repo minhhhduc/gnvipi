@@ -192,7 +192,7 @@ func (b *Browser) Extract(ctx context.Context) (string, error) {
 	})
 	if navErr != nil {
 		b.warmed = false
-		return "", fmt.Errorf("sticky execute failed (%v); re-navigate failed: %w", err, navErr)
+		return "", fmt.Errorf("sticky execute failed (%w); re-navigate failed: %w", err, navErr)
 	}
 	b.warmed = true
 	b.lastOK = time.Now()
@@ -207,7 +207,7 @@ func (b *Browser) Extract(ctx context.Context) (string, error) {
 //
 // ponytail: playground batch is N serial sticky executes — same per-borrow
 // cost, no throughput gain. Switch to -captcha-harness=true to actually
-// realise the speedup.
+// realize the speedup.
 func (b *Browser) ExtractN(ctx context.Context, n int) ([]string, error) {
 	if n <= 1 {
 		t, err := b.Extract(ctx)

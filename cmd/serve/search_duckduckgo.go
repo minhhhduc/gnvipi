@@ -24,7 +24,7 @@ func (d *ddgBackend) Healthy() bool { return d.client.health.Healthy() }
 
 // Adapt mirrors Bing's syntax minus the site-restriction variant: DDG applies
 // OR-groups inconsistently and drops results, so only the broad query is sent.
-func (d *ddgBackend) Adapt(ctx SearchContext) QueryPlan {
+func (d *ddgBackend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: ddgName, MaxResults: 8}
 	var parts []string
 	if ctx.Instrument != "" {
@@ -55,14 +55,17 @@ func (d *ddgBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(q)
-		_, body, err := d.client.do(ctx, target, nil)
+		body, err := d.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {
 				return results, nil
 			}
 			return nil, err
 		}
-		page, _ := url.Parse(target)
+		page, err := url.Parse(target)
+		if err != nil {
+			return nil, err
+		}
 		parsed := parseDDGResults(body, page)
 		results = append(results, parsed...)
 		if len(results) >= plan.MaxResults {

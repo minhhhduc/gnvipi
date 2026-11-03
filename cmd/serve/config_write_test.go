@@ -176,7 +176,7 @@ func TestAdminProvidersRejectsControlCharacters(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/providers", strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
-	adminRoutes(c, nil, func() []gatewayModel { return nil })
+	adminRoutes(c, nil)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())

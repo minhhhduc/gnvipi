@@ -56,6 +56,12 @@ import (
 var version = "dev"
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() (err error) {
 	addr := flag.String("addr", ":8080", "listen address")
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (consumed on first use)")
 	auto := flag.Bool("auto", false, "prewarm captcha tokens via shared Chrome + pool")
@@ -69,7 +75,7 @@ func main() {
 	captchaWait := flag.Duration("captcha-wait", 30*time.Second, "max wait for a pooled captcha token per request (0=block until ready); then 503")
 	modelsFile := flag.String("models-file", "internal/models/playground_models.json", "path to save hidden/deleted models and custom endpoints")
 	chromeProxy := flag.String("chrome-proxy", "", "proxy for captcha Chrome and upstream API (e.g. socks5://host:port); falls back to CHROME_PROXY")
-	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realise speedup)")
+	captchaHarness := flag.Bool("captcha-harness", false, "mint tokens on a local data: HTML harness page instead of a real playground URL (lower RAM; requires -pool-batch to realize speedup)")
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, run a sliding-window benchmark across playground candidates at startup to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
@@ -94,10 +100,10 @@ func main() {
 		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
 	}
 	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
-		log.Fatal("request body limits must be positive")
+		return errors.New("request body limits must be positive")
 	}
 	if err := nvidia.ConfigureStatsLog(statsOptions); err != nil {
-		log.Fatalf("stats configuration: %v", err)
+		return fmt.Errorf("stats configuration: %w", err)
 	}
 
 	if *modelsFile != "" {
@@ -117,7 +123,7 @@ func main() {
 	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			log.Fatalf("chrome-proxy: invalid URL %q", proxyURL)
+			return fmt.Errorf("chrome-proxy: invalid URL %q", proxyURL)
 		}
 		proxyFunc = http.ProxyURL(u)
 		log.Printf("upstream + captcha proxy=%s", proxyURL)
@@ -147,7 +153,7 @@ func main() {
 		pool    *captcha.Pool
 	)
 
-	exec := nvidia.NewExecutor(nvidia.Options{
+	exec := nvidia.NewExecutor(&nvidia.Options{
 		Auto:         *auto,
 		FlagCaptcha:  *captchaFlag,
 		Coalesce:     time.Duration(*coalesceMs) * time.Millisecond,
@@ -160,9 +166,13 @@ func main() {
 
 	cfg, cfgPath, err := buildConfig(*addr)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		return fmt.Errorf("config: %w", err)
 	}
-	defer os.RemoveAll(cfg.AuthDir)
+	defer func() {
+		if cleanupErr := os.RemoveAll(cfg.AuthDir); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove auth dir: %w", cleanupErr))
+		}
+	}()
 	hasGatewayKey := false
 	for _, key := range strings.Split(*gatewayKey, ",") {
 		if strings.TrimSpace(key) != "" {
@@ -192,13 +202,13 @@ func main() {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
 
-	models := nvidia.RegistryModels()
+	nvidiaModels := nvidia.RegistryModels()
 	// getNvidiaModels is the catalog bound to the NVIDIA client ONLY. It must
 	// never include other providers' models: a model owned by two clients makes
 	// routing pick between them at random (intermittent 400s).
 	getNvidiaModels := func() []*cliproxy.ModelInfo {
-		out := make([]*cliproxy.ModelInfo, 0, len(models))
-		for _, m := range models {
+		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels))
+		for _, m := range nvidiaModels {
 			if prefs.isHidden(m.ID) {
 				continue
 			}
@@ -210,12 +220,11 @@ func main() {
 	// getModels is the advertised catalog (/v1/models + Claude cache): NVIDIA
 	// models plus custom endpoints.
 	getModels := func() []*cliproxy.ModelInfo {
-		out := make([]*cliproxy.ModelInfo, 0, len(models)+4)
-		out = append(out, &cliproxy.ModelInfo{ID: "automode", Object: "model", OwnedBy: "gateway", Type: "virtual"})
-		out = append(out, &cliproxy.ModelInfo{ID: "cycle", Object: "model", OwnedBy: "gateway", Type: "virtual"})
-		for _, m := range getNvidiaModels() {
-			out = append(out, m)
-		}
+		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels)+4)
+		out = append(out,
+			&cliproxy.ModelInfo{ID: "automode", Object: "model", OwnedBy: "gateway", Type: "virtual"},
+			&cliproxy.ModelInfo{ID: "cycle", Object: "model", OwnedBy: "gateway", Type: "virtual"})
+		out = append(out, getNvidiaModels()...)
 		for _, p := range prefs.listProviders() {
 			id := p.modelID()
 			if prefs.isHidden(id) {
@@ -256,7 +265,7 @@ func main() {
 			writeClaudeModelCache(*addr, getModels())
 			startNvidiaReconciler(ctx, core, exec, getNvidiaModels)
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
-				version, *addr, len(models), n, execCoalesce(*coalesceMs), *maxInflight)
+				version, *addr, len(nvidiaModels), n, execCoalesce(*coalesceMs), *maxInflight)
 			close(started)
 		},
 	}
@@ -290,7 +299,7 @@ func main() {
 				// Resolve automode before cycleRouter inspects the model field.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				adminHandler := func(c *gin.Context) {
-					adminRoutes(c, models, func() []gatewayModel { return nil })
+					adminRoutes(c, nvidiaModels)
 				}
 				engine.GET("/admin", adminHandler)
 				engine.GET("/admin/stats", adminHandler)
@@ -380,7 +389,7 @@ func main() {
 		WithHooks(hooks).
 		Build()
 	if err != nil {
-		log.Fatalf("build gateway: %v", err)
+		return fmt.Errorf("build gateway: %w", err)
 	}
 
 	// Start the API/admin listener before any NVIDIA playground or Chrome work.
@@ -391,11 +400,11 @@ func main() {
 	case <-started:
 	case err := <-runErr:
 		if err != nil && ctx.Err() == nil {
-			log.Fatal(err)
+			return err
 		}
-		return
+		return nil
 	case <-ctx.Done():
-		return
+		return nil
 	}
 
 	if *auto {
@@ -471,8 +480,9 @@ func main() {
 	}
 
 	if err := <-runErr; err != nil && ctx.Err() == nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
 
 func uniqueURLs(urls []string) []string {
@@ -632,8 +642,8 @@ func requestLogger(p *modelPrefs) gin.HandlerFunc {
 		// too; nothing double-counts.
 		prov := lookupCustomProvider(p, model)
 		record := c.Request.Method == http.MethodPost && prov != nil &&
-			!(c.Request.URL.Path == "/v1/chat/completions" && !prov.MessagesOnly) &&
-			!(c.Request.URL.Path == "/v1/messages" && prov.MessagesOnly)
+			(c.Request.URL.Path != "/v1/chat/completions" || prov.MessagesOnly) &&
+			(c.Request.URL.Path != "/v1/messages" || !prov.MessagesOnly)
 		var tee *statTee
 		if record {
 			tee = &statTee{dst: c.Writer}
@@ -689,15 +699,21 @@ func buildConfig(addr string) (cfg *config.Config, cfgPath string, err error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("auth dir: %w", err)
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if cleanupErr := os.RemoveAll(authDir); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove auth dir: %w", cleanupErr))
+		}
+	}()
 	cfgPath = filepath.Join(authDir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("# generated by cmd/serve; not used for API keys\n"), 0o600); err != nil {
-		_ = os.RemoveAll(authDir)
 		return nil, "", fmt.Errorf("write config stub: %w", err)
 	}
 	// FileTokenStore List/Load uses metadata["type"] as Provider.
 	authPath := filepath.Join(authDir, nvidiaAuthFileName)
 	if err := os.WriteFile(authPath, []byte(`{"type":"nvidia","disabled":false}`+"\n"), 0o600); err != nil {
-		_ = os.RemoveAll(authDir)
 		return nil, "", fmt.Errorf("write nvidia auth: %w", err)
 	}
 
@@ -750,7 +766,7 @@ const nvidiaProvider = "nvidia"
 // bindNvidiaRuntime re-asserts our custom executor, model catalog, and scheduler
 // entries. CLIProxyAPI's watcher path replaces unknown providers with
 // OpenAICompatExecutor and UnregisterClient's models we registered — this heals both.
-func bindNvidiaRuntime(core *coreauth.Manager, exec coreauth.ProviderExecutor, models []*cliproxy.ModelInfo) int {
+func bindNvidiaRuntime(core *coreauth.Manager, exec coreauth.ProviderExecutor, catalog []*cliproxy.ModelInfo) int {
 	if core == nil || exec == nil {
 		return 0
 	}
@@ -760,12 +776,12 @@ func bindNvidiaRuntime(core *coreauth.Manager, exec coreauth.ProviderExecutor, m
 		if a == nil || !strings.EqualFold(a.Provider, nvidiaProvider) {
 			continue
 		}
-		cliproxy.GlobalModelRegistry().RegisterClient(a.ID, nvidiaProvider, models)
+		cliproxy.GlobalModelRegistry().RegisterClient(a.ID, nvidiaProvider, catalog)
 		core.RefreshSchedulerEntry(a.ID)
 		n++
 	}
 	if n == 0 {
-		cliproxy.GlobalModelRegistry().RegisterClient(nvidiaAuthFileName, nvidiaProvider, models)
+		cliproxy.GlobalModelRegistry().RegisterClient(nvidiaAuthFileName, nvidiaProvider, catalog)
 	}
 	return n
 }
@@ -844,9 +860,9 @@ func (h *nvidiaAuthHook) rebind(auth *coreauth.Auth) {
 		h.core.RegisterExecutor(h.exec)
 	}
 	if h.getModels != nil {
-		models := h.getModels()
-		if len(models) > 0 {
-			cliproxy.GlobalModelRegistry().RegisterClient(auth.ID, nvidiaProvider, models)
+		catalog := h.getModels()
+		if len(catalog) > 0 {
+			cliproxy.GlobalModelRegistry().RegisterClient(auth.ID, nvidiaProvider, catalog)
 		}
 	}
 	if h.core != nil {
@@ -874,9 +890,9 @@ func (h *nvidiaModelHook) OnModelsUnregistered(_ context.Context, provider, clie
 	if h.exec != nil && h.core != nil {
 		h.core.RegisterExecutor(h.exec)
 	}
-	models := h.getModels()
-	if len(models) > 0 {
-		cliproxy.GlobalModelRegistry().RegisterClient(clientID, nvidiaProvider, models)
+	catalog := h.getModels()
+	if len(catalog) > 0 {
+		cliproxy.GlobalModelRegistry().RegisterClient(clientID, nvidiaProvider, catalog)
 	}
 	if h.core != nil {
 		h.core.RefreshSchedulerEntry(clientID)

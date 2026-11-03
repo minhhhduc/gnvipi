@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -30,20 +31,24 @@ import (
 
 // messagesOnlyDialTLS performs the TLS handshake with a Chrome ClientHello so
 // WAFs that fingerprint Go's default TLS stack see a browser instead. The Chrome
-// spec's ALPN negotiates h2, which pairs with the http2.Transport below —
-// matching what a real Chrome does (Chrome ClientHello + HTTP/2).
-func messagesOnlyDialTLS(network, addr string, _ *tls.Config) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// spec's ALPN negotiates h2, which pairs with the HTTP/2 transport below.
+func messagesOnlyDialTLS(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	raw, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
-	host, _, _ := net.SplitHostPort(addr)
 	uconn := utls.UClient(raw, &utls.Config{ServerName: host}, utls.HelloChrome_Auto)
 	if err := uconn.HandshakeContext(ctx); err != nil {
-		raw.Close()
-		return nil, err
+		return nil, errors.Join(err, raw.Close())
+	}
+	if protocol := uconn.ConnectionState().NegotiatedProtocol; protocol != "h2" {
+		return nil, errors.Join(fmt.Errorf("upstream negotiated ALPN %q; HTTP/2 required", protocol), uconn.Close())
 	}
 	return uconn, nil
 }
@@ -51,8 +56,8 @@ func messagesOnlyDialTLS(network, addr string, _ *tls.Config) (net.Conn, error) 
 // messagesOnlyClient is shared by all passthrough forwards. No timeout on the
 // client itself; streams stay open as long as the upstream sends.
 var messagesOnlyClient = &http.Client{
-	Transport: &http2.Transport{
-		DialTLS: messagesOnlyDialTLS,
+	Transport: &http2.Transport{ //nolint:staticcheck // SA1019: Go's Transport only reads ALPN from crypto/tls.Conn, not uTLS.UConn; retain Chrome TLS + HTTP/2.
+		DialTLSContext: messagesOnlyDialTLS, //nolint:staticcheck // SA1019: This transport needs its context-aware uTLS dial hook; stdlib cannot negotiate this connection.
 	},
 }
 
@@ -119,7 +124,11 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("close upstream response: %v", err)
+			}
+		}()
 		copyProxyResponse(c, resp, model, start)
 		c.Abort()
 	}
@@ -364,10 +373,10 @@ func sanitizeClaudeToolResults() gin.HandlerFunc {
 // sanitizeAnthropicToolResults rewrites Claude tool_result content that is not
 // a plain string or a text-only parts array into a JSON string. Returns the
 // body unchanged when nothing needs wrapping.
-func sanitizeAnthropicToolResults(body []byte) ([]byte, bool, error) {
+func sanitizeAnthropicToolResults(body []byte) (outBody []byte, changedBody bool, err error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return body, false, nil
+		return body, false, err
 	}
 	msgsRaw, ok := raw["messages"]
 	if !ok {
@@ -375,7 +384,7 @@ func sanitizeAnthropicToolResults(body []byte) ([]byte, bool, error) {
 	}
 	var msgs []map[string]json.RawMessage
 	if err := json.Unmarshal(msgsRaw, &msgs); err != nil {
-		return body, false, nil
+		return body, false, err
 	}
 	changed := false
 	for i, m := range msgs {
@@ -406,7 +415,7 @@ func sanitizeAnthropicToolResults(body []byte) ([]byte, bool, error) {
 			}
 			wrapped, err := json.Marshal(string(tc))
 			if err != nil {
-				continue
+				return body, false, err
 			}
 			parts[j]["content"] = wrapped
 			wrappedAny = true
@@ -416,7 +425,7 @@ func sanitizeAnthropicToolResults(body []byte) ([]byte, bool, error) {
 		}
 		out, err := json.Marshal(parts)
 		if err != nil {
-			return body, false, nil
+			return body, false, err
 		}
 		msgs[i]["content"] = out
 		changed = true
@@ -426,12 +435,12 @@ func sanitizeAnthropicToolResults(body []byte) ([]byte, bool, error) {
 	}
 	outMsgs, err := json.Marshal(msgs)
 	if err != nil {
-		return body, false, nil
+		return body, false, err
 	}
 	raw["messages"] = outMsgs
 	out, err := json.Marshal(raw)
 	if err != nil {
-		return body, false, nil
+		return body, false, err
 	}
 	return out, true, nil
 }
@@ -508,9 +517,7 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 
 		target := strings.TrimRight(prov.BaseURL, "/")
-		if strings.HasSuffix(target, "/v1") {
-			target = strings.TrimSuffix(target, "/v1")
-		}
+		target = strings.TrimSuffix(target, "/v1")
 		target += "/v1/messages"
 
 		start := time.Now()
@@ -523,9 +530,7 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", prov.APIKey)
-		// ponytail: CF WAF on some upstreams blocks the Go TLS fingerprint;
-		// spoof a curl UA (helps only if the block is header-based). If it
-		// fingerprints the ClientHello, this needs utls instead.
+		// Keep the curl UA alongside the Chrome TLS fingerprint for header-based WAF rules.
 		req.Header.Set("User-Agent", "curl/8.4.0")
 		forwardOpenCodeHeaders(req, c.Request)
 		if v := c.Request.Header.Get("anthropic-version"); v != "" {
@@ -539,7 +544,11 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("close upstream response: %v", err)
+			}
+		}()
 
 		outH := c.Writer.Header()
 		for k, vv := range resp.Header {

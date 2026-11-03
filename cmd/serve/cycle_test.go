@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -72,7 +73,7 @@ func TestCycleRetriesAndKeepsNextModel(t *testing.T) {
 	})
 	request := func() *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle"}`)))
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle"}`)))
 		return w
 	}
 	for i := 0; i < 2; i++ {
@@ -102,19 +103,55 @@ func TestCycleStreamsAfterRetry(t *testing.T) {
 		var body struct {
 			Model string `json:"model"`
 		}
-		_ = c.ShouldBindJSON(&body)
+		if err := c.ShouldBindJSON(&body); err != nil {
+			t.Fatal(err)
+		}
 		if body.Model == "first" {
 			c.String(http.StatusTooManyRequests, "limited")
 			return
 		}
 		c.Header("Content-Type", "text/event-stream")
 		c.Writer.WriteHeader(http.StatusOK)
-		_, _ = c.Writer.Write([]byte("event: message_start\ndata: {}\n\n"))
+		if _, err := c.Writer.WriteString("event: message_start\ndata: {}\n\n"); err != nil {
+			t.Fatal(err)
+		}
 		c.Writer.Flush()
 	})
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle","stream":true}`)))
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle","stream":true}`)))
 	if w.Code != http.StatusOK || !w.Flushed || !strings.Contains(w.Body.String(), "event: message_start") {
 		t.Fatalf("stream response: status=%d flushed=%v body=%q", w.Code, w.Flushed, w.Body.String())
+	}
+}
+
+func TestCycleDoesNotRetryAfterCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	p := &modelPrefs{cycle: &cycleConfig{Name: "cycle", Models: []string{"first", "second"}}}
+	engine := gin.New()
+	engine.Use(cycleRouter(p, engine))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var calls []string
+	engine.POST("/v1/messages", func(c *gin.Context) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			t.Fatal(err)
+		}
+		calls = append(calls, body.Model)
+		cancel()
+		if err := c.Request.Context().Err(); err != context.Canceled {
+			t.Fatalf("cycle request lost cancellation: %v", err)
+		}
+		c.String(http.StatusServiceUnavailable, "canceled upstream")
+	})
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle"}`)))
+	if len(calls) != 1 || calls[0] != "first" {
+		t.Fatalf("canceled cycle replayed: %v", calls)
+	}
+	if _, index := p.cycleSnapshot(); index != 0 {
+		t.Fatalf("cancellation advanced cycle to %d", index)
 	}
 }

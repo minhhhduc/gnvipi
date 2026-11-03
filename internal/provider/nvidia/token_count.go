@@ -4,22 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"unicode"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	clipexec "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
-func (_ *Executor) CountTokens(
+func (*Executor) CountTokens(
 	_ context.Context,
 	_ *coreauth.Auth,
 	req clipexec.Request,
-	_ clipexec.Options,
+	_ clipexec.Options, //nolint:gocritic // hugeParam: CLIProxyAPI ProviderExecutor requires options by value.
 ) (clipexec.Response, error) {
 	count, err := estimateRequestTokens(req.Payload)
 	if err != nil {
-		return clipexec.Response{}, requestErr(http.StatusBadRequest, "invalid json body")
+		return clipexec.Response{}, requestErr("invalid json body")
 	}
 	payload, err := json.Marshal(struct {
 		InputTokens int `json:"input_tokens"`

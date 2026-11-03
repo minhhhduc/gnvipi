@@ -30,7 +30,7 @@ func (a *arxivBackend) Healthy() bool { return a.client.health.Healthy() }
 //   - a DOI is searched as-is; arXiv indexes DOIs for many records
 //   - other academic queries search all: with quoted phrases, and drop
 //     web-search words that harm recall on an index of titles/abstracts
-func (a *arxivBackend) Adapt(ctx SearchContext) QueryPlan {
+func (a *arxivBackend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: arxivName, MaxResults: 8}
 	switch {
 	case ctx.ArxivID != "":
@@ -80,7 +80,7 @@ func arxivStopword(kw string) bool {
 		strings.EqualFold(kw, "paper")
 }
 
-func arxivKeywords(ctx SearchContext) []string {
+func arxivKeywords(ctx *SearchContext) []string {
 	out := make([]string, 0, len(ctx.Keywords)+len(ctx.Phrases))
 	out = append(out, ctx.Phrases...)
 	out = append(out, ctx.Keywords...)
@@ -101,14 +101,14 @@ func (a *arxivBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResu
 	for _, q := range plan.Queries {
 		target := "https://export.arxiv.org/api/query?search_query=" + url.QueryEscape(q) +
 			"&start=0&max_results=" + strconv.Itoa(plan.MaxResults)
-		status, body, err := a.client.do(ctx, target, map[string]string{"User-Agent": "gnvipi-gateway/1.0 (search gateway; mailto:admin@example.com)"})
+		body, err := a.client.do(ctx, target, map[string]string{"User-Agent": "gnvipi-gateway/1.0 (search gateway; mailto:admin@example.com)"})
 		if err != nil {
 			if len(results) > 0 {
 				return results, nil
 			}
 			return nil, err
 		}
-		_ = status
+
 		parsed := parseArxivResults(body)
 		results = append(results, parsed...)
 		if len(results) >= plan.MaxResults {
@@ -144,7 +144,8 @@ func parseArxivResults(body []byte) []SearchResult {
 		return nil
 	}
 	results := make([]SearchResult, 0, len(feed.Entries))
-	for _, e := range feed.Entries {
+	for i := range feed.Entries {
+		e := &feed.Entries[i]
 		id := extractArxivID(e.ID)
 		if id == "" {
 			continue

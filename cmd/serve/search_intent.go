@@ -15,15 +15,15 @@ var (
 	doiRe        = regexp.MustCompile(`(?i)\b(10\.\d{4,9}/\S+?)(?:[\s)]|$)`)
 	provisionRe  = regexp.MustCompile(`(?i)\b(article|art\.?|section|sec\.?|rule|paragraph|para\.?|regulation|chapter)\s+([ivxl0-9]+(?:[\-.][0-9a-z]+)*)`)
 	instrumentRe = regexp.MustCompile(`(?i)\b(CISG|UNCLOS|Vienna Convention|Hamburg Rules|Warsaw Convention|UNIDROIT|Incoterms|GATT|WTO|TRIPS|Berne Convention|Paris Convention|ECOSOC|EU Regulation|GDPR|UPU|NATO|WIPO|ICC)\b`)
-	stopwordRe   = regexp.MustCompile(`(?i)^(?:a|an|the|of|in|on|for|and|or|to|with|about|under|into|over|by|at|is|are|was|were|how|what|when|where|which|who|why|can|does|do|did|please|find|search|show|me|my|paper|papers|article|articles|about|related|regarding)$`)
+	stopwordRe   = regexp.MustCompile(`(?i)^(?:a|an|the|of|in|on|for|and|or|to|with|about|under|into|over|by|at|is|are|was|were|how|what|when|where|which|who|why|can|does|do|did|please|find|search|show|me|my|paper|papers|article|articles|related|regarding)$`)
 )
 
 // deriveSearchContext classifies a query into an intent. Identifier detection
 // wins over academic over legal over general; later types can still carry both
 // flags (a legal query is also routed through academic providers as a variant).
-func deriveSearchContext(query string) SearchContext {
+func deriveSearchContext(query string) *SearchContext {
 	q := strings.TrimSpace(query)
-	ctx := SearchContext{Original: q, Type: SearchGeneral}
+	ctx := &SearchContext{Original: q, Type: SearchGeneral}
 	if q == "" {
 		return ctx
 	}
@@ -43,11 +43,12 @@ func deriveSearchContext(query string) SearchContext {
 	if m := provisionRe.FindStringSubmatch(q); m != nil {
 		kind := strings.ToLower(m[1])
 		num := m[2]
-		if kind == "art." || kind == "art" || kind == "article" {
+		switch kind {
+		case "art.", "art", "article":
 			kind = "Article"
-		} else if kind == "sec." || kind == "sec" || kind == "section" {
+		case "sec.", "sec", "section":
 			kind = "Section"
-		} else if kind == "para." || kind == "para" || kind == "paragraph" {
+		case "para.", "para", "paragraph":
 			kind = "Paragraph"
 		}
 		ctx.Provision = kind + " " + num
@@ -152,7 +153,7 @@ func isAllCapsAcronym(tok string) bool {
 		return false
 	}
 	for _, r := range tok {
-		if !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}

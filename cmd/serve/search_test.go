@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,10 @@ func TestScholarSearchSkipsNavigation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, _ := url.Parse("https://scholar.google.com/scholar?q=HUDOC")
+	page, err := url.Parse("https://scholar.google.com/scholar?q=HUDOC")
+	if err != nil {
+		t.Fatal(err)
+	}
 	results := parseSearchResults(doc, page)
 	if len(results) != 1 || results[0].Title != "LexCLiPR: Cross-lingual paragraph retrieval from legal judgments" || results[0].URL != "https://aclanthology.org/2025.acl-long.683/" {
 		t.Fatalf("Scholar results: %#v", results)
@@ -34,7 +38,10 @@ func TestScholarSearchSkipsNavigation(t *testing.T) {
 }
 
 func TestDuckDuckGoRedirectUsesDestination(t *testing.T) {
-	page, _ := url.Parse("https://www.duckduckgo.com/html/?q=Hamburg")
+	page, err := url.Parse("https://www.duckduckgo.com/html/?q=Hamburg")
+	if err != nil {
+		t.Fatal(err)
+	}
 	doc, err := html.Parse(strings.NewReader(`<a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Funcitral.un.org%2Fen%2Ftexts%2Ftransportgoods%2Fconventions%2Fhamburg_rules">United Nations Convention on the Carriage of Goods by Sea</a>`))
 	if err != nil {
 		t.Fatal(err)
@@ -48,13 +55,13 @@ func TestDuckDuckGoRedirectUsesDestination(t *testing.T) {
 func TestSearchConfigPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	p := &modelPrefs{path: path}
-	url := "https://scholar.google.com/scholar?q={query}"
-	if err := p.setSearchURL(url); err != nil {
+	searchURL := "https://scholar.google.com/scholar?q={query}"
+	if err := p.setSearchURL(searchURL); err != nil {
 		t.Fatal(err)
 	}
 	loaded := &modelPrefs{}
 	loaded.load(path)
-	if got := loaded.searchTemplate(); got != url {
+	if got := loaded.searchTemplate(); got != searchURL {
 		t.Fatalf("loaded search URL = %q", got)
 	}
 }
@@ -77,23 +84,23 @@ func TestGatewaySearchMCP(t *testing.T) {
 			t.Errorf("query = %q", got)
 		}
 		body := `<html><li class=b_algo><h2><a href="https://example.com/guide">Example MCP guide</a></h2><cite>https://example.com/guide</cite></li></html>`
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
 	})}
 	gw := searchGatewayInstance
 	defer gw.setTestTransport(nil)
 	gw.setTestTransport(searchRoundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.Host == "www.bing.com" || r.Host == "html.duckduckgo.com" {
 			body := `<html><li class=b_algo><h2><a href="https://example.com/guide">Example MCP guide</a></h2><cite>https://example.com/guide</cite></li></html>`
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"results":[]}`)), Header: make(http.Header), Request: r}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"results":[]}`)), Header: make(http.Header), Request: r}, nil
 	}))
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_web","arguments":{"query":"colab mcp"}}}`))
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_web","arguments":{"query":"colab mcp"}}}`))
 	searchMCP(c)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://example.com/guide") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "https://example.com/guide") {
 		t.Fatalf("MCP search response: %d %s", w.Code, w.Body.String())
 	}
 }

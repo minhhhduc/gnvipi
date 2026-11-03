@@ -76,7 +76,7 @@ func (g *searchGateway) htmlEngine() string {
 // scholarly chain with web search as discovery. Legal queries use the HTML
 // engine first (it surfaces primary sources well) with scholarly providers as
 // a second source. General queries use the HTML engine and its mirror.
-func (g *searchGateway) routeBackends(ctx SearchContext) []string {
+func (g *searchGateway) routeBackends(ctx *SearchContext) []string {
 	html, fallback := g.htmlEngine(), ddgName
 	if html == ddgName {
 		fallback = bingName
@@ -110,7 +110,7 @@ type SearchTrace struct {
 
 // search executes the full pipeline: intent, routing, per-backend adaptation,
 // caching, execution, normalization, dedup, and ranking.
-func (g *searchGateway) search(ctx context.Context, query string, maxResults int) ([]SearchResult, []SearchTrace) {
+func (g *searchGateway) search(ctx context.Context, query string) ([]SearchResult, []SearchTrace) {
 	intent := deriveSearchContext(query)
 	chain := g.routeBackends(intent)
 	var traces []SearchTrace
@@ -156,8 +156,8 @@ func (g *searchGateway) search(ctx context.Context, query string, maxResults int
 
 	merged = dedupeURLs(merged)
 	ranked := rankResults(intent, merged)
-	if maxResults > 0 && len(ranked) > maxResults {
-		ranked = ranked[:maxResults]
+	if len(ranked) > 10 {
+		ranked = ranked[:10]
 	}
 	if primaryErr != nil && len(ranked) == 0 {
 		// ponytail: the router must surface a reason, not an empty result set,
@@ -169,18 +169,19 @@ func (g *searchGateway) search(ctx context.Context, query string, maxResults int
 
 // rankedSearch is the entry point used by the MCP handler.
 func (g *searchGateway) rankedSearch(ctx context.Context, query string) ([]SearchResult, []SearchTrace) {
-	return g.search(ctx, query, 10)
+	return g.search(ctx, query)
 }
 
 // rankResults scores results for the intent. Signals are weighted per type:
 // legal and academic queries reward authority and identifier matches; general
 // queries trust the engine's ordering.
-func rankResults(ctx SearchContext, results []SearchResult) []SearchResult {
+func rankResults(ctx *SearchContext, results []SearchResult) []SearchResult {
 	if len(results) <= 1 {
 		return results
 	}
 	scored := make([]scoredResult, 0, len(results))
-	for i, r := range results {
+	for i := range results {
+		r := &results[i]
 		scored = append(scored, scoredResult{result: r, index: i, score: relevanceScore(ctx, r, i)})
 	}
 	// Stable sort keeps backend order among equal scores.
@@ -192,19 +193,19 @@ func rankResults(ctx SearchContext, results []SearchResult) []SearchResult {
 		}
 	}
 	out := make([]SearchResult, len(scored))
-	for i, s := range scored {
-		out[i] = s.result
+	for i := range scored {
+		out[i] = *scored[i].result
 	}
 	return out
 }
 
 type scoredResult struct {
-	result SearchResult
+	result *SearchResult
 	index  int
 	score  float64
 }
 
-func relevanceScore(ctx SearchContext, r SearchResult, position int) float64 {
+func relevanceScore(ctx *SearchContext, r *SearchResult, position int) float64 {
 	// Position is the engine's own ranking; it starts high and decays gently so
 	// authority can still promote a lower-ranked primary source.
 	score := 1.0 / float64(position+1)
@@ -226,14 +227,15 @@ func relevanceScore(ctx SearchContext, r SearchResult, position int) float64 {
 
 // identifierBonus rewards results that actually contain the requested
 // identifier, so a pagination page that merely ranks for it cannot win.
-func identifierBonus(ctx SearchContext, r SearchResult) float64 {
+func identifierBonus(ctx *SearchContext, r *SearchResult) float64 {
 	bonus := 0.0
 	if ctx.ArxivID != "" {
-		if r.ArxivID == ctx.ArxivID || strings.Contains(r.URL, "/abs/"+ctx.ArxivID) {
+		switch {
+		case r.ArxivID == ctx.ArxivID || strings.Contains(r.URL, "/abs/"+ctx.ArxivID):
 			bonus += 1.0
-		} else if strings.Contains(r.URL, ctx.ArxivID) || strings.Contains(r.Title, ctx.ArxivID) {
+		case strings.Contains(r.URL, ctx.ArxivID) || strings.Contains(r.Title, ctx.ArxivID):
 			bonus += 0.3
-		} else {
+		default:
 			bonus -= 0.4
 		}
 	}
@@ -247,7 +249,7 @@ func identifierBonus(ctx SearchContext, r SearchResult) float64 {
 	return bonus
 }
 
-func provisionMatch(ctx SearchContext, r SearchResult) float64 {
+func provisionMatch(ctx *SearchContext, r *SearchResult) float64 {
 	if ctx.Provision == "" {
 		return 0
 	}
@@ -288,13 +290,7 @@ func authorityBonus(rawURL string) float64 {
 	return 0
 }
 
-// canonicalAuthorityDomains lists the primary domains for a legal instrument,
-// used only to build Bing's site-restricted query variant.
-func canonicalAuthorityDomains(instrument string) []string {
-	return legalAuthorityDomains(instrument)
-}
-
-func academicBonus(r SearchResult) float64 {
+func academicBonus(r *SearchResult) float64 {
 	bonus := 0.0
 	if r.DOI != "" {
 		bonus += 0.2
@@ -314,7 +310,7 @@ func academicBonus(r SearchResult) float64 {
 // noisePenalty demotes pages whose shape signals low value: pagination, tag and
 // category archives, and thin aggregators. It is a penalty on shape, not a
 // domain blacklist.
-func noisePenalty(r SearchResult, ctx SearchContext) float64 {
+func noisePenalty(r *SearchResult, ctx *SearchContext) float64 {
 	u, host := splitHost(r.URL)
 	if host == "" {
 		return 0.5
@@ -341,7 +337,7 @@ func noisePenalty(r SearchResult, ctx SearchContext) float64 {
 	return penalty
 }
 
-func splitHost(rawURL string) (parsedURL, string) {
+func splitHost(rawURL string) (u parsedURL, host string) {
 	if rawURL == "" {
 		return parsedURL{}, ""
 	}
@@ -354,7 +350,7 @@ func splitHost(rawURL string) (parsedURL, string) {
 
 // Abstractish reports whether this result carries a real abstract rather than a
 // bare title, so academic ranking can prefer complete records.
-func (r SearchResult) Abstractish() bool {
+func (r *SearchResult) Abstractish() bool {
 	return len(r.Snippet) > 80
 }
 

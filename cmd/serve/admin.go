@@ -102,7 +102,7 @@ type customProvider struct {
 	ResponsesOnly bool `json:"responses_only,omitempty"`
 }
 
-func (p customProvider) alias() string {
+func (p *customProvider) alias() string {
 	if p.Alias != "" {
 		return p.Alias
 	}
@@ -113,7 +113,7 @@ func (p customProvider) alias() string {
 	return prefix + p.Model
 }
 
-func (p customProvider) modelID() string {
+func (p *customProvider) modelID() string {
 	return p.alias()
 }
 
@@ -192,19 +192,6 @@ func (p *modelPrefs) setHidden(ids []string) error {
 	p.hidden = make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		p.hidden[id] = struct{}{}
-	}
-	p.mu.Unlock()
-	return p.save()
-}
-
-// setDeleted replaces the deleted set and writes it back to disk.
-func (p *modelPrefs) setDeleted(ids []string) error {
-	p.changeMu.Lock()
-	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	p.deleted = make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		p.deleted[id] = struct{}{}
 	}
 	p.mu.Unlock()
 	return p.save()
@@ -507,13 +494,13 @@ func chromeAdminConfigured() bool {
 }
 
 // adminRoutes serves the manager page and its actions.
-func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []gatewayModel) {
+func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo) {
 	// c.Abort() was incorrectly added here
 	browser := currentChromeAdmin()
 	page := c.DefaultQuery("page", "dashboard")
 	switch c.Request.URL.Path {
 	case "/admin":
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog, claude())))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog)))
 	case "/admin/chromes":
 		if browser == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "captcha Chrome is still starting or unavailable"})
@@ -530,9 +517,16 @@ func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo, claude func() []
 			}
 			// Accept form posts too (optional all=true field), per task spec.
 			if c.Request.Header.Get("content-type") == "application/x-www-form-urlencoded" {
-				payload.Index, _ = strconv.Atoi(c.Request.FormValue("index"))
 				payload.Mode = c.Request.FormValue("mode")
 				payload.All = c.Request.FormValue("all") == "true"
+				if index := c.Request.FormValue("index"); index != "" || !payload.All {
+					var err error
+					payload.Index, err = strconv.Atoi(index)
+					if err != nil {
+						c.JSON(http.StatusBadRequest, gin.H{"error": "index must be an integer"})
+						return
+					}
+				}
 			} else if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return

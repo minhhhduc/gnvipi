@@ -94,7 +94,7 @@ func TestRetriesAreBounded(t *testing.T) {
 func TestFallbackWhenPrimaryFails(t *testing.T) {
 	rt := &fakeTransport{status: 403, body: "forbidden"}
 	gw := testGateway(rt)
-	results, traces := gw.search(context.Background(), "CISG article 79 exemption case law", 10)
+	results, traces := gw.search(context.Background(), "CISG article 79 exemption case law")
 	for _, tr := range traces {
 		if tr.Backend == bingName && tr.Status != "error" {
 			t.Fatalf("primary should have failed: %+v", tr)
@@ -124,13 +124,13 @@ func TestCircuitBreakerOpensAfterFailures(t *testing.T) {
 func TestCacheAvoidsRepeatRequests(t *testing.T) {
 	rt := &fakeTransport{status: 200, body: `<html><li class=b_algo><h2><a href="https://example.com/a">A</a></h2><cite>https://example.com/a</cite></li></html>`}
 	gw := testGateway(rt)
-	gw.search(context.Background(), "example query", 10)
-	gw.search(context.Background(), "example query", 10)
+	gw.search(context.Background(), "example query")
+	gw.search(context.Background(), "example query")
 	if hits := rt.hits.Load(); hits < 2 {
 		t.Fatalf("expected at least two upstream requests, got %d", hits)
 	}
 	rt.hits.Store(0)
-	gw.search(context.Background(), "example query", 10)
+	gw.search(context.Background(), "example query")
 	if hits := rt.hits.Load(); hits > 0 {
 		t.Fatalf("cached search must not hit upstream, got %d hits", hits)
 	}
@@ -224,7 +224,10 @@ func TestBingParserReadsCiteDestination(t *testing.T) {
 }
 
 func TestDDGParserUnwrapsRedirect(t *testing.T) {
-	page, _ := url.Parse("https://html.duckduckgo.com/html/?q=x")
+	page, err := url.Parse("https://html.duckduckgo.com/html/?q=x")
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := `<html><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Funcitral.un.org%2Fen%2Ftexts%2Fsalegoods%2Fconventions%2Fcisg">CISG</a></html>`
 	results := parseDDGResults([]byte(body), page)
 	if len(results) != 1 || results[0].URL != "https://uncitral.un.org/en/texts/salegoods/conventions/cisg" {

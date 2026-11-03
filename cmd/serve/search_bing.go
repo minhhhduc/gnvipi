@@ -29,7 +29,7 @@ func (b *bingBackend) Healthy() bool { return b.client.health.Healthy() }
 //   - legal queries get a broad variant plus an authoritative-domain variant
 //   - academic queries keep their technical phrases quoted
 //   - everything else quotes extracted phrases and keeps plain keywords
-func (b *bingBackend) Adapt(ctx SearchContext) QueryPlan {
+func (b *bingBackend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: bingName, MaxResults: 10}
 
 	var parts []string
@@ -69,7 +69,7 @@ func (b *bingBackend) Adapt(ctx SearchContext) QueryPlan {
 
 // authoritativeVariant narrows a legal query to official instrument domains.
 // The domain list is selected by instrument, not applied globally.
-func (b *bingBackend) authoritativeVariant(ctx SearchContext, broad string) string {
+func (b *bingBackend) authoritativeVariant(ctx *SearchContext, broad string) string {
 	domains := legalAuthorityDomains(ctx.Instrument)
 	if len(domains) == 0 {
 		return broad
@@ -111,7 +111,7 @@ func (b *bingBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResul
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://www.bing.com/search?q=" + url.QueryEscape(q) + "&setlang=en-US&cc=US"
-		_, body, err := b.client.do(ctx, target, nil)
+		body, err := b.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {
 				return results, nil

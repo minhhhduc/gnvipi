@@ -228,17 +228,19 @@ func TestPoolTakeWakesImmediatelyOnFill(t *testing.T) {
 
 	p := NewPool(context.Background(), extract, PoolConfig{Size: 1, Workers: 1})
 	defer p.Close()
-	done := make(chan time.Duration, 1)
+	done := make(chan error, 1)
 	go func() {
-		start := time.Now()
-		_, _ = p.Take(context.Background())
-		done <- time.Since(start)
+		_, err := p.Take(context.Background())
+		done <- err
 	}()
 	time.Sleep(20 * time.Millisecond)
 	start := time.Now()
 	close(release)
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Take: %v", err)
+		}
 		if delay := time.Since(start); delay > 50*time.Millisecond {
 			t.Fatalf("Take wake delay=%s want <=50ms", delay)
 		}

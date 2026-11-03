@@ -27,7 +27,7 @@ func (o *openalexBackend) Healthy() bool { return o.client.health.Healthy() }
 //   - a DOI resolves directly via /works/{doi}
 //   - an arXiv ID is mapped to its OpenAlex record through the external-id filter
 //   - other academic queries use search= with quoted phrases and a looser variant
-func (o *openalexBackend) Adapt(ctx SearchContext) QueryPlan {
+func (o *openalexBackend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: openalexName, MaxResults: 8}
 	switch {
 	case ctx.DOI != "":
@@ -69,7 +69,7 @@ func (o *openalexBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchR
 			target = "https://api.openalex.org/works?search=" + url.QueryEscape(q) +
 				"&per_page=" + itoa(plan.MaxResults)
 		}
-		status, body, err := o.client.do(ctx, target, map[string]string{
+		body, err := o.client.do(ctx, target, map[string]string{
 			"User-Agent": "gnvipi-gateway/1.0 (search gateway; mailto:admin@example.com)",
 		})
 		if err != nil {
@@ -78,7 +78,7 @@ func (o *openalexBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchR
 			}
 			return nil, err
 		}
-		_ = status
+
 		parsed := parseOpenAlexResults(body)
 		results = append(results, parsed...)
 		if len(results) >= plan.MaxResults {
@@ -117,7 +117,8 @@ func parseOpenAlexResults(body []byte) []SearchResult {
 		return nil
 	}
 	results := make([]SearchResult, 0, len(resp.Results))
-	for _, w := range resp.Results {
+	for i := range resp.Results {
+		w := &resp.Results[i]
 		res := SearchResult{
 			Backend: openalexName,
 			Title:   w.Title,
@@ -145,7 +146,7 @@ func parseOpenAlexResults(body []byte) []SearchResult {
 	return results
 }
 
-func openalexCanonical(w openalexWork) string {
+func openalexCanonical(w *openalexWork) string {
 	if w.BestOA.LandingURL != "" {
 		return w.BestOA.LandingURL
 	}

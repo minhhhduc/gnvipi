@@ -24,7 +24,7 @@ func TestSanitizeToolMessages(t *testing.T) {
 		name  string
 		in    string
 		want  string // expected content after sanitize
-		isStr bool  // want content to be a JSON string
+		isStr bool   // want content to be a JSON string
 	}{
 		{"object content wrapped", `{"model":"m","messages":[{"role":"tool","tool_call_id":"t1","content":{"ok":true}}]}`, `{"ok":true}`, true},
 		{"string content untouched", `{"messages":[{"role":"tool","content":"plain"}]}`, "plain", true},

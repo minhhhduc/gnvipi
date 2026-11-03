@@ -24,7 +24,13 @@ import (
 )
 
 func main() {
-	captcha := flag.String("captcha", "", "hCaptcha token (reverse-engineered mode)")
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	captchaFlag := flag.String("captcha", "", "hCaptcha token (reverse-engineered mode)")
 	auto := flag.Bool("auto", false, "Auto-extract captcha token via chromedp")
 	model := flag.String("model", "", "model id (e.g. moonshotai/kimi-k3); empty = "+gnvipi.DefaultModel)
 	prompt := flag.String("prompt", "Explain the meaning of life in one sentence.", "prompt to send")
@@ -42,16 +48,16 @@ func main() {
 	case *auto:
 		t, err := extractCaptchaToken(ctx)
 		if err != nil {
-			log.Fatalf("Failed to auto-extract captcha token: %v", err)
+			return fmt.Errorf("failed to auto-extract captcha token: %w", err)
 		}
 		token = t
 		fmt.Printf("✓ Extracted captcha token: %s...\n", tokenPreview(token))
 
-	case *captcha != "":
-		token = *captcha
+	case *captchaFlag != "":
+		token = *captchaFlag
 
 	default:
-		log.Fatal("Specify -captcha or -auto")
+		return fmt.Errorf("specify -captcha or -auto")
 	}
 
 	opts := []gnvipi.Option{gnvipi.WithCaptchaToken(token)}
@@ -95,7 +101,7 @@ func main() {
 			}
 		})
 		if err != nil {
-			log.Fatalf("Stream chat failed: %v", err)
+			return fmt.Errorf("stream chat failed: %w", err)
 		}
 		fmt.Println()
 		if lastUsage != nil {
@@ -104,7 +110,7 @@ func main() {
 	} else {
 		resp, err := client.Chat(ctx, messages)
 		if err != nil {
-			log.Fatalf("Chat failed: %v", err)
+			return fmt.Errorf("chat failed: %w", err)
 		}
 		fmt.Print("\n=== Response ===\n\n")
 		if len(resp.Choices) > 0 {
@@ -118,6 +124,7 @@ func main() {
 			fmt.Printf("\n[Usage: %s]\n", resp.Usage.Format())
 		}
 	}
+	return nil
 }
 
 // writeSmooth prints s rune-by-rune with a fixed delay. delay<=0 prints at once.
@@ -126,10 +133,9 @@ func writeSmooth(s string, delay time.Duration) {
 		fmt.Print(s)
 		return
 	}
-	for len(s) > 0 {
+	for s != "" {
 		r, size := utf8.DecodeRuneInString(s)
 		fmt.Printf("%c", r)
-		_ = os.Stdout.Sync()
 		s = s[size:]
 		time.Sleep(delay)
 	}

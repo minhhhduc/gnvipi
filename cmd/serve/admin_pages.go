@@ -12,18 +12,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
-// modelRow renders one switch row; dead marks a model the upstream refused.
-func modelRow(id, name string, hidden, dead bool) string {
-	checked, badge := " checked", ""
-	if hidden {
-		checked = ""
-	}
-	if dead {
-		badge = `<span class=badge title="upstream reports no available function">upstream error</span>`
-	}
-	return modelRowHTML(id, name, checked, badge)
-}
-
 func modelRowHTML(id, name, checked, badge string) string {
 	return `<div class=row data-id="` + html.EscapeString(id) + `">` +
 		`<input type=checkbox class=sw` + checked + ` value="` + html.EscapeString(id) + `">` +
@@ -35,7 +23,7 @@ func modelRowHTML(id, name, checked, badge string) string {
 
 // adminHTML renders one page per ?page= (dashboard | models | endpoints |
 // chromes) — one function per page.
-func adminHTML(page string, catalog []*cliproxy.ModelInfo, claude []gatewayModel) string {
+func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	if page == "automode" {
 		page = "config"
 	}

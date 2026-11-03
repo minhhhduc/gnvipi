@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
@@ -43,6 +43,12 @@ var cacheKeys = []string{
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (only for -rounds=1)")
 	auto := flag.Bool("auto", false, "extract captcha via chromedp (needed for multi-round upstream)")
 	proxy := flag.String("proxy", "", "hit local OpenAI proxy instead of upstream (e.g. http://localhost:8080)")
@@ -55,13 +61,13 @@ func main() {
 	flag.Parse()
 
 	if *rounds < 1 {
-		log.Fatal("-rounds must be >= 1")
+		return fmt.Errorf("-rounds must be >= 1")
 	}
 	if *proxy == "" && !*auto && *captchaFlag == "" {
-		log.Fatal("specify -auto, -captcha, or -proxy")
+		return fmt.Errorf("specify -auto, -captcha, or -proxy")
 	}
 	if *proxy == "" && *rounds > 1 && !*auto {
-		log.Fatal("multi-round upstream needs -auto (each request burns one captcha)")
+		return fmt.Errorf("multi-round upstream needs -auto (each request burns one captcha)")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -69,7 +75,7 @@ func main() {
 
 	info, err := models.Lookup(*model)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	endpoint := info.PredictEndpoint()
 	viaProxy := *proxy != ""
@@ -86,7 +92,7 @@ func main() {
 	if *auto && !viaProxy {
 		b, err := captcha.NewBrowser(ctx, captcha.BrowserConfig{})
 		if err != nil {
-			log.Fatalf("captcha browser: %v", err)
+			return fmt.Errorf("captcha browser: %w", err)
 		}
 		browser = b
 		defer browser.Close()
@@ -99,19 +105,19 @@ func main() {
 		}
 		token, err := resolveToken(ctx, browser, *auto, *captchaFlag, viaProxy)
 		if err != nil {
-			log.Fatalf("round %d captcha: %v", i, err)
+			return fmt.Errorf("round %d captcha: %w", i, err)
 		}
 
 		user := fmt.Sprintf("Reply with exactly one word: ping%d", i)
 		body, err := buildBody(*model, prefix, user, *stream, *maxTokens, *thinking)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		fmt.Printf("\n=== round %d/%d ===\n", i, *rounds)
 		usage, rawSnippets, status, dur, err := runOnce(ctx, endpoint, body, token, viaProxy, *stream)
 		if err != nil {
-			log.Fatalf("round %d: %v", i, err)
+			return fmt.Errorf("round %d: %w", i, err)
 		}
 		fmt.Printf("http_status=%d duration=%s\n", status, dur.Round(time.Millisecond))
 		if len(rawSnippets) > 0 {
@@ -126,13 +132,19 @@ func main() {
 			if usage == nil {
 				fmt.Println("usage: <missing>")
 			} else {
-				pretty, _ := json.MarshalIndent(usage, "", "  ")
+				pretty, err := json.MarshalIndent(usage, "", "  ")
+				if err != nil {
+					return fmt.Errorf("format usage: %w", err)
+				}
 				fmt.Printf("usage:\n%s\n", pretty)
 			}
 		} else {
 			anyCache = true
 			fmt.Printf("cache_fields: FOUND %v\n", hits)
-			pretty, _ := json.MarshalIndent(usage, "", "  ")
+			pretty, err := json.MarshalIndent(usage, "", "  ")
+			if err != nil {
+				return fmt.Errorf("format usage: %w", err)
+			}
 			fmt.Printf("usage:\n%s\n", pretty)
 		}
 	}
@@ -145,6 +157,7 @@ func main() {
 		fmt.Println("NO: upstream usage has no known prompt-cache fields (cached_tokens / prompt_tokens_details / prompt_cache_* / cache_*_input_tokens).")
 		fmt.Println("Note: absence of fields ≠ caching disabled server-side; it only means the response does not expose cache accounting.")
 	}
+	return nil
 }
 
 func resolveToken(ctx context.Context, browser *captcha.Browser, auto bool, captchaFlag string, viaProxy bool) (string, error) {
@@ -219,7 +232,9 @@ func runOnce(ctx context.Context, endpoint string, body []byte, token string, vi
 	}
 	if !viaProxy {
 		var raw map[string]any
-		_ = json.Unmarshal(body, &raw)
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("decode request model: %w", err)
+		}
 		model, _ := raw["model"].(string)
 		mi, lookupErr := models.Lookup(model)
 		if lookupErr != nil {
@@ -237,12 +252,19 @@ func runOnce(ctx context.Context, endpoint string, body []byte, token string, vi
 	if err != nil {
 		return nil, nil, 0, time.Since(start), err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("close probe response: %v", err)
+		}
+	}()
 	status = resp.StatusCode
 	dur = time.Since(start)
 
 	if status >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		if err != nil {
+			return nil, nil, status, time.Since(start), fmt.Errorf("http %d: read error body: %w", status, err)
+		}
 		return nil, nil, status, dur, fmt.Errorf("http %d: %s", status, raw)
 	}
 
@@ -256,7 +278,10 @@ func runOnce(ctx context.Context, endpoint string, body []byte, token string, vi
 			return nil, []string{string(raw)}, status, time.Since(start), err
 		}
 		u, _ := obj["usage"].(map[string]any)
-		snip, _ := json.Marshal(obj["usage"])
+		snip, err := json.Marshal(obj["usage"])
+		if err != nil {
+			return nil, nil, status, time.Since(start), fmt.Errorf("encode usage: %w", err)
+		}
 		dur = time.Since(start)
 		return u, []string{string(snip)}, status, dur, nil
 	}
@@ -266,17 +291,15 @@ func runOnce(ctx context.Context, endpoint string, body []byte, token string, vi
 	return usage, snippets, status, dur, err
 }
 
-func collectUsageSSE(body io.Reader) (map[string]any, []string, error) {
+func collectUsageSSE(body io.Reader) (usage map[string]any, snippets []string, err error) {
 	reader := bufio.NewReaderSize(body, 64*1024)
-	var last map[string]any
-	var snippets []string
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			return last, snippets, err
+			return usage, snippets, err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if !strings.HasPrefix(line, "data: ") {
@@ -287,16 +310,19 @@ func collectUsageSSE(body io.Reader) (map[string]any, []string, error) {
 			break
 		}
 		var raw map[string]any
-		if json.Unmarshal([]byte(data), &raw) != nil {
-			continue
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			return usage, snippets, fmt.Errorf("decode usage chunk: %w", err)
 		}
 		if u, ok := raw["usage"].(map[string]any); ok && u != nil {
-			last = u
-			pretty, _ := json.Marshal(u)
+			usage = u
+			pretty, err := json.Marshal(u)
+			if err != nil {
+				return usage, snippets, fmt.Errorf("encode usage chunk: %w", err)
+			}
 			snippets = append(snippets, string(pretty))
 		}
 	}
-	return last, snippets, nil
+	return usage, snippets, nil
 }
 
 // findCacheSignals returns dotted paths of known cache-related fields present

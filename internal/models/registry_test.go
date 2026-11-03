@@ -1,6 +1,9 @@
 package models
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestLookupDefault(t *testing.T) {
 	info, err := Lookup("")
@@ -40,8 +43,8 @@ func TestLookupUnknown(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown model")
 	}
-	uerr, ok := err.(*ErrUnknownModel)
-	if !ok {
+	var uerr *ErrUnknownModel
+	if !errors.As(err, &uerr) {
 		t.Fatalf("error type = %T want *ErrUnknownModel", err)
 	}
 	if uerr.Model != "no-such-org/no-such-model" {
@@ -58,30 +61,4 @@ func TestPredictEndpoint(t *testing.T) {
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)
 	}
-}
-
-// Registry invariants: every entry has a UUID-shaped function id and the shared
-// namespace. Function ids are *usually* unique per model, but NVIDIA does alias
-// some backend versions to the same NVCF function (e.g. the ising-calibration
-// variants share 499210d3…). We log duplicates instead of failing so a legit
-// alias is not mistaken for a scrape bug; the endpoint path (namespace/slug) is
-// what actually distinguishes models, and that IS unique per registry key.
-
-func uuid42(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if c != '-' {
-				return false
-			}
-		default:
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-				return false
-			}
-		}
-	}
-	return true
 }

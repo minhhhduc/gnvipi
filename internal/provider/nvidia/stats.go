@@ -78,12 +78,12 @@ type Stats struct {
 // ringBucket returns (creating if needed) the MinuteStats for t's minute at
 // the tail of ring. Each ring is capped at seriesKeep entries.
 func ringBucket(ring *[]*MinuteStats, t time.Time) *MinuteStats {
-	min := t.Truncate(time.Minute)
-	if n := len(*ring); n > 0 && !(*ring)[n-1].Minute.Equal(min) {
-		*ring = append(*ring, &MinuteStats{Minute: min})
+	minute := t.Truncate(time.Minute)
+	if n := len(*ring); n > 0 && !(*ring)[n-1].Minute.Equal(minute) {
+		*ring = append(*ring, &MinuteStats{Minute: minute})
 	}
 	if len(*ring) == 0 {
-		*ring = append(*ring, &MinuteStats{Minute: min})
+		*ring = append(*ring, &MinuteStats{Minute: minute})
 	}
 	if len(*ring) > seriesKeep {
 		*ring = (*ring)[len(*ring)-seriesKeep:]
@@ -215,8 +215,8 @@ func fillSeries(ring []*MinuteStats, n int) []MinuteStats {
 		byMin[b.Minute] = *b
 	}
 	for i := n - 1; i >= 0; i-- {
-		min := now.Add(-time.Duration(i) * time.Minute)
-		out = append(out, byMin[min]) // zero MinuteStats when the minute was quiet
+		minute := now.Add(-time.Duration(i) * time.Minute)
+		out = append(out, byMin[minute]) // zero MinuteStats when the minute was quiet
 	}
 	for i := range out {
 		out[i].Minute = now.Add(-time.Duration(n-1-i) * time.Minute)
