@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -18,7 +19,7 @@ type cycleConfig struct {
 	Models []string `json:"models"`
 }
 
-func (p *modelPrefs) cycleSnapshot() (cycleConfig, int) {
+func (p *modelPrefs) cycleSnapshot() (cfg cycleConfig, index int) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.cycle == nil {
@@ -124,7 +125,7 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 			if writer.status == 0 {
 				writer.status = http.StatusOK
 			}
-			if path == "/v1/messages/count_tokens" || !retryableCycleStatus(writer.status) {
+			if writer.committed || c.Request.Context().Err() != nil || path == "/v1/messages/count_tokens" || !retryableCycleStatus(writer.status) {
 				writer.commit()
 				c.Abort()
 				return
@@ -181,12 +182,6 @@ func (w *cycleAttemptWriter) Flush() {
 		}
 	}
 }
-func (w *cycleAttemptWriter) CloseNotify() <-chan bool {
-	if n, ok := w.dest.(http.CloseNotifier); ok {
-		return n.CloseNotify()
-	}
-	return make(chan bool)
-}
 func (w *cycleAttemptWriter) commit() {
 	if w.committed {
 		return
@@ -201,6 +196,8 @@ func (w *cycleAttemptWriter) commit() {
 	w.dest.WriteHeader(status)
 	w.committed = true
 	if w.buffer.Len() > 0 {
-		_, _ = w.dest.Write(w.buffer.Bytes())
+		if _, err := w.dest.Write(w.buffer.Bytes()); err != nil {
+			log.Printf("write cycle response: %v", err)
+		}
 	}
 }

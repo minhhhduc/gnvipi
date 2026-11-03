@@ -23,6 +23,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	idle := flag.Duration("idle", 65*time.Second, "pause before post-idle extract (stickyMaxIdle is 60s)")
 	workersCSV := flag.String("workers", "1,2", "comma-separated BrowserGroup sizes to compare")
 	drain := flag.Int("drain", 4, "tokens to Take after pool warm (forces refill under load)")
@@ -36,13 +42,16 @@ func main() {
 	defer stop()
 
 	workerNs, err := parseInts(*workersCSV)
-	if err != nil || len(workerNs) == 0 {
-		log.Fatalf("-workers: %v", err)
+	if err != nil {
+		return fmt.Errorf("-workers: %w", err)
+	}
+	if len(workerNs) == 0 {
+		return fmt.Errorf("-workers: no worker counts")
 	}
 
 	fmt.Printf("hangbench: idle=%s workers=%v drain=%d take-wait=%s pool-size=%d skip-idle=%v idle-burst=%v\n",
 		*idle, workerNs, *drain, *takeWait, *poolSize, *skipIdle, *idleBurst)
-	fmt.Printf("host chrome/chromedp procs before: %d\n", countChromeProcs())
+	fmt.Printf("host chrome/chromedp procs before: %d\n", countChromeProcs(ctx))
 
 	if *idleBurst {
 		for _, n := range workerNs {
@@ -54,9 +63,9 @@ func main() {
 				log.Printf("phase C workers=%d failed: %v", n, err)
 			}
 		}
-		fmt.Printf("\nhost chrome/chromedp procs after: %d\n", countChromeProcs())
+		fmt.Printf("\nhost chrome/chromedp procs after: %d\n", countChromeProcs(ctx))
 		fmt.Println("done")
-		return
+		return nil
 	}
 
 	// --- Phase A: single sticky Browser cold / steady / post-idle ---
@@ -76,8 +85,9 @@ func main() {
 		}
 	}
 
-	fmt.Printf("\nhost chrome/chromedp procs after: %d\n", countChromeProcs())
+	fmt.Printf("\nhost chrome/chromedp procs after: %d\n", countChromeProcs(ctx))
 	fmt.Println("done")
+	return nil
 }
 
 func phaseSticky(ctx context.Context, idle time.Duration, skipIdle bool) error {
@@ -87,7 +97,7 @@ func phaseSticky(ctx context.Context, idle time.Duration, skipIdle bool) error {
 		return fmt.Errorf("NewBrowser: %w", err)
 	}
 	defer b.Close()
-	fmt.Printf("  warm+alloc: %s  chrome_procs=%d\n", time.Since(t0).Round(time.Millisecond), countChromeProcs())
+	fmt.Printf("  warm+alloc: %s  chrome_procs=%d\n", time.Since(t0).Round(time.Millisecond), countChromeProcs(ctx))
 
 	for i := 1; i <= 3; i++ {
 		tok, d, err := timedExtract(ctx, b)
@@ -128,7 +138,7 @@ func phasePool(ctx context.Context, workers, size, drainN int, takeWait time.Dur
 	}
 	defer g.Close()
 	fmt.Printf("  group warm: %s chromes=%d chrome_procs=%d\n",
-		time.Since(t0).Round(time.Millisecond), g.Len(), countChromeProcs())
+		time.Since(t0).Round(time.Millisecond), g.Len(), countChromeProcs(ctx))
 
 	pool := captcha.NewPool(ctx, g.Extract, captcha.PoolConfig{
 		Size:    size,
@@ -191,7 +201,7 @@ func phasePool(ctx context.Context, workers, size, drainN int, takeWait time.Dur
 	fills, takes, errs, expired := pool.Stats()
 	fmt.Printf("  summary wall=%s ok=%d fail=%d max_ok=%s ready=%d fills=%d takes=%d errors=%d expired=%d chrome_procs=%d\n",
 		wall.Round(time.Millisecond), ok, fail, maxOK.Round(time.Millisecond),
-		pool.Ready(), fills, takes, errs, expired, countChromeProcs())
+		pool.Ready(), fills, takes, errs, expired, countChromeProcs(ctx))
 	return nil
 }
 
@@ -219,7 +229,7 @@ func phaseIdleBurst(ctx context.Context, workers, size, burst int, idle, takeWai
 		time.Sleep(200 * time.Millisecond)
 	}
 	fmt.Printf("  warm %s ready=%d chrome_procs=%d\n",
-		time.Since(t0).Round(time.Millisecond), pool.Ready(), countChromeProcs())
+		time.Since(t0).Round(time.Millisecond), pool.Ready(), countChromeProcs(ctx))
 
 	// Keep the buffer FULL during idle so workers stay blocked on send and
 	// cannot refresh sticky lastOK — same as a quiet chat with unused pooled tokens.
@@ -231,7 +241,7 @@ func phaseIdleBurst(ctx context.Context, workers, size, burst int, idle, takeWai
 	}
 	fills, takes, errs, expired := pool.Stats()
 	fmt.Printf("  after idle ready=%d fills=%d takes=%d errors=%d expired=%d chrome_procs=%d\n",
-		pool.Ready(), fills, takes, errs, expired, countChromeProcs())
+		pool.Ready(), fills, takes, errs, expired, countChromeProcs(ctx))
 
 	type result struct {
 		i   int
@@ -272,7 +282,7 @@ func phaseIdleBurst(ctx context.Context, workers, size, burst int, idle, takeWai
 	fills, takes, errs, expired = pool.Stats()
 	fmt.Printf("  summary wall=%s ok=%d fail=%d max_ok=%s ready=%d fills=%d takes=%d errors=%d expired=%d chrome_procs=%d\n",
 		wall.Round(time.Millisecond), ok, fail, maxOK.Round(time.Millisecond),
-		pool.Ready(), fills, takes, errs, expired, countChromeProcs())
+		pool.Ready(), fills, takes, errs, expired, countChromeProcs(ctx))
 	return nil
 }
 
@@ -302,12 +312,12 @@ func parseInts(csv string) ([]int, error) {
 	return out, nil
 }
 
-func countChromeProcs() int {
+func countChromeProcs(ctx context.Context) int {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return -1
 	}
 	// Count Chromium/Chrome headless processes started by this user (best-effort).
-	out, err := exec.Command("ps", "-A", "-o", "comm=").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "comm=").Output()
 	if err != nil {
 		return -1
 	}

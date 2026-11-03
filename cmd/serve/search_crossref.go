@@ -28,7 +28,7 @@ func (c *crossrefBackend) Healthy() bool { return c.client.health.Healthy() }
 //   - an exact DOI becomes a metadata lookup rather than a search
 //   - phrases go to query.bibliographic, which matches titles and descriptions
 //   - keywords are combined for a second, broader variant
-func (c *crossrefBackend) Adapt(ctx SearchContext) QueryPlan {
+func (c *crossrefBackend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: crossrefName, MaxResults: 8}
 	switch {
 	case ctx.DOI != "":
@@ -70,7 +70,7 @@ func (c *crossrefBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchR
 				"&rows=" + itoa(plan.MaxResults) +
 				"&select=DOI,title,author,published,abstract,URL,type,container-title,is-referenced-by-count"
 		}
-		status, body, err := c.client.do(ctx, target, map[string]string{
+		body, err := c.client.do(ctx, target, map[string]string{
 			"User-Agent": "gnvipi-gateway/1.0 (search gateway; mailto:admin@example.com)",
 		})
 		if err != nil {
@@ -79,7 +79,7 @@ func (c *crossrefBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchR
 			}
 			return nil, err
 		}
-		_ = status
+
 		parsed := parseCrossrefResults(body, plan.Identifier != "")
 		results = append(results, parsed...)
 		if len(results) >= plan.MaxResults {
@@ -118,20 +118,20 @@ func parseCrossrefResults(body []byte, single bool) []SearchResult {
 		if err := json.Unmarshal(body, &work); err != nil || work.DOI == "" {
 			return nil
 		}
-		return []SearchResult{crossrefToResult(work)}
+		return []SearchResult{crossrefToResult(&work)}
 	}
 	var resp crossrefResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil
 	}
 	results := make([]SearchResult, 0, len(resp.Message.Items))
-	for _, w := range resp.Message.Items {
-		results = append(results, crossrefToResult(w))
+	for i := range resp.Message.Items {
+		results = append(results, crossrefToResult(&resp.Message.Items[i]))
 	}
 	return results
 }
 
-func crossrefToResult(w crossrefWork) SearchResult {
+func crossrefToResult(w *crossrefWork) SearchResult {
 	res := SearchResult{
 		Backend: crossrefName,
 		Title:   strings.Join(w.Title, " "),
@@ -174,11 +174,4 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

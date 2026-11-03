@@ -3,6 +3,7 @@ package nvidia
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -36,7 +37,7 @@ func coalesceSSEEvents(src io.Reader, window time.Duration, emit func(line strin
 		reader := bufio.NewReaderSize(src, 64<<10)
 		for {
 			line, err := reader.ReadString('\n')
-			if len(line) > 0 {
+			if line != "" {
 				select {
 				case ch <- readResult{line: strings.TrimRight(line, "\r\n")}:
 				case <-done:
@@ -95,7 +96,7 @@ func coalesceSSEEvents(src io.Reader, window time.Duration, emit func(line strin
 		case rr := <-ch:
 			if rr.err != nil && rr.line == "" {
 				ferr := flushPending()
-				if rr.err == io.EOF {
+				if errors.Is(rr.err, io.EOF) {
 					return ferr
 				}
 				if ferr != nil {
@@ -183,7 +184,7 @@ func coalesceSSEEvents(src io.Reader, window time.Duration, emit func(line strin
 
 			if rr.err != nil {
 				ferr := flushPending()
-				if rr.err == io.EOF {
+				if errors.Is(rr.err, io.EOF) {
 					return ferr
 				}
 				if ferr != nil {
@@ -199,7 +200,7 @@ func pipeSSELines(src io.Reader, emit func(line string) error) error {
 	reader := bufio.NewReaderSize(src, 64<<10)
 	for {
 		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
+		if line != "" {
 			trimmed := strings.TrimRight(line, "\r\n")
 			if trimmed != "" && !strings.HasPrefix(trimmed, ":") {
 				// Same empty-data guard as the coalesce path: `data: \n\n`
@@ -217,7 +218,7 @@ func pipeSSELines(src io.Reader, emit func(line string) error) error {
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
@@ -226,7 +227,7 @@ func pipeSSELines(src io.Reader, emit func(line string) error) error {
 }
 
 func readerErrOrNil(err error) error {
-	if err == nil || err == io.EOF {
+	if err == nil || errors.Is(err, io.EOF) {
 		return nil
 	}
 	return err

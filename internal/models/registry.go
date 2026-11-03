@@ -143,8 +143,7 @@ func fileMetaCount(file *playgroundModelsFile) int {
 // Currently only moonshotai/kimi-k3 is marked Reasoning: Kimi-k3 takes the
 // standard reasoning_effort kwarg, so it just needs the generic fallback.
 func capabilityFor(model string) *ModelCapability {
-	switch model {
-	case "moonshotai/kimi-k3":
+	if model == "moonshotai/kimi-k3" {
 		return &ModelCapability{Reasoning: true}
 	}
 	return nil

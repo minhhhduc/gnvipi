@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -23,7 +24,7 @@ var sitekeyRE = regexp.MustCompile(`(?:data-sitekey\s*=\s*"|sitekey\s*[:=]\s*["'
 // Plain HTTP is fine here — NVIDIA serves the playground HTML with the
 // sitekey inlined; no SPA hydration required.
 func ScrapeSitekey(ctx context.Context, pageURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, http.NoBody)
 	if err != nil {
 		return "", err
 	}
@@ -34,7 +35,11 @@ func ScrapeSitekey(ctx context.Context, pageURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("scrape sitekey: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("scrape sitekey: close response: %v", err)
+		}
+	}()
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("scrape sitekey: status %d", resp.StatusCode)
 	}
@@ -52,7 +57,7 @@ func ScrapeSitekey(ctx context.Context, pageURL string) (string, error) {
 // ProbePlaygroundAlive reports whether a playground URL still serves HTML.
 // Used by cmd/probehard to mark retired models in playground_models.json.
 func ProbePlaygroundAlive(ctx context.Context, pageURL string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, http.NoBody)
 	if err != nil {
 		return false
 	}
@@ -62,7 +67,11 @@ func ProbePlaygroundAlive(ctx context.Context, pageURL string) bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("probe playground: close response: %v", err)
+		}
+	}()
 	if resp.StatusCode >= 400 {
 		return false
 	}

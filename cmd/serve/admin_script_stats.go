@@ -37,7 +37,7 @@ if (PAGE === 'dashboard') {
   ];
   let models = [], series = [], modelSeries = {}, events = [], startedAt = 0;
 
-  // Tile sparkline: last 12 points, series-coloured line, no fill.
+  // Tile sparkline: last 12 points, series-colored line, no fill.
   function spark(vals, color) {
     const v = vals.slice(-12), max = Math.max(1, ...v);
     const W = 96, H = 26;
@@ -132,7 +132,7 @@ if (PAGE === 'dashboard') {
             const top = Object.entries(modelSeries)
               .map(([m, s]) => [m, s.reduce((a, p) => a + (p.requests || 0), 0)])
               .sort((a, b) => b[1] - a[1]).slice(0, 8).map(x => x[0]);
-            // fixed colour by model-name hash — matches the provCell table, stable per render
+            // fixed color by model-name hash — matches the provCell table, stable per render
             const mcol = m => { let h = 0; for (let j = 0; j < m.length; j++) h = (h * 31 + m.charCodeAt(j)) >>> 0; return MCOLS[h % MCOLS.length]; };
             const grid = series.map((p, i) => {
               const o = {minute: p.minute};

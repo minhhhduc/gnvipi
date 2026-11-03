@@ -111,7 +111,7 @@ type PoolConfig struct {
 	// 1 (default) keeps the legacy single-token-per-borrow semantics.
 	// >1 requires PoolConfig.ExtractN to be set; Pool will call extractN
 	// once per borrow and enqueue each token separately. Only harness mode
-	// actually realises the speedup — playground mode serializes.
+	// actually realizes the speedup — playground mode serializes.
 	BatchSize int
 	// ExtractN is the batch extractor; required when BatchSize > 1.
 	ExtractN ExtractNFunc
@@ -239,10 +239,6 @@ func safeExtractN(extractN ExtractNFunc, ctx context.Context, n int) (out []stri
 	return extractN(ctx, n)
 }
 
-// reserveSlot blocks until queue capacity is available, then claims it before
-// extraction. The reservation prevents concurrent workers from over-minting.
-func (p *Pool) reserveSlot() bool { return p.reserveSlots(1) }
-
 // reserveSlots claims n capacity slots atomically; blocks until n slots are
 // available. Used by batch-mode workers so the pool cannot over-mint
 // relative to Size.
@@ -270,8 +266,6 @@ func (p *Pool) reserveSlots(n int) bool {
 		}
 	}
 }
-
-func (p *Pool) releaseReservation() { p.releaseReservations(1) }
 
 // releaseReservations frees n reserved slots. n>reserved is clamped to
 // reserved so a bug elsewhere cannot drive reserved negative.

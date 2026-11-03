@@ -40,7 +40,7 @@ func TestAdminDeleteRestorePreservesIndependentMasks(t *testing.T) {
 				prefs = next
 				engine = mountChain(t, next, func(c *gin.Context) { c.Status(http.StatusTeapot) })
 				for _, path := range []string{"/admin/delete", "/admin/models"} {
-					engine.POST(path, func(c *gin.Context) { adminRoutes(c, nil, func() []gatewayModel { return nil }) })
+					engine.POST(path, func(c *gin.Context) { adminRoutes(c, nil) })
 				}
 			}
 			post := func(path, body string, want int) {

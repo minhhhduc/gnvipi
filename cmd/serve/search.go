@@ -49,18 +49,6 @@ func publicSearchHost(u *url.URL) bool {
 
 type searchResult struct{ Title, URL string }
 
-func searchWeb(query string) ([]searchResult, error) {
-	results, err := searchWebRanked(query)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]searchResult, 0, len(results))
-	for _, r := range results {
-		out = append(out, searchResult{Title: r.Title, URL: r.URL})
-	}
-	return out, nil
-}
-
 // searchWebRanked runs the adaptive pipeline and returns normalized results.
 // The configured search URL still selects the general-web engine (Bing or
 // DuckDuckGo); intent selects the academic and legal backends.
@@ -114,10 +102,10 @@ func parseSearchResults(doc *html.Node, page *url.URL) []searchResult {
 					redirect = link.Query().Get("q")
 				}
 				if redirect != "" {
-					link, _ = url.Parse(redirect)
+					link, err = url.Parse(redirect)
 				}
 			}
-			if link != nil && (link.Scheme == "http" || link.Scheme == "https") && strings.TrimPrefix(link.Hostname(), "www.") != strings.TrimPrefix(page.Hostname(), "www.") && !seen[link.String()] {
+			if err == nil && link != nil && (link.Scheme == "http" || link.Scheme == "https") && strings.TrimPrefix(link.Hostname(), "www.") != strings.TrimPrefix(page.Hostname(), "www.") && !seen[link.String()] {
 				title := strings.Join(strings.Fields(nodeText(n)), " ")
 				if len(title) >= 8 {
 					results = append(results, searchResult{Title: title, URL: link.String()})
@@ -196,7 +184,8 @@ func searchMCP(c *gin.Context) {
 			text = err.Error()
 		} else if len(items) > 0 {
 			var b strings.Builder
-			for _, item := range items {
+			for i := range items {
+				item := &items[i]
 				if item.Snippet != "" {
 					fmt.Fprintf(&b, "%s\n%s\n%s\n\n", item.Title, item.URL, item.Snippet)
 				} else {

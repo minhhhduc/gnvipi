@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -19,7 +20,10 @@ func TestAutoModePreservesClaudePayload(t *testing.T) {
 	e := gin.New()
 	e.Use(claudeAutoModelAlias(p))
 	e.POST("/v1/messages", func(c *gin.Context) {
-		body, _ := io.ReadAll(c.Request.Body)
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		c.Data(http.StatusOK, "application/json", body)
 	})
 	for _, model := range []string{"automode", "claude-sonnet-5", "zenmux/atria-asi/atria-dawn-preview"} {
@@ -36,7 +40,7 @@ func TestAutoModePreservesClaudePayload(t *testing.T) {
 			want = strings.Replace(body, `"model": "automode"`, `"model": "local/verifier"`, 1)
 		}
 		w := httptest.NewRecorder()
-		e.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)))
+		e.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
 		if w.Code != http.StatusOK || w.Body.String() != want {
 			t.Fatalf("model %s: status=%d body=%s; want=%s", model, w.Code, w.Body.String(), want)
 		}
@@ -51,21 +55,34 @@ func TestAutoModeMappedToCyclePreservesPayload(t *testing.T) {
 	body := `{"model":"automode","system":"Original policy","max_tokens":8192,"thinking":{"type":"enabled","budget_tokens":4096},"stop_sequences":["</block>"],"messages":[{"role":"user","content":"<transcript>earlier context and pending command</transcript>"}]}`
 	var calls []string
 	e.POST("/v1/messages", func(c *gin.Context) {
-		received, _ := io.ReadAll(c.Request.Body)
+		received, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal(received, &payload); err != nil {
 			t.Fatal(err)
 		}
 		var model string
-		_ = json.Unmarshal(payload["model"], &model)
+		if err := json.Unmarshal(payload["model"], &model); err != nil {
+			t.Fatal(err)
+		}
 		calls = append(calls, model)
 		var want map[string]json.RawMessage
-		_ = json.Unmarshal([]byte(body), &want)
+		if err := json.Unmarshal([]byte(body), &want); err != nil {
+			t.Fatal(err)
+		}
 		delete(payload, "model")
 		delete(want, "model")
-		gotJSON, _ := json.Marshal(payload)
-		wantJSON, _ := json.Marshal(want)
-		if string(gotJSON) != string(wantJSON) {
+		gotJSON, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantJSON, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(gotJSON, wantJSON) {
 			t.Fatalf("cycle changed payload: %s", received)
 		}
 		if model == "first" {
@@ -75,7 +92,7 @@ func TestAutoModeMappedToCyclePreservesPayload(t *testing.T) {
 		c.String(http.StatusOK, "<block>no</block>")
 	})
 	w := httptest.NewRecorder()
-	e.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	e.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
 	if w.Code != http.StatusOK || w.Body.String() != "<block>no</block>" || strings.Join(calls, ",") != "first,second" {
 		t.Fatalf("status=%d body=%s calls=%v", w.Code, w.Body.String(), calls)
 	}
@@ -90,13 +107,18 @@ func TestAutoModelStatsRecordTargetOnce(t *testing.T) {
 			prov := customProvider{Name: "auto-stats", Model: kind, BaseURL: "https://example.invalid", MessagesOnly: kind == "messages", ResponsesOnly: kind == "responses"}
 			p := &modelPrefs{autoModel: prov.modelID(), providers: []customProvider{prov}}
 			client := &http.Client{Transport: testRoundTripper(func(r *http.Request) (*http.Response, error) {
-				body, _ := io.ReadAll(r.Body)
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
 				var got struct{ Model string }
-				_ = json.Unmarshal(body, &got)
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatal(err)
+				}
 				if got.Model != kind {
 					t.Fatalf("upstream model=%q", got.Model)
 				}
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"resp_1","output":[],"usage":{"input_tokens":7,"output_tokens":3}}`))}, nil
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"resp_1","output":[],"usage":{"input_tokens":7,"output_tokens":3}}`))}, nil
 			})}
 			compatClient, messagesOnlyClient = client, client
 			e := gin.New()
@@ -104,7 +126,7 @@ func TestAutoModelStatsRecordTargetOnce(t *testing.T) {
 			e.POST("/v1/messages", func(c *gin.Context) {
 				c.Data(http.StatusOK, "application/json", []byte(`{"usage":{"input_tokens":7,"output_tokens":3}}`))
 			})
-			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"automode","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"automode","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
 			if kind == "canceled" {
 				ctx, cancel := context.WithCancel(req.Context())
 				cancel()

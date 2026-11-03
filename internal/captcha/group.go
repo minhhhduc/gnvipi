@@ -304,7 +304,7 @@ func (g *BrowserGroup) ExtractN(ctx context.Context, n int) ([]string, error) {
 	nb, rerr := g.recycle(b)
 	if rerr != nil {
 		g.releaseBorrowed(b)
-		return nil, fmt.Errorf("%w; chrome recycle: %v", err, rerr)
+		return nil, fmt.Errorf("%w; chrome recycle: %w", err, rerr)
 	}
 	toks, err = tryBatch(nb)
 	g.releaseBorrowed(nb)
@@ -364,7 +364,7 @@ func (g *BrowserGroup) Extract(ctx context.Context) (string, error) {
 		// old browser already closed inside recycle on success only;
 		// on failure keep the slot with the old browser if still usable.
 		g.releaseBorrowed(b)
-		return "", fmt.Errorf("%w; chrome recycle: %v", err, rerr)
+		return "", fmt.Errorf("%w; chrome recycle: %w", err, rerr)
 	}
 	tok, err = nb.Extract(ctx)
 	g.releaseBorrowed(nb)

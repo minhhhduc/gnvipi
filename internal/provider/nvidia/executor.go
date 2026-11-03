@@ -58,7 +58,7 @@ type Executor struct {
 }
 
 // NewExecutor builds an Executor from Options.
-func NewExecutor(opts Options) *Executor {
+func NewExecutor(opts *Options) *Executor {
 	e := &Executor{
 		auto:         opts.Auto,
 		coalesce:     opts.Coalesce,
@@ -119,19 +119,26 @@ func (e *Executor) HttpRequest(ctx context.Context, a *coreauth.Auth, req *http.
 }
 
 // Execute handles non-streaming chat completions against NVIDIA predict.
-func (e *Executor) Execute(ctx context.Context, _ *coreauth.Auth, req clipexec.Request, opts clipexec.Options) (clipexec.Response, error) {
-	body, info, err := e.preparePayload(req, opts, false)
+func (e *Executor) Execute(
+	ctx context.Context, _ *coreauth.Auth, req clipexec.Request,
+	opts clipexec.Options, //nolint:gocritic // hugeParam: CLIProxyAPI ProviderExecutor requires options by value.
+) (clipexec.Response, error) {
+	body, info, err := e.preparePayload(req, &opts, false)
 	if err != nil {
 		return clipexec.Response{}, err
 	}
 	start := time.Now()
-	upResp, release, err := e.doPredict(ctx, info, body, opts)
+	upResp, release, err := e.doPredict(ctx, info, body, &opts)
 	if err != nil {
 		GlobalStats.Observe(modelFrom(body), 0, 0, time.Since(start), 0, false, true)
 		return clipexec.Response{}, err
 	}
 	defer release()
-	defer upResp.Body.Close()
+	defer func() {
+		if err := upResp.Body.Close(); err != nil {
+			log.Printf("close upstream response: %v", err)
+		}
+	}()
 
 	raw, err := io.ReadAll(upResp.Body)
 	if err != nil {
@@ -152,18 +159,23 @@ func modelFrom(body []byte) string {
 	var probe struct {
 		Model string `json:"model"`
 	}
-	_ = json.Unmarshal(body, &probe)
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
 	return probe.Model
 }
 
 // ExecuteStream handles streaming chat completions against NVIDIA predict.
-func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clipexec.Request, opts clipexec.Options) (*clipexec.StreamResult, error) {
-	body, info, err := e.preparePayload(req, opts, true)
+func (e *Executor) ExecuteStream(
+	ctx context.Context, _ *coreauth.Auth, req clipexec.Request,
+	opts clipexec.Options, //nolint:gocritic // hugeParam: CLIProxyAPI ProviderExecutor requires options by value.
+) (*clipexec.StreamResult, error) {
+	body, info, err := e.preparePayload(req, &opts, true)
 	if err != nil {
 		return nil, err
 	}
 	start := time.Now()
-	upResp, release, err := e.doPredict(ctx, info, body, opts)
+	upResp, release, err := e.doPredict(ctx, info, body, &opts) //nolint:bodyclose // The stream worker owns the body and closes it before releasing its inflight slot.
 	if err != nil {
 		GlobalStats.Observe(modelFrom(body), 0, 0, time.Since(start), 0, true, true)
 		return nil, err
@@ -173,7 +185,11 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 	go func() {
 		defer close(out)
 		defer release()
-		defer upResp.Body.Close()
+		defer func() {
+			if err := upResp.Body.Close(); err != nil {
+				log.Printf("close upstream response: %v", err)
+			}
+		}()
 
 		statModel := modelFrom(body)
 		var inTok, outTok uint64
@@ -230,7 +246,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, req clip
 	return &clipexec.StreamResult{Headers: upResp.Header.Clone(), Chunks: out}, nil
 }
 
-func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, stream bool) ([]byte, models.ModelInfo, error) {
+func (e *Executor) preparePayload(req clipexec.Request, opts *clipexec.Options, stream bool) ([]byte, models.ModelInfo, error) {
 	from := opts.SourceFormat
 	if from == "" {
 		from = sdktranslator.FormatOpenAI
@@ -238,12 +254,12 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 	model := req.Model
 	payload, err := translateToChat(from, model, req.Payload, stream)
 	if err != nil {
-		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
+		return nil, models.ModelInfo{}, requestErr("invalid json body")
 	}
 
 	body, err := NormalizeRequestBody(payload)
 	if err != nil {
-		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
+		return nil, models.ModelInfo{}, requestErr("invalid json body")
 	}
 
 	// Validate tools[] before forwarding upstream: NVIDIA returns a generic
@@ -253,24 +269,26 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 	// occasionally drifted (missing "function" key, missing "name"), so a
 	// caller-side mistake would otherwise reach NVIDIA verbatim.
 	if err := validateTools(body); err != nil {
-		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, err.Error())
+		return nil, models.ModelInfo{}, requestErr(err.Error())
 	}
 
 	body, err = sanitizeToolMessages(body)
 	if err != nil {
-		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
+		return nil, models.ModelInfo{}, requestErr("invalid json body")
 	}
 
 	// Ensure stream flag matches the execution mode after translation.
 	body, err = forceStreamFlag(body, stream)
 	if err != nil {
-		return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, "invalid json body")
+		return nil, models.ModelInfo{}, requestErr("invalid json body")
 	}
 
 	var modelProbe struct {
 		Model string `json:"model"`
 	}
-	_ = json.Unmarshal(body, &modelProbe)
+	if err := json.Unmarshal(body, &modelProbe); err != nil {
+		return nil, models.ModelInfo{}, requestErr("invalid json body")
+	}
 	lookupModel := modelProbe.Model
 	if lookupModel == "" {
 		lookupModel = model
@@ -278,8 +296,9 @@ func (e *Executor) preparePayload(req clipexec.Request, opts clipexec.Options, s
 	log.Printf("nvidia executor got model=%q", lookupModel)
 	info, err := models.Lookup(lookupModel)
 	if err != nil {
-		if uerr, ok := err.(*models.ErrUnknownModel); ok {
-			return nil, models.ModelInfo{}, requestErr(http.StatusBadRequest, uerr.Error())
+		var uerr *models.ErrUnknownModel
+		if errors.As(err, &uerr) {
+			return nil, models.ModelInfo{}, requestErr(uerr.Error())
 		}
 		return nil, models.ModelInfo{}, err
 	}
@@ -307,7 +326,7 @@ func forceStreamFlag(body []byte, stream bool) ([]byte, error) {
 	return json.Marshal(raw)
 }
 
-func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []byte, opts clipexec.Options) (*http.Response, func(), error) {
+func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []byte, opts *clipexec.Options) (*http.Response, func(), error) {
 	// GLM's Playground slugs are hyphenated; NIM requires the dotted API model name.
 	if nimModel, ok := map[string]string{
 		"glm-5-3-flash": "z-ai/glm-5.3-flash",
@@ -315,7 +334,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 	}[info.Slug]; ok {
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal(body, &payload); err != nil {
-			return nil, nil, requestErr(http.StatusBadRequest, "invalid json body")
+			return nil, nil, requestErr("invalid json body")
 		}
 		raw, err := json.Marshal(nimModel)
 		if err != nil {
@@ -425,12 +444,21 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 			return upResp, cleanup, nil
 		}
 
-		raw, _ := io.ReadAll(io.LimitReader(upResp.Body, 4<<10))
+		raw, readErr := io.ReadAll(io.LimitReader(upResp.Body, 4<<10))
 		status := upResp.StatusCode
-		_ = upResp.Body.Close()
+		if err := upResp.Body.Close(); err != nil {
+			log.Printf("close upstream response: %v", err)
+		}
 		upResp = nil
 		release()
 		release = nil
+		if readErr != nil {
+			return nil, nil, &coreauth.Error{
+				Code:       "upstream_error",
+				Message:    fmt.Sprintf("read upstream error response: %v", readErr),
+				HTTPStatus: http.StatusBadGateway,
+			}
+		}
 
 		retryable := isRetryableCaptchaFailure(status, raw)
 		if retryable && attempt < maxAttempts {
@@ -489,7 +517,7 @@ func (e *Executor) acquireInflight(ctx context.Context) (release func(), err err
 	case <-timer.C:
 		return nil, fmt.Errorf("max in-flight upstream streams reached; retry later")
 	case <-ctx.Done():
-		return nil, fmt.Errorf("client cancelled before a stream slot opened")
+		return nil, fmt.Errorf("client canceled before a stream slot opened")
 	}
 }
 
@@ -557,11 +585,11 @@ func captchaErr(err error) error {
 	}
 }
 
-func requestErr(status int, msg string) error {
+func requestErr(msg string) error {
 	return &coreauth.Error{
 		Code:       "request_scoped",
 		Message:    msg,
-		HTTPStatus: status,
+		HTTPStatus: http.StatusBadRequest,
 	}
 }
 

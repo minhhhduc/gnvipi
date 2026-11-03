@@ -31,7 +31,7 @@ func TestCountTokens_returnsApproximationForEveryModel(t *testing.T) {
 			}
 
 			// When: the local executor counts tokens without an upstream request.
-			response, err := NewExecutor(Options{}).CountTokens(
+			response, err := NewExecutor(&Options{}).CountTokens(
 				context.Background(),
 				nil,
 				request,

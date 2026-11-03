@@ -22,8 +22,17 @@ import (
 
 func TestLiveSearchSmoke(t *testing.T) {
 	base := "http://localhost:8081"
-	if _, err := http.Post(base+"/mcp", "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)); err != nil {
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
 		t.Skipf("gateway not running on %s (%v) — start it with the :8081 smoke server first", base, err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
 	}
 
 	queries := []string{
@@ -72,10 +81,13 @@ func TestLiveSearchSmoke(t *testing.T) {
 }
 
 func callSearchMCP(base, query string) (string, error) {
-	req, _ := json.Marshal(map[string]any{
+	req, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": "search_web", "arguments": map[string]any{"query": query}},
 	})
+	if err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	reqReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/mcp", bytes.NewReader(req))
@@ -87,9 +99,15 @@ func callSearchMCP(base, query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
+	raw, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(raw))
 	}
 	var out struct {

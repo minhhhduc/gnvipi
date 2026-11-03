@@ -25,11 +25,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token")
 	auto := flag.Bool("auto", false, "extract captcha via chromedp")
 	prompt := flag.String("prompt", "Count from 1 to 30, one number per line.", "user prompt")
@@ -43,10 +49,10 @@ func main() {
 	defer stop()
 
 	if *concurrency < 1 {
-		log.Fatal("-concurrency must be >= 1")
+		return fmt.Errorf("-concurrency must be >= 1")
 	}
 	if *concurrency > 1 && *proxy == "" {
-		log.Fatal("-concurrency > 1 requires -proxy (local serve pool handles captchas)")
+		return fmt.Errorf("-concurrency > 1 requires -proxy (local serve pool handles captchas)")
 	}
 
 	endpoint := gnvipi.PredictEndpoint
@@ -68,7 +74,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	fmt.Printf("endpoint=%s continuous_usage=%v max_tokens=%d concurrency=%d\n",
@@ -77,13 +83,13 @@ func main() {
 	if *concurrency == 1 {
 		token, err := resolveToken(ctx, *auto, *captchaFlag, *proxy != "")
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
-		runOne(ctx, endpoint, body, token, *proxy != "")
-		return
+		return runOne(ctx, endpoint, body, token, *proxy != "")
 	}
 
 	runConcurrent(ctx, endpoint, body, *concurrency)
+	return nil
 }
 
 func resolveToken(ctx context.Context, auto bool, captchaFlag string, viaProxy bool) (string, error) {
@@ -108,24 +114,35 @@ type runResult struct {
 	Err    string
 }
 
-func runOne(ctx context.Context, endpoint string, body []byte, token string, viaProxy bool) {
+func runOne(ctx context.Context, endpoint string, body []byte, token string, viaProxy bool) error {
 	start := time.Now()
 	resp, err := doStream(ctx, endpoint, body, token, viaProxy)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("close stream response: %v", err)
+		}
+	}()
 	headerAt := time.Now()
 
 	fmt.Printf("http_status=%d ttfb=%s ttfb_ms=%d content-type=%q\n",
 		resp.StatusCode, headerAt.Sub(start).Round(time.Millisecond), headerAt.Sub(start).Milliseconds(), resp.Header.Get("Content-Type"))
 	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<10))
-		log.Fatalf("upstream error: %s", raw)
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<10))
+		if err != nil {
+			return fmt.Errorf("upstream error: read body: %w", err)
+		}
+		return fmt.Errorf("upstream error: %s", raw)
 	}
 
-	stats := collectSSE(resp.Body, start, headerAt)
-	printReport(stats)
+	stats, err := collectSSE(resp.Body, start, headerAt)
+	if err != nil {
+		return err
+	}
+	printReport(&stats)
+	return nil
 }
 
 func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
@@ -144,8 +161,10 @@ func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
 				return
 			}
 			headerAt := time.Now()
-			st := collectSSE(resp.Body, start, headerAt)
-			_ = resp.Body.Close()
+			st, readErr := collectSSE(resp.Body, start, headerAt)
+			if err := resp.Body.Close(); err != nil {
+				log.Printf("request %d: close stream response: %v", i, err)
+			}
 			rr := runResult{
 				Idx:    i,
 				Status: resp.StatusCode,
@@ -155,6 +174,8 @@ func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
 			}
 			if resp.StatusCode >= 400 {
 				rr.Err = fmt.Sprintf("http %d", resp.StatusCode)
+			} else if readErr != nil {
+				rr.Err = readErr.Error()
 			}
 			results[i] = rr
 		}(i)
@@ -211,24 +232,24 @@ func doStream(ctx context.Context, endpoint string, body []byte, token string, v
 }
 
 type chunkEvent struct {
-	At          time.Time
-	Gap         time.Duration
-	Bytes       int
-	ContentLen  int
-	HasUsage    bool
+	At           time.Time
+	Gap          time.Duration
+	Bytes        int
+	ContentLen   int
+	HasUsage     bool
 	FinishReason string
-	RawPreview  string
+	RawPreview   string
 }
 
 type streamStats struct {
-	TTFB       time.Duration
-	Total      time.Duration
-	Events     []chunkEvent
-	Content    strings.Builder
-	DoneSeen   bool
+	TTFB     time.Duration
+	Total    time.Duration
+	Events   []chunkEvent
+	Content  strings.Builder
+	DoneSeen bool
 }
 
-func collectSSE(body io.Reader, start, headerAt time.Time) streamStats {
+func collectSSE(body io.Reader, start, headerAt time.Time) (streamStats, error) {
 	st := streamStats{TTFB: headerAt.Sub(start)}
 	reader := bufio.NewReaderSize(body, 64*1024)
 	last := headerAt
@@ -238,7 +259,8 @@ func collectSSE(body io.Reader, start, headerAt time.Time) streamStats {
 		now := time.Now()
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("read: %v", err)
+				st.Total = time.Since(start)
+				return st, fmt.Errorf("read stream: %w", err)
 			}
 			break
 		}
@@ -264,20 +286,22 @@ func collectSSE(body io.Reader, start, headerAt time.Time) streamStats {
 		}
 
 		var raw map[string]any
-		if json.Unmarshal([]byte(data), &raw) == nil {
-			if u, ok := raw["usage"]; ok && u != nil {
-				ev.HasUsage = true
-			}
-			if choices, ok := raw["choices"].([]any); ok && len(choices) > 0 {
-				if ch, ok := choices[0].(map[string]any); ok {
-					if fr, ok := ch["finish_reason"].(string); ok {
-						ev.FinishReason = fr
-					}
-					if delta, ok := ch["delta"].(map[string]any); ok {
-						if c, ok := delta["content"].(string); ok {
-							ev.ContentLen = len([]rune(c))
-							st.Content.WriteString(c)
-						}
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			st.Total = time.Since(start)
+			return st, fmt.Errorf("decode stream chunk: %w", err)
+		}
+		if u, ok := raw["usage"]; ok && u != nil {
+			ev.HasUsage = true
+		}
+		if choices, ok := raw["choices"].([]any); ok && len(choices) > 0 {
+			if ch, ok := choices[0].(map[string]any); ok {
+				if fr, ok := ch["finish_reason"].(string); ok {
+					ev.FinishReason = fr
+				}
+				if delta, ok := ch["delta"].(map[string]any); ok {
+					if c, ok := delta["content"].(string); ok {
+						ev.ContentLen = len([]rune(c))
+						st.Content.WriteString(c)
 					}
 				}
 			}
@@ -290,13 +314,12 @@ func collectSSE(body io.Reader, start, headerAt time.Time) streamStats {
 		st.Events = append(st.Events, ev)
 	}
 	st.Total = time.Since(start)
-	return st
+	return st, nil
 }
 
-func printReport(st streamStats) {
+func printReport(st *streamStats) {
 	gaps := make([]time.Duration, 0, len(st.Events))
 	var contentChunks, usageChunks, emptyChunks int
-	var contentRunes int
 	var maxGap time.Duration
 	var maxGapIdx int
 
@@ -309,19 +332,18 @@ func printReport(st streamStats) {
 			maxGap = ev.Gap
 			maxGapIdx = i
 		}
-		if ev.ContentLen > 0 {
+		switch {
+		case ev.ContentLen > 0:
 			contentChunks++
-			contentRunes += ev.ContentLen
-		} else if ev.HasUsage && ev.ContentLen == 0 {
+		case ev.HasUsage:
 			usageChunks++
-		} else {
+		default:
 			emptyChunks++
 		}
 	}
 	// count first event content too
 	if len(st.Events) > 0 && st.Events[0].ContentLen > 0 {
 		contentChunks++
-		contentRunes += st.Events[0].ContentLen
 	}
 
 	fmt.Println()

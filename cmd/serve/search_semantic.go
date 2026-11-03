@@ -27,7 +27,7 @@ func (s *s2Backend) Healthy() bool { return s.client.health.Healthy() }
 //
 //   - an arXiv ID or DOI resolves through /paper/{id}, which is exact
 //   - everything else uses /paper/search with the phrase terms
-func (s *s2Backend) Adapt(ctx SearchContext) QueryPlan {
+func (s *s2Backend) Adapt(ctx *SearchContext) QueryPlan {
 	plan := QueryPlan{Backend: s2Name, MaxResults: 8}
 	switch {
 	case ctx.ArxivID != "":
@@ -66,14 +66,14 @@ func (s *s2Backend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult,
 				url.QueryEscape(q) + "&limit=" + itoa(plan.MaxResults) +
 				"&fields=title,authors,abstract,externalIds,year,citationCount,url,openAccessPdf"
 		}
-		status, body, err := s.client.do(ctx, target, nil)
+		body, err := s.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {
 				return results, nil
 			}
 			return nil, err
 		}
-		_ = status
+
 		parsed := parseS2Results(body, plan.Identifier != "")
 		results = append(results, parsed...)
 		if len(results) >= plan.MaxResults {
@@ -110,20 +110,20 @@ func parseS2Results(body []byte, single bool) []SearchResult {
 		if err := json.Unmarshal(body, &p); err != nil || p.PaperID == "" {
 			return nil
 		}
-		return []SearchResult{s2ToResult(p)}
+		return []SearchResult{s2ToResult(&p)}
 	}
 	var resp s2SearchResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil
 	}
 	results := make([]SearchResult, 0, len(resp.Data))
-	for _, p := range resp.Data {
-		results = append(results, s2ToResult(p))
+	for i := range resp.Data {
+		results = append(results, s2ToResult(&resp.Data[i]))
 	}
 	return results
 }
 
-func s2ToResult(p s2Paper) SearchResult {
+func s2ToResult(p *s2Paper) SearchResult {
 	res := SearchResult{
 		Backend: s2Name,
 		Title:   p.Title,

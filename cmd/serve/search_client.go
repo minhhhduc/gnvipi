@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -197,23 +198,22 @@ type sharedSearchClient struct {
 	httpClient *http.Client
 	limiter    *rateLimiter
 	health     *backendHealth
-	cache      *requestCache
 	maxRetries int
 	userAgent  string
 }
 
-func (s *sharedSearchClient) do(ctx context.Context, target string, extraHeaders map[string]string) (int, []byte, error) {
+func (s *sharedSearchClient) do(ctx context.Context, target string, extraHeaders map[string]string) (body []byte, err error) {
 	if err := s.limiter.Wait(ctx); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if !s.health.Healthy() {
-		return 0, nil, ErrBlocked
+		return nil, ErrBlocked
 	}
 	var lastErr error
 	for attempt := 0; attempt <= s.maxRetries; attempt++ { // ponytail: bounded to 3 attempts, no retry storms
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
 		if err != nil {
-			return 0, nil, err
+			return nil, err
 		}
 		req.Header.Set("User-Agent", s.userAgent)
 		req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
@@ -231,27 +231,29 @@ func (s *sharedSearchClient) do(ctx context.Context, target string, extraHeaders
 			break
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("close search response: %v", err)
+		}
 		if readErr != nil {
 			lastErr = ErrUnreachable
 			break
 		}
 		if cerr := classifyBackendError(resp.StatusCode, body); cerr != nil {
 			lastErr = cerr
-			if attempt < s.maxRetries && (cerr == ErrRateLimited || cerr == ErrUpstream) {
+			if attempt < s.maxRetries && (errors.Is(cerr, ErrRateLimited) || errors.Is(cerr, ErrUpstream)) {
 				s.backoff(ctx, attempt, resp.Header.Get("Retry-After"))
 				continue
 			}
 			break
 		}
 		s.health.Record(nil)
-		return resp.StatusCode, body, nil
+		return body, nil
 	}
 	s.health.Record(lastErr)
 	if lastErr == nil {
 		lastErr = ErrUpstream
 	}
-	return 0, nil, lastErr
+	return nil, lastErr
 }
 
 // backoff waits a bounded, jittered interval honoring a server Retry-After.

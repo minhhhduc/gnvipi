@@ -8,10 +8,6 @@ import (
 // search_url.go — small URL helpers kept out of the backend files so the
 // ranking code stays readable.
 
-type nilURL struct{}
-
-func (nilURL) String() string { return "" }
-
 type parsedURL struct {
 	inner *url.URL
 }

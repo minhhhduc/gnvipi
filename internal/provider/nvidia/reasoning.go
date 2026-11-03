@@ -126,7 +126,7 @@ func requestedEffort(raw, kw map[string]any, defaultLevel string) (string, bool)
 	return "", false
 }
 
-func requestedThinkingEnabled(raw, kw map[string]any) (bool, bool) {
+func requestedThinkingEnabled(raw, kw map[string]any) (enabled, present bool) {
 	if enabled, ok := kw["enable_thinking"].(bool); ok {
 		return enabled, true
 	}
@@ -140,8 +140,8 @@ func requestedThinkingEnabled(raw, kw map[string]any) (bool, bool) {
 			}
 		}
 	}
-	enabled, ok := raw["enable_thinking"].(bool)
-	return enabled, ok
+	enabled, present = raw["enable_thinking"].(bool)
+	return enabled, present
 }
 
 func requestedClearThinking(raw, kw map[string]any) (any, bool) {

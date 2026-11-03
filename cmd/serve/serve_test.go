@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -75,7 +76,11 @@ func TestBuildConfigEmptyAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(cfg.AuthDir)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(cfg.AuthDir); err != nil {
+			t.Errorf("remove auth dir: %v", err)
+		}
+	})
 	if cfg.Port != 18080 {
 		t.Fatalf("port=%d", cfg.Port)
 	}
@@ -99,17 +104,17 @@ func TestBuildConfigEmptyAPIKeys(t *testing.T) {
 }
 
 func TestNvidiaModelHookReregisters(t *testing.T) {
-	models := nvidia.RegistryModels()
-	if len(models) == 0 {
+	catalog := nvidia.RegistryModels()
+	if len(catalog) == 0 {
 		t.Fatal("empty registry models")
 	}
 	const clientID = "nvidia-local.json"
 	reg := cliproxy.GlobalModelRegistry()
-	reg.RegisterClient(clientID, nvidiaProvider, models)
+	reg.RegisterClient(clientID, nvidiaProvider, catalog)
 	t.Cleanup(func() { reg.UnregisterClient(clientID) })
 
 	reg.UnregisterClient(clientID)
-	hook := &nvidiaModelHook{getModels: func() []*cliproxy.ModelInfo { return models }}
+	hook := &nvidiaModelHook{getModels: func() []*cliproxy.ModelInfo { return catalog }}
 	hook.OnModelsUnregistered(context.Background(), nvidiaProvider, clientID)
 
 	got := reg.GetAvailableModelsByProvider(nvidiaProvider)
@@ -119,9 +124,9 @@ func TestNvidiaModelHookReregisters(t *testing.T) {
 }
 
 func TestBindNvidiaRuntimeRegistersExecutor(t *testing.T) {
-	models := nvidia.RegistryModels()
+	catalog := nvidia.RegistryModels()
 	core := coreauth.NewManager(nil, nil, nil)
-	exec := nvidia.NewExecutor(nvidia.Options{})
+	exec := nvidia.NewExecutor(&nvidia.Options{})
 	if _, err := core.Register(coreauth.WithSkipPersist(context.Background()), &coreauth.Auth{
 		ID:       "nvidia-test",
 		Provider: nvidiaProvider,
@@ -129,7 +134,7 @@ func TestBindNvidiaRuntimeRegistersExecutor(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	n := bindNvidiaRuntime(core, exec, models)
+	n := bindNvidiaRuntime(core, exec, catalog)
 	if n != 1 {
 		t.Fatalf("auth count=%d", n)
 	}
@@ -143,13 +148,13 @@ func TestBindNvidiaRuntimeRegistersExecutor(t *testing.T) {
 }
 
 func TestBindNvidiaRuntimePrimesModelsBeforeAuthLoad(t *testing.T) {
-	models := nvidia.RegistryModels()
+	catalog := nvidia.RegistryModels()
 	reg := cliproxy.GlobalModelRegistry()
 	reg.UnregisterClient(nvidiaAuthFileName)
 	t.Cleanup(func() { reg.UnregisterClient(nvidiaAuthFileName) })
 
 	core := coreauth.NewManager(nil, nil, nil)
-	bindNvidiaRuntime(core, nvidia.NewExecutor(nvidia.Options{}), models)
+	bindNvidiaRuntime(core, nvidia.NewExecutor(&nvidia.Options{}), catalog)
 
 	got := reg.GetAvailableModelsByProvider(nvidiaProvider)
 	if len(got) == 0 {
@@ -162,7 +167,7 @@ func TestBindNvidiaRuntimePrimesModelsBeforeAuthLoad(t *testing.T) {
 // any other path.
 func TestRequestLoggerRecordsCustomMessages(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	t.Setenv("GNVIPI_STATS_FILE", filepath.Join(os.TempDir(), "gnvipi-capture-test-stats.jsonl"))
+	t.Setenv("GNVIPI_STATS_FILE", filepath.Join(t.TempDir(), "stats.jsonl"))
 	p := &modelPrefs{providers: []customProvider{
 		{Name: "b-ai-test", Model: "qwen3.8-flash"},
 		{Name: "mw-test", Model: "moe", MessagesOnly: true},
@@ -177,8 +182,12 @@ func TestRequestLoggerRecordsCustomMessages(t *testing.T) {
 	engine.POST("/v1/chat/completions", handler)
 
 	post := func(path, model string) {
-		body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 16})
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"model": model, "max_tokens": 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, bytes.NewReader(body))
 		engine.ServeHTTP(httptest.NewRecorder(), req)
 	}
 	for _, tc := range []struct{ path, model string }{

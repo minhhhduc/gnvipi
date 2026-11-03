@@ -43,13 +43,16 @@ func TestClaudeAutoModelAliasTracksSelectedModel(t *testing.T) {
 	engine := gin.New()
 	engine.Use(claudeAutoModelAlias(p))
 	engine.POST("/v1/messages", func(c *gin.Context) {
-		body, _ := io.ReadAll(c.Request.Body)
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		c.Data(http.StatusOK, "application/json", body)
 	})
 	request := func(model string) string {
 		t.Helper()
 		w := httptest.NewRecorder()
-		engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"`+model+`"}`)))
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"`+model+`"}`)))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 		}
@@ -87,7 +90,7 @@ func TestMessagesOnlyPassthroughStopsChain(t *testing.T) {
 	called := false
 	engine.POST("/v1/messages", func(c *gin.Context) { called = true; c.String(http.StatusOK, "second handler") })
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"custom/m"}`)))
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"custom/m"}`)))
 	if called || w.Body.String() != `{"ok":true}` {
 		t.Fatalf("called=%v body=%q", called, w.Body.String())
 	}
@@ -108,7 +111,7 @@ func TestHiddenCustomModelStopsMiddlewareChain(t *testing.T) {
 	called := false
 	engine.POST("/v1/chat/completions", func(c *gin.Context) { called = true; c.Status(http.StatusOK) })
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"custom/m"}`)))
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"custom/m"}`)))
 	if called || w.Code != http.StatusNotFound {
 		t.Fatalf("called=%v status=%d", called, w.Code)
 	}

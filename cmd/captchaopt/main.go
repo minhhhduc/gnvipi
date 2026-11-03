@@ -20,8 +20,8 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
-	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 )
 
 const playgroundURL = "https://build.nvidia.com/deepseek-ai/deepseek-v4-pro/playground"
@@ -285,7 +285,9 @@ func newSession(parent context.Context, v variant) (*session, error) {
 		bCancel()
 		cancel()
 		if s.userDir != "" {
-			_ = os.RemoveAll(s.userDir)
+			if cleanupErr := os.RemoveAll(s.userDir); cleanupErr != nil {
+				return nil, fmt.Errorf("allocate browser: %w; remove user data directory %s: %w", err, s.userDir, cleanupErr)
+			}
 		}
 		return nil, err
 	}
@@ -302,7 +304,9 @@ func (s *session) close() {
 	}
 	s.cancel()
 	if s.userDir != "" {
-		_ = os.RemoveAll(s.userDir)
+		if err := os.RemoveAll(s.userDir); err != nil {
+			log.Printf("captchaopt: remove user data directory %s: %v", s.userDir, err)
+		}
 	}
 }
 
@@ -339,18 +343,18 @@ func (s *session) extract() (token string, cold bool, err error) {
 	}
 }
 
-func (s *session) extractNavEach() (string, bool, error) {
+func (s *session) extractNavEach() (token string, cold bool, err error) {
 	// Child tab on the already-allocated browser (cheap).
 	tabCtx, tabCancel := chromedp.NewContext(s.browser)
 	defer tabCancel()
 	runCtx, cancel := context.WithTimeout(tabCtx, 90*time.Second)
 	defer cancel()
 
-	token, err := navigateAndExecute(runCtx)
+	token, err = navigateAndExecute(runCtx)
 	return token, true, err
 }
 
-func (s *session) extractSticky(withReset bool) (string, bool, error) {
+func (s *session) extractSticky(withReset bool) (token string, cold bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -365,7 +369,7 @@ func (s *session) extractSticky(withReset bool) (string, bool, error) {
 		s.warmed = true
 		return token, true, nil
 	}
-	token, err := executeOnly(runCtx, withReset)
+	token, err = executeOnly(runCtx, withReset)
 	return token, false, err
 }
 
@@ -482,7 +486,9 @@ func pollToken(ctx context.Context, withReset bool) (string, error) {
 		if token != "" {
 			return token, nil
 		}
-		_ = chromedp.Run(ctx, chromedp.Evaluate(execJS(withReset), nil))
+		if err := chromedp.Run(ctx, chromedp.Evaluate(execJS(withReset), nil)); err != nil {
+			return "", err
+		}
 	}
 	return "", nil
 }
@@ -503,7 +509,9 @@ func pollTokenUntilChange(ctx context.Context, prev string, withReset bool) (str
 		if token != "" && token != prev {
 			return token, nil
 		}
-		_ = chromedp.Run(ctx, chromedp.Evaluate(execJS(withReset), nil))
+		if err := chromedp.Run(ctx, chromedp.Evaluate(execJS(withReset), nil)); err != nil {
+			return "", err
+		}
 	}
 	return token, nil
 }

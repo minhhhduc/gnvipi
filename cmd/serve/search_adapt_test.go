@@ -131,7 +131,7 @@ func TestAcademicQueryAdaptation(t *testing.T) {
 }
 
 func containsString(haystack, needle string) bool {
-	return len(haystack) > 0 && len(needle) > 0 && indexOf(haystack, needle) >= 0
+	return haystack != "" && needle != "" && indexOf(haystack, needle) >= 0
 }
 
 func indexOf(haystack, needle string) int {

@@ -58,7 +58,7 @@ type QueryPlan struct {
 type SearchBackend interface {
 	Name() string
 	// Adapt transforms the derived intent into this backend's query syntax.
-	Adapt(ctx SearchContext) QueryPlan
+	Adapt(ctx *SearchContext) QueryPlan
 	// Search executes the plan. A nil slice with nil error means a legitimate
 	// zero-result page; a non-nil error means the backend is unhealthy and the
 	// router should try the next backend.
@@ -118,14 +118,15 @@ func looksLikeChallenge(body []byte) bool {
 func dedupeURLs(results []SearchResult) []SearchResult {
 	seen := make(map[string]bool, len(results))
 	out := results[:0]
-	for _, r := range results {
+	for i := range results {
+		r := &results[i]
 		key := normalizeResultURL(r.URL)
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		r.URL = key
-		out = append(out, r)
+		out = append(out, *r)
+		out[len(out)-1].URL = key
 	}
 	return out
 }

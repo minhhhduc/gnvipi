@@ -35,6 +35,12 @@ type probeResult struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	concurrency := flag.Int("concurrency", 16, "parallel HEAD probes")
 	timeout := flag.Duration("timeout", 8*time.Second, "per-probe timeout")
 	includeActive := flag.Bool("include-active", false, "also print alive model ids (one per line, prefixed alive_id:)")
@@ -56,7 +62,7 @@ func main() {
 		}
 	}
 	if len(probes) == 0 {
-		log.Fatal("no models in registry")
+		return fmt.Errorf("no models in registry")
 	}
 	fmt.Fprintf(os.Stderr, "probing %d models with concurrency=%d timeout=%s\n",
 		len(probes), *concurrency, *timeout)
@@ -99,4 +105,5 @@ func main() {
 	}
 	fmt.Printf("[\n  %s\n]\n", strings.Join(quoted, ",\n  "))
 	fmt.Fprintf(os.Stderr, "alive=%d retired=%d total=%d\n", len(alive), len(dead), len(probes))
+	return nil
 }

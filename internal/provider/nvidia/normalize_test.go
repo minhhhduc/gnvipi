@@ -62,7 +62,6 @@ func TestNormalizeRequestBodyPreservesThinking(t *testing.T) {
 	}
 }
 
-
 func TestNormalizeRequestBodyMapsReasoningEffortByModel(t *testing.T) {
 	cases := []struct {
 		name  string

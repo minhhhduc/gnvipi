@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -226,7 +227,7 @@ func WithModel(m string) Option {
 }
 
 // WithDefaults sets default request parameters.
-func WithDefaults(maxTokens int, seed int, temp, topP float64) Option {
+func WithDefaults(maxTokens, seed int, temp, topP float64) Option {
 	return func(c *Client) {
 		c.maxTokens = maxTokens
 		c.seed = seed
@@ -275,7 +276,7 @@ func (c *Client) buildRequest(ctx context.Context, req *ChatRequest) (*http.Requ
 		return nil, fmt.Errorf("gnvipi: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", info.PredictEndpoint(), bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, info.PredictEndpoint(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("gnvipi: create request: %w", err)
 	}
@@ -373,7 +374,11 @@ func (c *Client) doRequest(ctx context.Context, req *ChatRequest, target interfa
 	if err != nil {
 		return fmt.Errorf("gnvipi: http do: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("gnvipi: close response: %v", err)
+		}
+	}()
 
 	// Read full body
 	raw, err := io.ReadAll(resp.Body)
@@ -403,10 +408,17 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 	if err != nil {
 		return fmt.Errorf("gnvipi: http do: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("gnvipi: close stream response: %v", err)
+		}
+	}()
 
 	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("gnvipi: read error body: %w", err)
+		}
 		return parseError(raw)
 	}
 

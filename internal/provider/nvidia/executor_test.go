@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
@@ -88,7 +89,7 @@ func TestExecuteStreamRecordsUpstreamFailure(t *testing.T) {
 		return 0, 0
 	}
 	beforeReq, beforeErr := counts()
-	e := NewExecutor(Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	e := NewExecutor(&Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, context.DeadlineExceeded
 	})}})
 	if _, err := e.ExecuteStream(t.Context(), nil, req, opts); err == nil {
@@ -105,9 +106,9 @@ func TestExecuteStreamRecordsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	before := GlobalStats.Snapshot()
-	e := NewExecutor(Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	e := NewExecutor(&Options{FlagCaptcha: "test-token", HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		cancel()
-		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
 	})}})
 	stream, err := e.ExecuteStream(ctx, nil, req, opts)
 	if err != nil {
@@ -212,7 +213,7 @@ func TestIsRetryableCaptchaFailure(t *testing.T) {
 }
 
 func TestAcquireInflight(t *testing.T) {
-	e := NewExecutor(Options{MaxInflight: 1, InflightWait: 0})
+	e := NewExecutor(&Options{MaxInflight: 1, InflightWait: 0})
 	rel1, err := e.acquireInflight(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +231,7 @@ func TestAcquireInflight(t *testing.T) {
 }
 
 func TestExecuteUnknownModel(t *testing.T) {
-	e := NewExecutor(Options{FlagCaptcha: "tok"})
+	e := NewExecutor(&Options{FlagCaptcha: "tok"})
 	_, err := e.Execute(context.Background(), nil, clipexec.Request{
 		Model:   "no-such-org/never",
 		Payload: []byte(`{"model":"no-such-org/never","messages":[{"role":"user","content":"hi"}]}`),
@@ -238,8 +239,8 @@ func TestExecuteUnknownModel(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	ae, ok := err.(*coreauth.Error)
-	if !ok {
+	var ae *coreauth.Error
+	if !errors.As(err, &ae) {
 		t.Fatalf("err type %T", err)
 	}
 	if ae.HTTPStatus != http.StatusBadRequest {
@@ -258,10 +259,18 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 		hits++
 		gotToken = r.Header.Get("nv-captcha-token")
 		gotFunction = r.Header.Get("nv-function-id")
-		gotBody, _ = io.ReadAll(r.Body)
+		var err error
+		gotBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+		if _, err := io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"); err != nil {
+			t.Errorf("write upstream stream: %v", err)
+		}
 	}))
 	defer up.Close()
 
@@ -270,11 +279,9 @@ func TestExecuteStreamMockUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e := NewExecutor(Options{
-		FlagCaptcha: "P1_test",
-		HTTPClient:  up.Client(),
-		PredictURL:  func(models.ModelInfo) string { return up.URL },
-	})
+	e := NewExecutor(&Options{FlagCaptcha: "P1_test",
+		HTTPClient: up.Client(),
+		PredictURL: func(models.ModelInfo) string { return up.URL }})
 
 	stream, err := e.ExecuteStream(context.Background(), nil, clipexec.Request{
 		Model:   "deepseek-ai/deepseek-v4-pro",
@@ -323,12 +330,16 @@ func TestUpstreamRetryOnInvalidToken(t *testing.T) {
 		tok := r.Header.Get("nv-captcha-token")
 		if tok == "bad" {
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"requestStatus":{"statusCode":"INVALID_REQUEST","statusDescription":"Token is invalid","requestId":"x"}}`))
+			if _, err := w.Write([]byte(`{"requestStatus":{"statusCode":"INVALID_REQUEST","statusDescription":"Token is invalid","requestId":"x"}}`)); err != nil {
+				t.Errorf("write invalid-token response: %v", err)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+		if _, err := io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"); err != nil {
+			t.Errorf("write upstream stream: %v", err)
+		}
 	}))
 	defer up.Close()
 
@@ -337,15 +348,23 @@ func TestUpstreamRetryOnInvalidToken(t *testing.T) {
 	tokens := []string{"bad", "good"}
 	var upResp *http.Response
 	for i, tok := range tokens {
-		req, _ := http.NewRequest(http.MethodPost, up.URL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, up.URL, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
 		req.Header.Set("nv-captcha-token", tok)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if resp.StatusCode >= 400 {
-			raw, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
+			raw, readErr := io.ReadAll(resp.Body)
+			if err := resp.Body.Close(); err != nil {
+				t.Errorf("close upstream error response: %v", err)
+			}
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
 			if isRetryableCaptchaFailure(resp.StatusCode, raw) && i+1 < len(tokens) {
 				continue
 			}
@@ -357,11 +376,18 @@ func TestUpstreamRetryOnInvalidToken(t *testing.T) {
 	if upResp == nil {
 		t.Fatal("no successful upstream response")
 	}
+	defer func() {
+		if err := upResp.Body.Close(); err != nil {
+			t.Errorf("close upstream response: %v", err)
+		}
+	}()
 	if hits != 2 {
 		t.Fatalf("hits=%d want 2", hits)
 	}
-	defer upResp.Body.Close()
-	raw, _ := io.ReadAll(upResp.Body)
+	raw, err := io.ReadAll(upResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(raw), "ok") {
 		t.Fatalf("body=%q", raw)
 	}
@@ -370,14 +396,12 @@ func TestUpstreamRetryOnInvalidToken(t *testing.T) {
 func TestExecutePoolLease_InflightRejectedReturnsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1")
 	var transportHits atomic.Int32
-	executor := NewExecutor(Options{
-		Pool:        pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		MaxInflight: 1,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			transportHits.Add(1)
 			return nil, errors.New("unexpected transport call")
-		})},
-	})
+		})}})
 	release, err := executor.acquireInflight(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -403,15 +427,13 @@ func TestExecutePoolLease_InflightRejectedReturnsToken(t *testing.T) {
 func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1")
 	var transportHits atomic.Int32
-	executor := NewExecutor(Options{
-		Pool:         pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		MaxInflight:  1,
 		InflightWait: time.Minute,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			transportHits.Add(1)
 			return nil, errors.New("unexpected transport call")
-		})},
-	})
+		})}})
 	releaseInflight, err := executor.acquireInflight(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -453,13 +475,11 @@ func TestExecutePoolLease_InflightCanceledReturnsToken(t *testing.T) {
 func TestExecutePoolLease_ContextCanceledBeforeDoReturnsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1")
 	var transportHits atomic.Int32
-	executor := NewExecutor(Options{
-		Pool: pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			transportHits.Add(1)
 			return nil, errors.New("unexpected transport call")
-		})},
-	})
+		})}})
 	requestReady := make(chan struct{})
 	resume := make(chan struct{})
 	executor.beforeSend = func() {
@@ -497,8 +517,7 @@ func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *test
 	const ttl = 100 * time.Millisecond
 	pool, extracts := newExecutorLeasePoolWithTTL(t, ttl, "tok-1", "tok-2")
 	sentTokens := make(chan string, 2)
-	executor := NewExecutor(Options{
-		Pool:         pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		MaxInflight:  1,
 		InflightWait: 5 * time.Second,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -510,8 +529,7 @@ func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *test
 					`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`,
 				)),
 			}, nil
-		})},
-	})
+		})}})
 	releaseInflight, err := executor.acquireInflight(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -555,14 +573,12 @@ func TestExecutePoolLease_ExpiredWhileWaitingInflightSendsOnlyFreshToken(t *test
 func TestExecutePoolLease_InvalidRequestReturnsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1")
 	var transportHits atomic.Int32
-	executor := NewExecutor(Options{
-		Pool: pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			transportHits.Add(1)
 			return nil, errors.New("unexpected transport call")
 		})},
-		PredictURL: func(models.ModelInfo) string { return ":" },
-	})
+		PredictURL: func(models.ModelInfo) string { return ":" }})
 	req, opts := leaseTestRequest()
 
 	_, err := executor.Execute(t.Context(), nil, req, opts)
@@ -580,16 +596,14 @@ func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
 	pool, extracts := newExecutorLeasePool(t, "tok-1", "tok-2")
 	sentinel := errors.New("sentinel transport error")
 	var transportHits atomic.Int32
-	executor := NewExecutor(Options{
-		Pool: pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			transportHits.Add(1)
 			if got := req.Header.Get("nv-captcha-token"); got != "tok-1" {
 				t.Errorf("sent token=%q want tok-1", got)
 			}
 			return nil, sentinel
-		})},
-	})
+		})}})
 	req, opts := leaseTestRequest()
 
 	_, err := executor.Execute(t.Context(), nil, req, opts)
@@ -618,6 +632,43 @@ func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
 	}
 }
 
+func TestExecuteErrorResponseReadFailureDoesNotRetryCaptcha(t *testing.T) {
+	pool, _ := newExecutorLeasePool(t, "bad", "good")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var hits atomic.Int32
+	executor := NewExecutor(&Options{Pool: pool,
+		MaxInflight: 1,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			hits.Add(1)
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     make(http.Header),
+				Body: io.NopCloser(io.MultiReader(
+					strings.NewReader(`{"error":"invalid captcha token"}`),
+					iotest.ErrReader(io.ErrUnexpectedEOF),
+				)),
+			}, nil
+		})}})
+	req, opts := leaseTestRequest()
+	_, err := executor.Execute(ctx, nil, req, opts)
+	var authErr *coreauth.Error
+	if !errors.As(err, &authErr) || authErr.HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("error=%v want upstream read failure", err)
+	}
+	if !strings.Contains(authErr.Message, io.ErrUnexpectedEOF.Error()) {
+		t.Fatalf("message=%q does not report the read failure", authErr.Message)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream attempts=%d want 1", got)
+	}
+	release, err := executor.acquireInflight(ctx)
+	if err != nil {
+		t.Fatalf("failed upstream request retained its inflight slot: %v", err)
+	}
+	release()
+}
+
 func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
 	pool, _ := newExecutorLeasePool(t, "bad", "good")
 	received := make(chan string, 2)
@@ -637,11 +688,9 @@ func TestExecutePoolLease_RetryableCaptchaUsesFreshToken(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	executor := NewExecutor(Options{
-		Pool:       pool,
+	executor := NewExecutor(&Options{Pool: pool,
 		HTTPClient: upstream.Client(),
-		PredictURL: func(models.ModelInfo) string { return upstream.URL },
-	})
+		PredictURL: func(models.ModelInfo) string { return upstream.URL }})
 	req, opts := leaseTestRequest()
 
 	resp, err := executor.Execute(t.Context(), nil, req, opts)
@@ -730,14 +779,14 @@ func TestExecuteUsesHeaderCaptcha(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		if _, err := w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"hi"}}]}`)); err != nil {
+			t.Errorf("write upstream response: %v", err)
+		}
 	}))
 	defer up.Close()
 
-	e := NewExecutor(Options{
-		HTTPClient: up.Client(),
-		PredictURL: func(models.ModelInfo) string { return up.URL },
-	})
+	e := NewExecutor(&Options{HTTPClient: up.Client(),
+		PredictURL: func(models.ModelInfo) string { return up.URL }})
 	hdr := make(http.Header)
 	hdr.Set("nv-captcha-token", "from-header")
 	resp, err := e.Execute(context.Background(), nil, clipexec.Request{
@@ -764,15 +813,15 @@ func TestExecuteTranslatesReasoningEffortForUpstreamModel(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		if _, err := w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)); err != nil {
+			t.Errorf("write upstream response: %v", err)
+		}
 	}))
 	defer up.Close()
 
-	executor := NewExecutor(Options{
-		FlagCaptcha: "test-token",
-		HTTPClient:  up.Client(),
-		PredictURL:  func(models.ModelInfo) string { return up.URL },
-	})
+	executor := NewExecutor(&Options{FlagCaptcha: "test-token",
+		HTTPClient: up.Client(),
+		PredictURL: func(models.ModelInfo) string { return up.URL }})
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
 		Model: "deepseek-ai/deepseek-v4-pro",
 		Payload: []byte(`{
@@ -807,14 +856,14 @@ func TestExecute_sendsResponsesSamplingFieldsToPlayground(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		if _, err := w.Write([]byte(`{"id":"1","choices":[{"message":{"role":"assistant","content":"ok"}}]}`)); err != nil {
+			t.Errorf("write upstream response: %v", err)
+		}
 	}))
 	defer up.Close()
-	executor := NewExecutor(Options{
-		FlagCaptcha: "test-token",
-		HTTPClient:  up.Client(),
-		PredictURL:  func(models.ModelInfo) string { return up.URL },
-	})
+	executor := NewExecutor(&Options{FlagCaptcha: "test-token",
+		HTTPClient: up.Client(),
+		PredictURL: func(models.ModelInfo) string { return up.URL }})
 
 	// When: a Responses request uses Chat-compatible sampling and attribution fields.
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
@@ -859,11 +908,9 @@ func TestExecute_forwardsResponsesStoreWithoutRejecting(t *testing.T) {
 		}
 	}))
 	defer up.Close()
-	executor := NewExecutor(Options{
-		FlagCaptcha: "test-token",
-		HTTPClient:  up.Client(),
-		PredictURL:  func(models.ModelInfo) string { return up.URL },
-	})
+	executor := NewExecutor(&Options{FlagCaptcha: "test-token",
+		HTTPClient: up.Client(),
+		PredictURL: func(models.ModelInfo) string { return up.URL }})
 
 	// When: a Responses request includes store (unsupported by NVIDIA, but must not be rejected).
 	_, err := executor.Execute(context.Background(), nil, clipexec.Request{
