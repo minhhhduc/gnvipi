@@ -21,6 +21,13 @@ Windows helper, and Docker Compose expose all interfaces. Use a loopback bind
 or restrict access with a firewall or authenticated reverse proxy. Placeholder
 Claude credentials do not secure the gateway.
 
+Configured provider/gateway/admin credentials and common authentication forms
+are redacted from diagnostics, error responses and new statistics records.
+Rotated credentials remain protected for in-flight requests. Successful model
+output is unchanged; diagnostic bodies/SSE frames are buffered with a 1 MiB
+limit before disclosure. Credential storage and existing historical files are
+not migrated by this filtering layer.
+
 ## Endpoints
 
 | Route | Format |

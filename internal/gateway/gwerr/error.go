@@ -5,8 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
+
+	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 )
 
 // Protocol names the inbound protocol whose error shape is wanted. The
@@ -57,7 +58,7 @@ type Error struct {
 
 // Error implements the error interface.
 func (e *Error) Error() string {
-	return fmt.Sprintf("gwerr: %s: %s", e.Kind, e.Message)
+	return fmt.Sprintf("gwerr: %s: %s", e.ScrubbedValue(string(e.Kind)), e.ScrubbedMessage())
 }
 
 // ScrubbedMessage returns Message with every secret in Secrets replaced by
@@ -65,6 +66,9 @@ func (e *Error) Error() string {
 func (e *Error) ScrubbedMessage() string {
 	return Scrub(e.Message, e.Secrets...)
 }
+
+// ScrubbedValue filters provider-supplied error metadata as well as messages.
+func (e *Error) ScrubbedValue(value string) string { return Scrub(value, e.Secrets...) }
 
 // StatusForKind is the default HTTP status for an error classified as k.
 func StatusForKind(k Kind) int {
@@ -139,10 +143,5 @@ func KindFromErr(err error) Kind {
 // error bodies sometimes embed the key that requested them; call this
 // before any such text reaches a client.
 func Scrub(s string, secrets ...string) string {
-	for _, secret := range secrets {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
+	return redact.Default.TextWithSecrets(s, secrets...)
 }

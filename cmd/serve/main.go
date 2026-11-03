@@ -99,6 +99,7 @@ func run() (err error) {
 	if !gatewayKeySet {
 		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
 	}
+	configureSecretRedaction(*adminToken, *gatewayKey, *captchaFlag)
 	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {
 		return errors.New("request body limits must be positive")
 	}
@@ -108,6 +109,7 @@ func run() (err error) {
 
 	if *modelsFile != "" {
 		prefs.load(*modelsFile)
+		refreshProviderSecrets(prefs.listProviders())
 	}
 
 	if !*auto && *captchaFlag == "" {
@@ -191,6 +193,7 @@ func run() (err error) {
 		log.Printf("warning: could not write initial config for providers: %v", err)
 	}
 	prefs.onChange = func(list []customProvider) {
+		refreshProviderSecrets(list)
 		cfg.OpenAICompatibility = compatProviders(list)
 		if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 			log.Printf("warning: could not rewrite config for providers: %v", err)
@@ -289,6 +292,7 @@ func run() (err error) {
 			// Install middleware before routes so we can enrich the response with pool stats.
 			api.WithEngineConfigurator(func(engine *gin.Engine) {
 				// The SDK calls this before WithMiddleware and early route registration.
+				engine.Use(secretResponseRedaction())
 				engine.Use(requestBodyLimit(*maxBodyBytes, *maxAdminBodyBytes))
 				// Attach identity before early routes or cycle dispatch can finish the request.
 				engine.Use(gatewayRequestContext())

@@ -324,6 +324,7 @@ func normalizeSearchURL(raw string) string {
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
+	refreshProviderSecrets(list)
 	p.mu.Lock()
 	p.providers = list
 	notify := p.onChange
