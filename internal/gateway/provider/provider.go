@@ -41,39 +41,41 @@ const (
 // the scheme is not none: Key is a literal secret, KeyEnv names the environment
 // variable holding it.
 type Auth struct {
-	Scheme AuthScheme
-	Key    string
-	KeyEnv string
+	Scheme AuthScheme `json:"scheme"`
+	Key    string     `json:"key,omitempty"`
+	KeyEnv string     `json:"key_env,omitempty"`
 }
 
 // ModelMapping is one model the provider serves: the alias clients ask for and
 // the model identifier the upstream expects. Alias may end in "/*" to map a
 // whole family (for example "vendor/*").
 type ModelMapping struct {
-	Alias         string
-	UpstreamModel string
-	Hidden        bool
+	Alias         string `json:"alias"`
+	UpstreamModel string `json:"upstream_model"`
+	Hidden        bool   `json:"hidden,omitempty"`
+	// LegacyPosition preserves flat legacy routing precedence; zero uses v2 list order.
+	LegacyPosition int `json:"legacy_position,omitempty"`
 }
 
 // Timeouts bounds one upstream call. Zero means "use the client default".
 type Timeouts struct {
-	Connect        time.Duration // TCP connect
-	ResponseHeader time.Duration // until the response headers arrive
-	Idle           time.Duration // longest silence inside a streamed body
+	Connect        time.Duration `json:"connect,omitempty"`         // TCP connect
+	ResponseHeader time.Duration `json:"response_header,omitempty"` // until the response headers arrive
+	Idle           time.Duration `json:"idle,omitempty"`            // longest silence inside a streamed body
 }
 
 // Provider is one upstream endpoint.
 type Provider struct {
-	ID       string
-	Name     string
-	BaseURL  string
-	Protocol ir.Protocol
-	Auth     Auth
-	Headers  map[string]string
-	Models   []ModelMapping
-	Timeouts Timeouts
-	Enabled  bool
-	TLS      TLSProfile
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	BaseURL  string            `json:"base_url"`
+	Protocol ir.Protocol       `json:"protocol"`
+	Auth     Auth              `json:"auth"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Models   []ModelMapping    `json:"models"`
+	Timeouts Timeouts          `json:"timeouts"`
+	Enabled  bool              `json:"enabled"`
+	TLS      TLSProfile        `json:"tls,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.

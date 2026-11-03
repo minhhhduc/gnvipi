@@ -31,7 +31,9 @@ func TestCycleConfigPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded := &modelPrefs{}
-	loaded.load(path)
+	if err := loaded.load(path); err != nil {
+		t.Fatal(err)
+	}
 	cfg, index := loaded.cycleSnapshot()
 	if cfg.Name != "cycle" || len(cfg.Models) != 2 || cfg.Models[0] != first || cfg.Models[1] != second || index != 0 {
 		t.Fatalf("loaded cycle: %#v index=%d", cfg, index)
@@ -39,7 +41,9 @@ func TestCycleConfigPersists(t *testing.T) {
 	if err := p.setCycle(cycleConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	loaded.load(path)
+	if err := loaded.load(path); err != nil {
+		t.Fatal(err)
+	}
 	cfg, _ = loaded.cycleSnapshot()
 	if cfg.Name != "cycle" || len(cfg.Models) != 0 {
 		t.Fatalf("empty cycle after reload: %#v", cfg)
