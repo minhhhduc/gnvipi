@@ -324,6 +324,9 @@ func normalizeSearchURL(raw string) string {
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
+	if err := validateLegacyProviderURLs(list); err != nil {
+		return err
+	}
 	p.mu.Lock()
 	p.providers = list
 	notify := p.onChange
@@ -344,6 +347,10 @@ func (p *modelPrefs) setProviders(list []customProvider) error {
 // save writes the whole mask file: hidden ids, deleted ids, plus custom endpoints.
 func (p *modelPrefs) save() error {
 	p.mu.RLock()
+	if err := validateLegacyProviderURLs(p.providers); err != nil {
+		p.mu.RUnlock()
+		return err
+	}
 	path := p.path
 	hiddenIDs := make([]string, 0, len(p.hidden))
 	for id := range p.hidden {

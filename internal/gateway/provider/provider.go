@@ -1,10 +1,7 @@
 package provider
 
 import (
-	"errors"
-	"fmt"
 	"net/textproto"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,17 +250,5 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 }
 
 func validateBaseURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("must be a valid URL: %w", err)
-	}
-	switch {
-	case u.Scheme != "http" && u.Scheme != "https":
-		return fmt.Errorf("must use http or https, not %q", u.Scheme)
-	case u.Host == "":
-		return errors.New("must include a host")
-	case u.RawQuery != "" || u.Fragment != "":
-		return errors.New("must not include a query or fragment")
-	}
-	return nil
+	return DefaultURLPolicy().validate(raw, true)
 }
