@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/textproto"
@@ -44,6 +45,9 @@ type Auth struct {
 	Scheme AuthScheme
 	Key    string
 	KeyEnv string
+	// HeaderName moves the already-resolved credential to this header, retaining
+	// its exact value (including a bearer prefix). It never changes key lookup.
+	HeaderName string `json:"header_name,omitempty"`
 }
 
 // ModelMapping is one model the provider serves: the alias clients ask for and
@@ -74,6 +78,13 @@ type Provider struct {
 	Timeouts Timeouts
 	Enabled  bool
 	TLS      TLSProfile
+	// EndpointPaths replaces a wire protocol's endpoint suffix, preserving the
+	// resolved Target.BaseURL origin and path prefix. Keys are wire protocols,
+	// including when Protocol selects a named custom adapter.
+	EndpointPaths map[ir.Protocol]string `json:"endpoint_path,omitempty"`
+	// ExtraBody shallow-merges top-level JSON fields after adapter encoding.
+	// Config wins collisions, except model and stream are forbidden overrides.
+	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.
@@ -137,7 +148,7 @@ func (p *Provider) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		add("name", "must not be empty")
 	}
-	if _, err := ir.ParseProtocol(p.Protocol.String()); err != nil {
+	if _, err := ParseProtocol(p.Protocol.String()); err != nil {
 		add("protocol", err.Error())
 	}
 	if err := validateBaseURL(p.BaseURL); err != nil {
@@ -152,6 +163,7 @@ func (p *Provider) Validate() error {
 	p.validateHeaders(add)
 	p.validateModels(add)
 	p.validateTimeouts(add)
+	p.validateExtensions(add)
 
 	if len(errs) > 0 {
 		return &ValidationError{Errors: errs}
