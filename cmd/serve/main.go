@@ -83,6 +83,7 @@ func run() (err error) {
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, benchmark playground candidates on Admin Start All to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
+	gatewayV2 := flag.Bool("gateway-v2", false, "route same-protocol custom providers through the gateway core")
 	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
 	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	statsOptions := nvidia.DefaultStatsLogOptions()
@@ -280,6 +281,11 @@ func run() (err error) {
 		}
 	}
 
+	gatewayMiddleware, err := gatewayV2Middleware(prefs, *gatewayV2, proxyURL)
+	if err != nil {
+		return fmt.Errorf("gateway dispatcher: %w", err)
+	}
+
 	tokenStore := sdkAuth.GetTokenStore()
 	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
@@ -363,6 +369,7 @@ func run() (err error) {
 				// keep it ahead of generic Messages sanitizing/fallback routing.
 				anthropicResponsesPassthrough(prefs),
 				sanitizeClaudeToolResults(),
+				gatewayMiddleware,
 				customOpenAIResponsesPassthrough(prefs),
 				customOpenAICompatPassthrough(prefs),
 				messagesOnlyPassthrough(prefs),
