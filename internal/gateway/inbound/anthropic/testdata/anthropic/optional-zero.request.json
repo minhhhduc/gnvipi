@@ -1,0 +1,19 @@
+{
+  "model": "alias",
+  "max_tokens": 1,
+  "temperature": 0,
+  "top_p": 0,
+  "top_k": 0,
+  "stop_sequences": [],
+  "stream": false,
+  "thinking": {
+    "type": "disabled",
+    "future": 0
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": ""
+    }
+  ]
+}

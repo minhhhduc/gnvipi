@@ -1,0 +1,88 @@
+{
+  "model": "alias",
+  "max_tokens": 4096,
+  "stream": true,
+  "stop_sequences": [
+    "END"
+  ],
+  "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024,
+    "future": "keep"
+  },
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "Find value",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "future": 0
+      },
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "tool",
+    "name": "lookup",
+    "disable_parallel_tool_use": false,
+    "future": 0
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "Plan",
+          "signature": "signed"
+        },
+        {
+          "type": "tool_use",
+          "id": "call-1",
+          "name": "lookup",
+          "input": {
+            "id": 9007199254740993
+          },
+          "future": "keep"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call-1",
+          "content": [
+            {
+              "type": "text",
+              "text": "Found",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ],
+          "is_error": false,
+          "future": "keep"
+        },
+        {
+          "type": "text",
+          "text": "Continue"
+        },
+        {
+          "type": "future_block",
+          "payload": {
+            "keep": true
+          }
+        }
+      ]
+    }
+  ]
+}

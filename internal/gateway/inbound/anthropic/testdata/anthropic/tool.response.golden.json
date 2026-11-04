@@ -1,0 +1,39 @@
+{
+  "id": "msg_tool",
+  "type": "message",
+  "role": "assistant",
+  "model": "client-alias",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Plan",
+      "signature": "signed"
+    },
+    {
+      "type": "text",
+      "text": ""
+    },
+    {
+      "type": "tool_use",
+      "id": "call-1",
+      "name": "lookup",
+      "input": {
+        "id": 9007199254740993
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "call-2",
+      "name": "ping",
+      "input": {}
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  }
+}

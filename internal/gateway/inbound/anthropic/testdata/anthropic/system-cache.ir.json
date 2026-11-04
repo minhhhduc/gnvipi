@@ -1,0 +1,79 @@
+{
+  "model": "alias",
+  "instructions": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "First rule"
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "text": "Second rule"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "max_output_tokens": 256
+  },
+  "metadata": {
+    "user_id": "end-user"
+  },
+  "extensions": {
+    "system": [
+      {
+        "type": "text",
+        "text": "First rule",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        },
+        "future": {
+          "number": 9007199254740993
+        }
+      },
+      {
+        "type": "text",
+        "text": "Second rule"
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hello",
+            "cache_control": {
+              "type": "ephemeral"
+            },
+            "unknown": "keep"
+          }
+        ],
+        "future_message": true
+      }
+    ],
+    "metadata": {
+      "user_id": "end-user",
+      "session": "keep"
+    },
+    "service_tier": "auto",
+    "cache_control": {
+      "type": "ephemeral"
+    }
+  }
+}

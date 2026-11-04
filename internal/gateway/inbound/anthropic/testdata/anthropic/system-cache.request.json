@@ -1,0 +1,45 @@
+{
+  "model": "alias",
+  "max_tokens": 256,
+  "system": [
+    {
+      "type": "text",
+      "text": "First rule",
+      "cache_control": {
+        "type": "ephemeral",
+        "ttl": "1h"
+      },
+      "future": {
+        "number": 9007199254740993
+      }
+    },
+    {
+      "type": "text",
+      "text": "Second rule"
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello",
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "unknown": "keep"
+        }
+      ],
+      "future_message": true
+    }
+  ],
+  "metadata": {
+    "user_id": "end-user",
+    "session": "keep"
+  },
+  "service_tier": "auto",
+  "cache_control": {
+    "type": "ephemeral"
+  }
+}

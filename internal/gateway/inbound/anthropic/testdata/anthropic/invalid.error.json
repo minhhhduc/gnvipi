@@ -1,0 +1,5 @@
+{
+  "kind": "invalid_request",
+  "status": 400,
+  "message": "model must be a non-empty string"
+}

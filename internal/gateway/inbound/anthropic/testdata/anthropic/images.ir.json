@@ -1,0 +1,64 @@
+{
+  "model": "alias",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Describe"
+        },
+        {
+          "type": "image",
+          "index": 1,
+          "image": {
+            "base64": "aGVsbG8=",
+            "media_type": "image/png"
+          }
+        },
+        {
+          "type": "image",
+          "index": 2,
+          "image": {
+            "url": "https://images.example.invalid/picture.png"
+          }
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "max_output_tokens": 32
+  },
+  "extensions": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Describe"
+          },
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/png",
+              "data": "aGVsbG8="
+            },
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "image",
+            "source": {
+              "type": "url",
+              "url": "https://images.example.invalid/picture.png",
+              "future": "keep"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
