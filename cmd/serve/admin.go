@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
-	"github.com/minhhhduc/gnvipi/internal/captcha"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
@@ -376,104 +375,13 @@ func compatProviders(list []gatewayprovider.Provider) []config.OpenAICompatibili
 	return out
 }
 
-// chromeAdmin is the browser group whose Chrome processes /admin/chromes
-// manages. nil when serve runs without -auto.
-var chromeAdmin *captcha.BrowserGroup
-var chromeAdminMu sync.RWMutex
-var chromeAdminEnabled bool
-
-func currentChromeAdmin() *captcha.BrowserGroup {
-	chromeAdminMu.RLock()
-	defer chromeAdminMu.RUnlock()
-	return chromeAdmin
-}
-
-func setChromeAdmin(browser *captcha.BrowserGroup) {
-	chromeAdminMu.Lock()
-	chromeAdmin = browser
-	chromeAdminMu.Unlock()
-}
-
-func setChromeAdminEnabled(enabled bool) {
-	chromeAdminMu.Lock()
-	chromeAdminEnabled = enabled
-	chromeAdminMu.Unlock()
-}
-
-func chromeAdminConfigured() bool {
-	chromeAdminMu.RLock()
-	defer chromeAdminMu.RUnlock()
-	return chromeAdminEnabled
-}
-
 // adminRoutes serves the manager page and its actions.
 func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo) {
 	// c.Abort() was incorrectly added here
-	browser := currentChromeAdmin()
 	page := c.DefaultQuery("page", "dashboard")
 	switch c.Request.URL.Path {
 	case "/admin":
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog)))
-	case "/admin/chromes":
-		if browser == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "captcha Chrome is still starting or unavailable"})
-			return
-		}
-		switch c.Request.Method {
-		case http.MethodGet:
-			c.JSON(http.StatusOK, gin.H{"chromes": browser.Snapshot()})
-		case http.MethodPost:
-			var payload struct {
-				Index int    `json:"index"`
-				Mode  string `json:"mode"` // "kill" | "start" (aliases: pause|resume)
-				All   bool   `json:"all"`  // all chromes
-			}
-			// Accept form posts too (optional all=true field), per task spec.
-			if c.Request.Header.Get("content-type") == "application/x-www-form-urlencoded" {
-				payload.Mode = c.Request.FormValue("mode")
-				payload.All = c.Request.FormValue("all") == "true"
-				if index := c.Request.FormValue("index"); index != "" || !payload.All {
-					var err error
-					payload.Index, err = strconv.Atoi(index)
-					if err != nil {
-						c.JSON(http.StatusBadRequest, gin.H{"error": "index must be an integer"})
-						return
-					}
-				}
-			} else if err := c.ShouldBindJSON(&payload); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			kill := func(i int) error { return browser.Kill(i) }
-			start := func(i int) error { return browser.Start(i) }
-			do := func(fn func(int) error) {
-				if payload.All {
-					for _, ci := range browser.Snapshot() {
-						if err := fn(ci.Index); err != nil {
-							c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-							return
-						}
-					}
-					c.JSON(http.StatusOK, gin.H{"ok": true})
-					return
-				}
-				if err := fn(payload.Index); err != nil {
-					c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"index": payload.Index})
-			}
-			switch payload.Mode {
-			case "kill", "pause":
-				do(kill)
-			case "start", "resume":
-				do(start)
-			default:
-				c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be kill or start"})
-			}
-		default:
-			c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not supported"})
-		}
 	case "/admin/stats":
 		interval := nvidia.StatsReadInterval()
 		if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {

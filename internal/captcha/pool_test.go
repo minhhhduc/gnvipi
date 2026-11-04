@@ -541,6 +541,21 @@ func TestPoolTokenLease_ReleaseAfterCloseIsDiscarded(t *testing.T) {
 	}
 }
 
+func TestPoolTokenLease_CommitAfterCloseIsRejected(t *testing.T) {
+	p := newStaticPool(t, entry{token: "retired", at: time.Now()})
+	lease, err := p.TakeLease(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	if lease.Commit() {
+		t.Fatal("closed pool allowed a previously leased token to be sent")
+	}
+	if _, err := p.Take(t.Context()); err == nil {
+		t.Fatal("closed pool remained usable")
+	}
+}
+
 func newStaticPool(t *testing.T, entries ...entry) *Pool {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

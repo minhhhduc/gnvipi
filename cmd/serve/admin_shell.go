@@ -4,12 +4,9 @@ import "strings"
 
 // adminHead renders the shared shell: nav tabs + CSS. active tab theo page.
 // adminHeadTabs renders just the nav tab bar.
-func adminHeadTabs(active string, chromes bool) string {
+func adminHeadTabs(active string) string {
 	type tab struct{ id, label string }
-	tabs := []tab{{"dashboard", "stats"}, {"models", "models"}, {"config", "config"}}
-	if chromes {
-		tabs = append(tabs, tab{"chromes", "chrome captcha"})
-	}
+	tabs := []tab{{"dashboard", "stats"}, {"models", "models"}, {"config", "config"}, {"chromes", "chrome captcha"}}
 	b := strings.Builder{}
 	for _, t := range tabs {
 		cls := "tab"
@@ -21,7 +18,7 @@ func adminHeadTabs(active string, chromes bool) string {
 	return b.String()
 }
 
-func adminHead(active string, chromes bool) string {
+func adminHead(active string) string {
 	return `<!doctype html><meta charset="utf-8"><title>Gateway admin</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <style>
@@ -140,7 +137,7 @@ table.stats tfoot th{color:var(--dim);background:var(--card)}
 	</style>
 <header><div class=wrap>
   <h1>Gateway admin</h1>
-  <div class=tab-bar>` + adminHeadTabs(active, chromes) + `</div>
+  <div class=tab-bar>` + adminHeadTabs(active) + `</div>
   <div class=sub id=counts></div>
   <div class=bar>
     <input type=search id=q placeholder="search models…" autofocus data-page="models">

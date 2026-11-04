@@ -43,29 +43,35 @@ not migrated by this filtering layer.
 
 ## Quick start
 
-Requires **Go 1.26+** and **Chrome/Chromium** for `-auto`; set `CHROME_PATH` to
+Requires **Go 1.26+** and **Chrome/Chromium** when activating Chrome captcha from Admin; set `CHROME_PATH` to
 the browser executable if it is not detected. Claude Code is optional, except
 when using `-Claude`. Run commands from the repository root.
 
 ```powershell
 .\scripts\init.ps1                   # optional: create local settings (skips if present)
 
-# Windows: initializes settings and builds if needed; starts with -auto
-.\scripts\run.ps1                   # :8080, 3 chromes, pool of 6
+# Windows: initializes settings and builds if needed; Chrome remains idle
+.\scripts\run.ps1                   # :8080; Start All allocates 3 chromes, pool of 6
 .\scripts\run.ps1 -Port 8081        # test instance
 .\scripts\run.ps1 -Claude           # start gateway + open Claude Code pointed at it
 .\scripts\run.ps1 -Harness -Batch 6 # low-RAM captcha harness
 .\scripts\run.ps1 -Proxy socks5://127.0.0.1:1080
-.\scripts\run.ps1 -NoCaptcha        # custom providers / MCP only; no Chrome
+.\scripts\run.ps1 -NoCaptcha        # omit the old -auto flag; Admin can still start Chrome
 ```
 
 ```bash
 # Any platform; local-only listener (embedded catalog needs no initialization)
-go run ./cmd/serve -auto -addr 127.0.0.1:8080
-go run ./cmd/serve -auto -addr 127.0.0.1:8080 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
+go run ./cmd/serve -addr 127.0.0.1:8080
+go run ./cmd/serve -addr 127.0.0.1:8080 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
 go run ./cmd/serve -addr 127.0.0.1:8080 -captcha "P1_..."  # one-shot manual token, no browser
-go run ./cmd/serve -addr 127.0.0.1:8080                  # custom providers / MCP only
+go run ./cmd/serve -auto -addr 127.0.0.1:8080            # accepted; still starts with Chrome off
 ```
+
+Startup never launches Chrome, probes NVIDIA playground pages, or waits for captcha
+warmup, including with `-auto` or the default Docker command. Open
+`/admin?page=chromes` and click **Turn On / Start All** before NVIDIA generation.
+**Kill All** releases the pool and Chrome processes; **Start All** creates a fresh
+runtime without restarting the gateway. Custom providers and MCP do not need Chrome.
 
 ## Client usage
 
@@ -94,8 +100,8 @@ curl -sS -N http://localhost:8080/v1/chat/completions \
 ```
 
 Set `"stream":false` for a single JSON response. NVIDIA generation needs
-`-auto`, a one-shot `-captcha` token, or a fresh `nv-captcha-token` request
-header. No NVIDIA API key is required; custom-provider requests do not use
+Chrome captcha enabled through Admin, a one-shot `-captcha` token, or a fresh
+`nv-captcha-token` request header. No NVIDIA API key is required; custom-provider requests do not use
 captcha. NVIDIA `/v1/messages/count_tokens` is a local approximation, not an
 exact model-tokenizer or billing count.
 
@@ -140,8 +146,18 @@ One page per tab (`?page=`), each doing exactly one thing:
   It does not replace Claude's safety prompt, shorten transcripts, or remap
   built-in `claude-` model names. Stats use the resolved real model.
   `?page=automode` remains a legacy alias for this page.
-- **`?page=chromes`** — stop/start individual captcha Chrome processes or all
-  workers, and inspect busy/warm state and extract counts (`-auto` required).
+- **`?page=chromes`** — always available, including while captcha is off. Turn On /
+  Start All allocates Chrome and the token pool on demand; Kill All closes both.
+  Individual slot controls remain available while enabled, with busy/warm state
+  and extract counts. Token warming runs in the background after activation.
+
+`GET /admin/chromes` returns HTTP 200 with `enabled`, `state`, `chromes`, and
+`ready` fields. Before activation: `{"enabled":false,"state":"idle","chromes":[],"ready":0}`.
+POST JSON `{"mode":"start","all":true}` to enable, and
+`{"mode":"kill","all":true}` (or `mode:"stop"`) to disable. Start may take time
+to allocate Chrome; GET remains available with `state:"starting"`, and Kill All
+can cancel that startup. Disabled state after stopping is `state:"stopped"`.
+Actions use the same Admin authentication as the page.
 
 ## Custom providers
 
@@ -189,8 +205,8 @@ client ── /v1/* ──▶ gateway
 NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latency)
 ```
 
-- **Captcha pool**: `-auto` prewarms single-use hCaptcha tokens with headless
-  Chrome (`internal/captcha`); expired tokens are discarded (`-pool-ttl`).
+- **Captcha pool**: Admin Start All prewarms single-use hCaptcha tokens with headless
+  Chrome (`internal/captcha`); expired tokens are discarded (`-pool-ttl`). Startup is idle.
   The pool can batch-mint via a local harness page
   (`-captcha-harness -pool-batch=N`) to cut RAM and wall time.
 - **SSE coalescing**: consecutive content deltas merge within `-coalesce-ms`
@@ -208,10 +224,10 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 ## Notable flags
 
 ```
--auto                     prewarm captcha pool (headless Chrome)
--pool-size/-pool-workers  pool depth / concurrent Chrome processes
+-auto                     accepted; Chrome still starts only from Admin
+-pool-size/-pool-workers  pool depth / Chrome processes allocated by Start All
 -pool-ttl D               discard expired pooled tokens (default 90s)
--warm-timeout D           background pool warmup budget (default 3m)
+-warm-timeout D           background pool warmup budget after Start All (default 3m)
 -captcha-harness          mint on a blank local page (~50MB/chrome, batchable)
 -pool-batch N             tokens per browser borrow (harness only)
 -coalesce-ms N            SSE delta merge window (0=off)
@@ -219,7 +235,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -captcha-wait D           per-request wait for a pooled token
 -inflight-wait D          wait for an NVIDIA stream slot; timeout -> 503
 -models-file P            catalog + masks + provider/auto/cycle/search settings
--captcha-select-budget D  benchmark playground URLs, persist champion
+-captcha-select-budget D  benchmark playground URLs on Start All, persist champion
 -addr HOST:PORT           listen address (default :8080 = all interfaces)
 -chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
 -max-body-bytes N         client API body limit (default 32 MiB)
@@ -235,9 +251,9 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -stats-read-interval D    dashboard/history cadence (default 1s)
 ```
 
-With `-auto`, direct Go runs default to a pool of 3 tokens and 1 Chrome worker;
-`run.ps1` uses 6 tokens and 3 workers. Run `go run ./cmd/serve -h` for all flags
-and defaults.
+Admin Start All uses a pool of 3 tokens and 1 Chrome worker for direct Go runs;
+`run.ps1` configures 6 tokens and 3 workers. Until activation, neither allocates
+Chrome or a pool. Run `go run ./cmd/serve -h` for all flags and defaults.
 
 Body limits apply before routing, including SDK inference aliases. Oversized
 requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
@@ -379,14 +395,15 @@ when the gateway restarts or the cycle configuration changes.
 
 `/healthz` checks server liveness, not captcha readiness. Admin, MCP, and
 custom-provider routes are available while Chrome starts or is unavailable.
-For NVIDIA generation with `-auto`, check `pool.ready` in `/healthz` and
-worker state on `/admin?page=chromes`.
+For NVIDIA generation, enable Chrome captcha from Admin, then check `pool.ready`
+in `/healthz` and worker state on `/admin?page=chromes`.
 
 | Symptom | What to check |
 |---|---|
 | Port already in use | Choose another `-Port` / `-addr` and update client URLs. |
-| `captcha pool empty` / 503 | Wait for warmup; check Chrome, `CHROME_PATH`, and proxy connectivity. The default `-captcha-wait` is 30s. |
-| Invalid or expired captcha / 401 | Supply a fresh manual token, or let `-auto` mint replacements; tokens cannot be reused. |
+| `captcha token required` / 503 | Click Turn On / Start All in Admin, or provide a manual token. Chrome is always off on server startup. |
+| `captcha pool empty` / 503 | Wait for warmup after Start All; check Chrome, `CHROME_PATH`, and proxy connectivity. The default `-captcha-wait` is 30s. |
+| Invalid or expired captcha / 401 | Supply a fresh manual token, or let the enabled pool mint replacements; tokens cannot be reused. |
 | `max in-flight upstream streams reached` / 503 | Reduce concurrency or adjust `-max-inflight` and `-inflight-wait` to match available capacity. |
 | `cycle` has no available models / 503 | Select at least one enabled model on the Config page. |
 | `automode target is hidden` / 404 | Re-enable the target or choose a different enabled model. |

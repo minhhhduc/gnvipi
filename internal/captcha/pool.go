@@ -439,6 +439,10 @@ func (p *Pool) finalizeLease(e entry, release bool) bool {
 	defer p.mu.Unlock()
 
 	p.leased--
+	if p.ctx.Err() != nil {
+		p.notifyLocked()
+		return false
+	}
 	if !release {
 		if time.Since(e.at) > p.ttl {
 			p.expired.Add(1)
@@ -448,10 +452,6 @@ func (p *Pool) finalizeLease(e entry, release bool) bool {
 		p.takes.Add(1)
 		p.notifyLocked()
 		return true
-	}
-	if p.ctx.Err() != nil {
-		p.notifyLocked()
-		return false
 	}
 	if time.Since(e.at) > p.ttl {
 		p.expired.Add(1)

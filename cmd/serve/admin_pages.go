@@ -27,7 +27,6 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	if page == "automode" {
 		page = "config"
 	}
-	browser := currentChromeAdmin()
 	ids := make([]string, 0, len(catalog))
 	for _, m := range catalog {
 		if m != nil {
@@ -87,11 +86,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 		rows.WriteString(`<h2>overview (all APIs, since server start)</h2><div id=charts></div>
 <h2>request log (200-request frames, kept across restarts)</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
-		if browser != nil {
-			rows.WriteString(`<h2>captcha chromes — kill to free RAM</h2><div id=chromes></div>`)
-		} else {
-			rows.WriteString(`<div class=row><span class=id>captcha Chrome is starting or unavailable</span></div>`)
-		}
+		rows.WriteString(`<h2>captcha Chrome — start on demand, kill to free RAM</h2><div id=chromes><div class=row><span class=id>Loading Chrome captcha status…</span></div><div class=bar><button type=button data-mode-all=start>Turn On / Start All</button></div></div>`)
 	case "config", "automode":
 		rows.WriteString(renderConfigPage(ids, providers))
 	default: // models + endpoints share one page
@@ -138,7 +133,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 		deletedBlob = []byte("[]")
 	}
 
-	return adminHead(page, browser != nil || chromeAdminConfigured()) + `<main>` + rows.String() + `</main>
+	return adminHead(page) + `<main>` + rows.String() + `</main>
 <div id=toast></div>
 <script>
 const PAGE = ` + strconv.Quote(page) + `;
@@ -146,6 +141,5 @@ const STATS_READ_MS = ` + strconv.FormatInt(int64((nvidia.StatsReadInterval()-1)
 const FAILED = ` + strconv.Itoa(failed) + `;
 const PROVIDERS = ` + string(blob) + `;
 const DELETED = ` + string(deletedBlob) + `;
-const CHROMES = ` + strconv.FormatBool(browser != nil) + `;
 ` + adminScript
 }
