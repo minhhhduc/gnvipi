@@ -1,0 +1,52 @@
+{
+  "model": "tools",
+  "input": [
+    {
+      "type": "reasoning",
+      "id": "rs_1",
+      "summary": [
+        {
+          "type": "summary_text",
+          "text": "Work"
+        }
+      ],
+      "encrypted_content": "cipher"
+    },
+    {
+      "type": "function_call",
+      "id": "fc_1",
+      "call_id": "call_a",
+      "name": "lookup",
+      "arguments": "{\"city\":\"Hanoi\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_a",
+      "output": "Sunny"
+    },
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Done"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "lookup",
+      "description": "Weather",
+      "parameters": {
+        "type": "object"
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "name": "lookup"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "model": "vision",
+  "instructions": "Be concise.",
+  "input": [
+    {
+      "role": "system",
+      "content": "Safety first."
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Compare"
+        },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,aGVsbG8=",
+          "detail": "high"
+        },
+        {
+          "type": "input_image",
+          "image_url": "https://images.invalid/a.png"
+        }
+      ]
+    }
+  ],
+  "max_output_tokens": 0,
+  "temperature": 0,
+  "top_p": 0,
+  "reasoning": {
+    "effort": "low"
+  },
+  "text": {
+    "format": {
+      "type": "json_schema",
+      "name": "answer",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "stream": true,
+  "metadata": {
+    "trace": "golden"
+  },
+  "user": "customer",
+  "vendor_limit": 9007199254740993
+}
