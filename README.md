@@ -164,6 +164,19 @@ only for models sharing a base URL and credentials; otherwise choose distinct
 names. Tool calling, reasoning, and multimodal support still depend on the
 upstream model.
 
+Custom upstream URLs require HTTP(S), a host, and no embedded user credentials.
+Loopback/LAN services remain allowed by default; `-deny-private-upstreams`
+disables them. Link-local and cloud-metadata targets are always blocked unless
+`-allow-unsafe-upstreams` is explicitly enabled. Guards cover translated SDK
+requests, redirects and final resolved addresses; trusted configured proxy
+hops may remain local while the ultimate upstream is checked.
+
+The next successful `-models-file` save migrates legacy providers to
+`schema_version: 2` and `providers_v2`, preserving model order, masks and extra
+catalog fields. Writes are v2-only: keep a backup before upgrading; downgrading
+requires restoring the pre-migration file. Invalid or future-version files are
+rejected without overwriting them.
+
 ## How it works
 
 ```
@@ -213,6 +226,8 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
 -gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
 -admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
+-deny-private-upstreams   deny loopback/LAN custom upstreams
+-allow-unsafe-upstreams  permit link-local/cloud metadata targets (unsafe)
 -stats-max-bytes N        total retained history bytes (default 16 MiB)
 -stats-segment-bytes N    bytes per log segment (default 4 MiB)
 -stats-rotate-interval D  active segment age (default 24h)

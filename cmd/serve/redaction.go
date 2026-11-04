@@ -7,11 +7,13 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 	"github.com/sirupsen/logrus"
@@ -31,10 +33,17 @@ func configureSecretRedaction(adminToken, gatewayKeys, captchaToken string) {
 	})
 }
 
-func refreshProviderSecrets(list []customProvider) {
-	keys := make([]string, 0, len(list))
+func refreshProviderSecrets(list []customProvider, v2 ...gatewayprovider.Provider) {
+	keys := make([]string, 0, len(list)+len(v2))
 	for i := range list {
 		keys = append(keys, list[i].APIKey)
+	}
+	for i := range v2 {
+		key := v2[i].Auth.Key
+		if v2[i].Auth.KeyEnv != "" {
+			key = os.Getenv(v2[i].Auth.KeyEnv)
+		}
+		keys = append(keys, key)
 	}
 	redact.Default.Update(keys...)
 }

@@ -1,8 +1,8 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/textproto"
 	"net/url"
 	"sort"
@@ -41,39 +41,55 @@ const (
 // the scheme is not none: Key is a literal secret, KeyEnv names the environment
 // variable holding it.
 type Auth struct {
-	Scheme AuthScheme
-	Key    string
-	KeyEnv string
+	Scheme AuthScheme `json:"scheme"`
+	Key    string     `json:"key,omitempty"`
+	KeyEnv string     `json:"key_env,omitempty"`
+	// HeaderName moves the already-resolved credential to this header, retaining
+	// its exact value (including a bearer prefix). It never changes key lookup.
+	HeaderName string `json:"header_name,omitempty"`
 }
 
 // ModelMapping is one model the provider serves: the alias clients ask for and
 // the model identifier the upstream expects. Alias may end in "/*" to map a
 // whole family (for example "vendor/*").
 type ModelMapping struct {
-	Alias         string
-	UpstreamModel string
-	Hidden        bool
+	Alias         string `json:"alias"`
+	UpstreamModel string `json:"upstream_model"`
+	Hidden        bool   `json:"hidden,omitempty"`
+	// LegacyPosition preserves flat legacy routing precedence; zero uses v2 list order.
+	LegacyPosition int `json:"legacy_position,omitempty"`
 }
 
 // Timeouts bounds one upstream call. Zero means "use the client default".
 type Timeouts struct {
-	Connect        time.Duration // TCP connect
-	ResponseHeader time.Duration // until the response headers arrive
-	Idle           time.Duration // longest silence inside a streamed body
+	Connect        time.Duration `json:"connect,omitempty"`         // TCP connect
+	TLS            time.Duration `json:"tls,omitempty"`             // TLS handshake
+	ResponseHeader time.Duration `json:"response_header,omitempty"` // until the response headers arrive
+	Idle           time.Duration `json:"idle,omitempty"`            // longest silence inside a streamed body
+	Total          time.Duration `json:"total,omitempty"`           // non-stream request, including body
 }
 
 // Provider is one upstream endpoint.
 type Provider struct {
-	ID       string
-	Name     string
-	BaseURL  string
-	Protocol ir.Protocol
-	Auth     Auth
-	Headers  map[string]string
-	Models   []ModelMapping
-	Timeouts Timeouts
-	Enabled  bool
-	TLS      TLSProfile
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	BaseURL        string            `json:"base_url"`
+	ProxyURL       string            `json:"proxy_url,omitempty"` // empty uses the client/environment proxy
+	Protocol       ir.Protocol       `json:"protocol"`
+	Auth           Auth              `json:"auth"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Models         []ModelMapping    `json:"models"`
+	Timeouts       Timeouts          `json:"timeouts"`
+	Enabled        bool              `json:"enabled"`
+	TLS            TLSProfile        `json:"tls,omitempty"`
+	ForwardHeaders []string          `json:"forward_headers,omitempty"`
+	// EndpointPaths replaces a wire protocol's endpoint suffix, preserving the
+	// resolved Target.BaseURL origin and path prefix. Keys are wire protocols,
+	// including when Protocol selects a named custom adapter.
+	EndpointPaths map[ir.Protocol]string `json:"endpoint_path,omitempty"`
+	// ExtraBody shallow-merges top-level JSON fields after adapter encoding.
+	// Config wins collisions, except model and stream are forbidden overrides.
+	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.
@@ -119,6 +135,11 @@ var hopByHopHeaders = map[string]bool{
 // Validate reports every problem in p, or nil. It canonicalizes the names in
 // p.Headers to their canonical spelling before checking them.
 func (p *Provider) Validate() error {
+	return p.ValidateWithPolicy(DefaultURLPolicy())
+}
+
+// ValidateWithPolicy validates configuration against an explicit URL policy.
+func (p *Provider) ValidateWithPolicy(policy URLPolicy) error {
 	if p == nil {
 		return &ValidationError{Errors: []*FieldError{{Provider: "<nil>", Field: "id", Problem: "provider is nil"}}}
 	}
@@ -137,11 +158,16 @@ func (p *Provider) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		add("name", "must not be empty")
 	}
-	if _, err := ir.ParseProtocol(p.Protocol.String()); err != nil {
+	if _, err := ParseProtocol(p.Protocol.String()); err != nil {
 		add("protocol", err.Error())
 	}
-	if err := validateBaseURL(p.BaseURL); err != nil {
+	if err := policy.validate(p.BaseURL, true); err != nil {
 		add("base_url", err.Error())
+	}
+	if p.ProxyURL != "" {
+		if err := validateProxyURL(p.ProxyURL); err != nil {
+			add("proxy_url", err.Error())
+		}
 	}
 	switch p.TLS {
 	case "", TLSDefault, TLSChrome:
@@ -150,13 +176,15 @@ func (p *Provider) Validate() error {
 	}
 	p.validateAuth(add)
 	p.validateHeaders(add)
+	p.validateForwardHeaders(add)
 	p.validateModels(add)
 	p.validateTimeouts(add)
+	p.validateExtensions(add)
 
 	if len(errs) > 0 {
 		return &ValidationError{Errors: errs}
 	}
-	return nil
+	return ValidateHeaderPolicy(p)
 }
 
 func (p *Provider) validateAuth(add func(field, problem string)) {
@@ -203,8 +231,8 @@ func (p *Provider) validateHeaders(add func(field, problem string)) {
 		switch {
 		case !httpguts.ValidHeaderFieldName(name):
 			add(field, "invalid header name")
-		case hopByHopHeaders[name]:
-			add(field, "hop-by-hop headers belong to the transport, not to a provider")
+		case ForbiddenForwardHeader(name):
+			add(field, "credentials and transport headers use dedicated configuration")
 		case dupes[name]:
 			add(field, "set more than once under different spellings")
 		case !httpguts.ValidHeaderFieldValue(canonical[name]):
@@ -243,8 +271,10 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 		value time.Duration
 	}{
 		{"timeouts.connect", p.Timeouts.Connect},
+		{"timeouts.tls", p.Timeouts.TLS},
 		{"timeouts.response_header", p.Timeouts.ResponseHeader},
 		{"timeouts.idle", p.Timeouts.Idle},
+		{"timeouts.total", p.Timeouts.Total},
 	} {
 		if t.value < 0 {
 			add(t.field, "must not be negative")
@@ -252,18 +282,18 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 	}
 }
 
-func validateBaseURL(raw string) error {
+func validateProxyURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("must be a valid URL: %w", err)
+		return errors.New("must be a valid proxy URL")
 	}
-	switch {
-	case u.Scheme != "http" && u.Scheme != "https":
-		return fmt.Errorf("must use http or https, not %q", u.Scheme)
-	case u.Host == "":
-		return errors.New("must include a host")
-	case u.RawQuery != "" || u.Fragment != "":
-		return errors.New("must not include a query or fragment")
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return errors.New("must use http, https, socks5 or socks5h")
+	}
+	if u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return errors.New("must include a host and no path, query or fragment")
 	}
 	return nil
 }

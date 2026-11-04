@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
+	gwprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	utls "github.com/refraction-networking/utls"
 	"github.com/tidwall/sjson"
@@ -39,7 +40,7 @@ func messagesOnlyDialTLS(ctx context.Context, network, addr string, _ *tls.Confi
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	raw, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+	raw, err := (&net.Dialer{Control: gwprovider.DefaultURLPolicy().Control}).DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -56,14 +57,17 @@ func messagesOnlyDialTLS(ctx context.Context, network, addr string, _ *tls.Confi
 // messagesOnlyClient is shared by all passthrough forwards. No timeout on the
 // client itself; streams stay open as long as the upstream sends.
 var messagesOnlyClient = &http.Client{
-	Transport: &http2.Transport{ //nolint:staticcheck // SA1019: Go's Transport only reads ALPN from crypto/tls.Conn, not uTLS.UConn; retain Chrome TLS + HTTP/2.
-		DialTLSContext: messagesOnlyDialTLS, //nolint:staticcheck // SA1019: This transport needs its context-aware uTLS dial hook; stdlib cannot negotiate this connection.
+	Transport: validatedUpstreamTransport{base: &http2.Transport{ //nolint:staticcheck // SA1019: required for Chrome-uTLS HTTP/2.
+		DialTLSContext: messagesOnlyDialTLS, //nolint:staticcheck // SA1019: standard Transport cannot inspect uTLS ALPN.
+	}},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return gwprovider.DefaultURLPolicy().CheckRedirect(req, via)
 	},
 }
 
 // compatClient serves the OpenAI-compat passthrough: plain transport with ALPN,
 // so h1-only upstreams (tokenrouter) don't get h2 frames pasted onto HTTP/1.1.
-var compatClient = &http.Client{}
+var compatClient = newGuardedCompatClient(gwprovider.URLPolicy{})
 
 // customOpenAICompatPassthrough routes custom providers directly. CLIProxyAPI's
 // compatibility registry can lag behind the admin file watcher; the local model

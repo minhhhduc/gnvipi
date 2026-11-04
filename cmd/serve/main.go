@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	gwprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 
@@ -88,7 +89,11 @@ func run() (err error) {
 	flag.DurationVar(&statsOptions.RotateInterval, "stats-rotate-interval", statsOptions.RotateInterval, "maximum age of an active stats segment")
 	flag.DurationVar(&statsOptions.Retention, "stats-retention", statsOptions.Retention, "retention period for stats history")
 	flag.DurationVar(&statsOptions.ReadInterval, "stats-read-interval", statsOptions.ReadInterval, "minimum dashboard polling and uncached history read interval")
+	var upstreamPolicy gwprovider.URLPolicy
+	flag.BoolVar(&upstreamPolicy.AllowUnsafe, "allow-unsafe-upstreams", false, "allow link-local/cloud metadata upstreams (unsafe)")
+	flag.BoolVar(&upstreamPolicy.DenyPrivate, "deny-private-upstreams", false, "deny loopback/LAN upstreams")
 	flag.Parse()
+	configureUpstreamURLPolicy(upstreamPolicy)
 	adminTokenSet := false
 	flag.Visit(func(f *flag.Flag) { adminTokenSet = adminTokenSet || f.Name == "admin-token" })
 	if !adminTokenSet {
@@ -108,8 +113,9 @@ func run() (err error) {
 	}
 
 	if *modelsFile != "" {
-		prefs.load(*modelsFile)
-		refreshProviderSecrets(prefs.listProviders())
+		if err := prefs.load(*modelsFile); err != nil {
+			return fmt.Errorf("models file: %w", err)
+		}
 	}
 
 	if !*auto && *captchaFlag == "" {
@@ -188,13 +194,21 @@ func run() (err error) {
 
 	// Register /admin custom endpoints (e.g. OpenRouter) as OpenAI-compat
 	// providers so CLIProxyAPI routes their aliases.
-	cfg.OpenAICompatibility = compatProviders(prefs.listProviders())
+	providerConfigs, err := prefs.listProvidersV2()
+	if err != nil {
+		return fmt.Errorf("provider configuration: %w", err)
+	}
+	cfg.OpenAICompatibility = compatProviders(providerConfigs)
 	if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 		log.Printf("warning: could not write initial config for providers: %v", err)
 	}
-	prefs.onChange = func(list []customProvider) {
-		refreshProviderSecrets(list)
-		cfg.OpenAICompatibility = compatProviders(list)
+	prefs.onChange = func(_ []customProvider) {
+		providerConfigs, err := prefs.listProvidersV2()
+		if err != nil {
+			log.Printf("provider reload: %v", err)
+			return
+		}
+		cfg.OpenAICompatibility = compatProviders(providerConfigs)
 		if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 			log.Printf("warning: could not rewrite config for providers: %v", err)
 		}
@@ -395,6 +409,7 @@ func run() (err error) {
 	if err != nil {
 		return fmt.Errorf("build gateway: %w", err)
 	}
+	installSDKPolicyTransports(core, cfg, &sdkPolicyTransports{policy: upstreamPolicy})
 
 	// Start the API/admin listener before any NVIDIA playground or Chrome work.
 	// A dead playground page must never keep the management console offline.

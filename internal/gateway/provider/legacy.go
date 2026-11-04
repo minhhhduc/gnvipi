@@ -11,20 +11,20 @@ import (
 // LegacyProvider mirrors one entry of the pre-v2 admin format, which stored a
 // single model per entry and encoded the protocol as two exclusive flags.
 type LegacyProvider struct {
-	Name          string
-	BaseURL       string
-	APIKey        string
-	Model         string
-	Alias         string
-	MessagesOnly  bool
-	ResponsesOnly bool
+	Name          string `json:"name"`
+	BaseURL       string `json:"base_url"`
+	APIKey        string `json:"api_key"`
+	Model         string `json:"model"`
+	Alias         string `json:"alias,omitempty"`
+	MessagesOnly  bool   `json:"messages_only,omitempty"`
+	ResponsesOnly bool   `json:"responses_only,omitempty"`
 }
 
 // FromLegacy converts the endpoints saved by the legacy admin page. Entries
 // that share a name, base URL, API key and protocol become one provider with
-// one mapping per model; entries that differ in any of those, including only in
-// protocol, stay separate and get a numeric ID suffix. Providers are returned
-// in the order their first entry appeared.
+// one mapping per model; repeated aliases use separate providers so bare model
+// routes survive. Different identities get collision-free numeric ID suffixes.
+// Mapping positions preserve flat entry order independently of provider grouping.
 //
 // Every converted provider is validated, and the conversion returns a
 // *ValidationError if any of them is invalid, including the case of an entry
@@ -36,13 +36,17 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	}
 
 	out := make([]Provider, 0, len(list))
-	merged := make(map[identity]int, len(list))
-	usedIDs := make(map[string]int, len(list))
+	merged := make(map[identity][]int, len(list))
+	usedIDs := make(map[string]bool, len(list))
+	reservedNames := make(map[string]bool, len(list))
+	for _, e := range list {
+		reservedNames[e.Name] = true
+	}
 	var errs []*FieldError
 
 	for i := range list {
 		e := &list[i]
-		protocol, ok := legacyProtocol(e)
+		protocol, ok := LegacyProtocol(e)
 		if !ok {
 			errs = append(errs, &FieldError{
 				Provider: "legacy[" + strconv.Itoa(i) + "]",
@@ -51,19 +55,29 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			})
 			continue
 		}
-		mapping := ModelMapping{Alias: legacyAlias(e), UpstreamModel: e.Model}
+		mapping := ModelMapping{Alias: LegacyAlias(e), UpstreamModel: e.Model, LegacyPosition: i + 1}
 		key := identity{e.Name, e.BaseURL, e.APIKey, protocol}
-		if at, ok := merged[key]; ok {
+		at := -1
+		for _, candidate := range merged[key] {
+			duplicate := false
+			for _, m := range out[candidate].Models {
+				if m.Alias == mapping.Alias {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				at = candidate
+				break
+			}
+		}
+		if at >= 0 {
 			out[at].Models = append(out[at].Models, mapping)
 			continue
 		}
 
-		id := e.Name
-		if n := usedIDs[e.Name]; n > 0 {
-			id = e.Name + "-" + strconv.Itoa(n+1)
-		}
-		usedIDs[e.Name]++
-		merged[key] = len(out)
+		id := nextLegacyID(e.Name, usedIDs, reservedNames)
+		merged[key] = append(merged[key], len(out))
 		out = append(out, Provider{
 			ID:       id,
 			Name:     e.Name,
@@ -76,6 +90,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	}
 
 	for i := range out {
+		ApplyLegacyHeaderDefaults(&out[i])
 		var invalid *ValidationError
 		if err := out[i].Validate(); errors.As(err, &invalid) {
 			errs = append(errs, invalid.Errors...)
@@ -87,7 +102,17 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	return out, nil
 }
 
-func legacyProtocol(e *LegacyProvider) (ir.Protocol, bool) {
+func nextLegacyID(name string, usedIDs, reservedNames map[string]bool) string {
+	id := name
+	for suffix := 2; usedIDs[id] || (id != name && reservedNames[id]); suffix++ {
+		id = name + "-" + strconv.Itoa(suffix)
+	}
+	usedIDs[id] = true
+	return id
+}
+
+// LegacyProtocol returns the old flag-selected wire protocol; both flags set is invalid.
+func LegacyProtocol(e *LegacyProvider) (ir.Protocol, bool) {
 	switch {
 	case e.MessagesOnly && e.ResponsesOnly:
 		return "", false
@@ -109,9 +134,9 @@ func legacyAuth(apiKey string) Auth {
 	return Auth{Scheme: AuthBearer, Key: apiKey}
 }
 
-// legacyAlias reproduces customProvider.alias(): an explicit alias wins, then a
+// LegacyAlias reproduces customProvider.alias(): an explicit alias wins, then a
 // model already namespaced by the provider name, otherwise name/model.
-func legacyAlias(e *LegacyProvider) string {
+func LegacyAlias(e *LegacyProvider) string {
 	if e.Alias != "" {
 		return e.Alias
 	}
