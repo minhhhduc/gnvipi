@@ -1,0 +1,6 @@
+data: {"id":"chat-error","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}
+
+data: {"id":"chat-error","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"content":"Partial answer"},"finish_reason":null}],"usage":null}
+
+data: {"error":{"message":"Capacity exhausted","type":"rate_limit_error","param":null,"code":null}}
+

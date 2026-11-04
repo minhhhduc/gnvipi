@@ -1,0 +1,8 @@
+[
+  {"type":"message_start","message":{"id":"chat-usage","role":"assistant","model":"client-alias"},"usage":{"input_tokens":20,"cache_read_tokens":7,"cache_write_tokens":3}},
+  {"type":"block_start","block":{"type":"text","text":"Initial "}},
+  {"type":"block_delta","delta":{"type":"text_delta","text":"answer"}},
+  {"type":"block_stop"},
+  {"type":"usage_update","usage":{"output_tokens":5,"reasoning_tokens":2}},
+  {"type":"message_stop","stop_reason":"max_tokens"}
+]
