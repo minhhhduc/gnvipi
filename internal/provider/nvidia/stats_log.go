@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 )
 
 // frameSize is the number of non-empty records per frame; frame 1 is newest.
@@ -626,6 +627,10 @@ func (l *statsLog) readFrame(n int) ([]RequestEvent, int, error) {
 	return append([]RequestEvent{}, out...), total, nil
 }
 
-func AppendLog(ev *RequestEvent)                   { statsLogInstance().append(ev) }
+func AppendLog(ev *RequestEvent) {
+	copyEvent := *ev
+	copyEvent.Model = redact.Default.Text(copyEvent.Model)
+	statsLogInstance().append(&copyEvent)
+}
 func FramesCount() int                             { return statsLogInstance().framesCount() }
 func ReadFrame(n int) ([]RequestEvent, int, error) { return statsLogInstance().readFrame(n) }

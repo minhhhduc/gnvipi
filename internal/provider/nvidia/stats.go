@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 )
 
 // ModelStats is one model's cumulative request/usage counters. Values are
@@ -104,6 +106,7 @@ func (s *Stats) StartedAt() time.Time { return startedAt }
 // scraped from the response (0 when unavailable). dur is wall time of the
 // upstream call. ttfb is time-to-first-token for streams (0 for non-stream).
 func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, streamed, isErr bool) {
+	model = redact.Default.Text(model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ms := uint64(dur.Milliseconds())

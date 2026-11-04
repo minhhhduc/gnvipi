@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/models"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -629,6 +631,60 @@ func TestExecutePoolLease_TransportErrorCommitsToken(t *testing.T) {
 	}
 	if transportHits.Load() != 1 {
 		t.Fatalf("transport hits=%d want 1", transportHits.Load())
+	}
+}
+
+func TestExecuteRedactsRuntimeCaptchaInRedirectTransportErrors(t *testing.T) {
+	for _, source := range []string{"header", "pool"} {
+		t.Run(source, func(t *testing.T) {
+			token := "opaque-runtime-redirect-" + source + "/with space?"
+			sentinel := errors.New("redirect target unavailable")
+			received := make(chan string, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				seenToken := req.Header.Get("nv-captcha-token")
+				received <- seenToken
+				http.Redirect(w, req, "/failed?captcha="+url.QueryEscape(seenToken), http.StatusFound)
+			}))
+			defer upstream.Close()
+			base := upstream.Client().Transport
+			if base == nil {
+				base = http.DefaultTransport
+			}
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/failed" {
+					return nil, sentinel
+				}
+				return base.RoundTrip(req)
+			})}
+			config := &Options{HTTPClient: client, PredictURL: func(models.ModelInfo) string { return upstream.URL }}
+			req, opts := leaseTestRequest()
+			if source == "header" {
+				opts.Headers = make(http.Header)
+				opts.Headers.Set("nv-captcha-token", token)
+			} else {
+				config.Pool, _ = newExecutorLeasePool(t, token)
+			}
+			_, err := NewExecutor(config).Execute(t.Context(), nil, req, opts)
+			var authErr *coreauth.Error
+			if !errors.As(err, &authErr) || authErr.HTTPStatus != http.StatusBadGateway || authErr.Code != "upstream_error" {
+				t.Fatalf("transport error=%v", err)
+			}
+			seenToken := receiveTestValue(t, received, "redirected runtime captcha")
+			if seenToken != token {
+				t.Fatalf("upstream token=%q want %q", seenToken, token)
+			}
+			for _, secret := range []string{token, url.QueryEscape(token), url.PathEscape(token)} {
+				if strings.Contains(authErr.Message, secret) {
+					t.Fatalf("transport diagnostic disclosed captcha: %s", authErr.Message)
+				}
+			}
+			if !strings.Contains(authErr.Message, sentinel.Error()) || !strings.Contains(authErr.Message, "/failed?captcha=") {
+				t.Fatalf("transport diagnostic context lost: %s", authErr.Message)
+			}
+			if redact.Default.Text(token) != token {
+				t.Fatal("request-scoped captcha was retained globally")
+			}
+		})
 	}
 }
 

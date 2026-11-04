@@ -47,9 +47,9 @@ func Write(w http.ResponseWriter, proto Protocol, e *Error) error {
 		h.Set("Retry-After", strconv.Itoa(int(e.RetryAfter.Round(time.Second).Seconds())))
 	}
 	if e.UpstreamRequestID != "" {
-		h.Set("X-Request-ID", e.UpstreamRequestID)
+		h.Set("X-Request-ID", e.ScrubbedValue(e.UpstreamRequestID))
 		if proto == ProtocolAnthropicMessages {
-			h.Set("request-id", e.UpstreamRequestID)
+			h.Set("request-id", e.ScrubbedValue(e.UpstreamRequestID))
 		}
 	}
 	w.WriteHeader(status)
@@ -81,7 +81,7 @@ func WriteSSEError(w io.Writer, proto Protocol, e *Error, responseID string) err
 		msg := e.ScrubbedMessage()
 		code := "server_error"
 		if e.Code != "" {
-			code = e.Code
+			code = e.ScrubbedValue(e.Code)
 		}
 		ev := responsesStreamError{
 			Type:    "error",
@@ -99,7 +99,7 @@ func WriteSSEError(w io.Writer, proto Protocol, e *Error, responseID string) err
 		failed := responsesStreamFailed{
 			Type: "response.failed",
 			Response: responsesStreamFailedResponse{
-				ID:     responseID,
+				ID:     e.ScrubbedValue(responseID),
 				Status: "failed",
 				Error: &responsesFailedError{
 					Code:    code,
@@ -198,7 +198,7 @@ func encodeChat(e *Error) ([]byte, error) {
 		Type:    chatErrorType(e.Kind),
 	}
 	if e.Code != "" {
-		code := e.Code
+		code := e.ScrubbedValue(e.Code)
 		d.Code = &code
 	}
 	body := chatBody{Error: d}
@@ -278,7 +278,7 @@ func encodeResponses(e *Error) ([]byte, error) {
 		Type:    chatErrorType(e.Kind),
 	}
 	if e.Code != "" {
-		code := e.Code
+		code := e.ScrubbedValue(e.Code)
 		d.Code = &code
 	}
 	body := responsesBody{Error: d}

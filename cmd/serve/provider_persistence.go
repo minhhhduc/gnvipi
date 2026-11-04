@@ -163,6 +163,7 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 	// Validation may canonicalize headers; use the actual committed providers.
 	published.ProvidersV2 = p.providerStore.List()
 	p.applyPrefsLocked(&published)
+	refreshProviderSecrets(p.providers, published.ProvidersV2...)
 	if err := p.refreshRoutingLocked(); err != nil {
 		p.mu.Unlock()
 		return err

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gnvipi"
 	"github.com/minhhhduc/gnvipi/internal/models"
 
@@ -435,7 +436,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 			cleanup()
 			return nil, nil, &coreauth.Error{
 				Code:       "upstream_error",
-				Message:    fmt.Sprintf("upstream: %v", err),
+				Message:    redact.Default.TextWithSecrets(fmt.Sprintf("upstream: %v", err), token),
 				HTTPStatus: http.StatusBadGateway,
 			}
 		}
@@ -455,7 +456,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		if readErr != nil {
 			return nil, nil, &coreauth.Error{
 				Code:       "upstream_error",
-				Message:    fmt.Sprintf("read upstream error response: %v", readErr),
+				Message:    redact.Default.TextWithSecrets(fmt.Sprintf("read upstream error response: %v", readErr), token),
 				HTTPStatus: http.StatusBadGateway,
 			}
 		}
@@ -473,7 +474,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 				HTTPStatus: http.StatusUnauthorized,
 			}
 		}
-		msg := strings.TrimSpace(string(raw))
+		msg := redact.Default.TextWithSecrets(strings.TrimSpace(string(raw)), token)
 		if msg == "" {
 			msg = "upstream request failed"
 		}

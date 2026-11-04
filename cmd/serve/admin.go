@@ -152,6 +152,7 @@ func (p *modelPrefs) load(path string) error {
 	}
 	p.providerStore = store
 	p.applyPrefsLocked(&file)
+	refreshProviderSecrets(p.providers, file.ProvidersV2...)
 	if err := p.refreshRoutingLocked(); err != nil {
 		p.loadErr = err
 		return err
