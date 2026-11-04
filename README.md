@@ -220,6 +220,11 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
   cannot replace the canonical client ID. The normalized core exposes an opt-in,
   once-only IR usage recorder with first-byte timing and JSON access logs; legacy
   traffic keeps its existing recorder and is not counted twice.
+- **Inbound protocol adapters**: `internal/gateway/inbound/` provides JSON and SSE
+  codecs for Anthropic Messages, OpenAI Chat and OpenAI Responses. Responses JSON
+  decoding is stateless: translated requests reject `previous_response_id`,
+  `conversation` and `store: true` with a Responses-shaped 400. Same-protocol
+  passthrough bypasses decoding; the default CLIProxyAPI routing remains unchanged.
 
 ## Notable flags
 

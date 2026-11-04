@@ -1,0 +1,124 @@
+{
+  "model": "vision",
+  "instructions": [
+    {
+      "role": "developer",
+      "content": [
+        {
+          "type": "text",
+          "text": "Be concise."
+        }
+      ]
+    },
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Safety first."
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Compare"
+        },
+        {
+          "type": "image",
+          "image": {
+            "base64": "aGVsbG8=",
+            "media_type": "image/png"
+          }
+        },
+        {
+          "type": "image",
+          "image": {
+            "url": "https://images.invalid/a.png"
+          }
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "temperature": 0,
+    "top_p": 0,
+    "max_output_tokens": 0
+  },
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "answer",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "reasoning": {
+    "effort": "low"
+  },
+  "stream": true,
+  "metadata": {
+    "user_id": "customer"
+  },
+  "extensions": {
+    "instructions": "Be concise.",
+    "input": [
+      {
+        "role": "system",
+        "content": "Safety first."
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Compare"
+          },
+          {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,aGVsbG8=",
+            "detail": "high"
+          },
+          {
+            "type": "input_image",
+            "image_url": "https://images.invalid/a.png"
+          }
+        ]
+      }
+    ],
+    "reasoning": {
+      "effort": "low"
+    },
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "answer",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "trace": "golden"
+    },
+    "vendor_limit": 9007199254740993
+  }
+}

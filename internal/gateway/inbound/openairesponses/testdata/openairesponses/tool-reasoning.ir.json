@@ -1,0 +1,121 @@
+{
+  "model": "tools",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "reasoning",
+          "reasoning": {
+            "content": "Work",
+            "signature": "cipher"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "tool_use": {
+            "id": "call_a",
+            "name": "lookup",
+            "input": "{\"city\":\"Hanoi\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_result": {
+            "tool_use_id": "call_a",
+            "content": [
+              {
+                "type": "text",
+                "text": "Sunny"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Done"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "Weather",
+      "schema": {
+        "type": "object"
+      }
+    }
+  ],
+  "tool_choice": {
+    "mode": "tool",
+    "name": "lookup"
+  },
+  "sampling": {},
+  "extensions": {
+    "input": [
+      {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "Work"
+          }
+        ],
+        "encrypted_content": "cipher"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_a",
+        "name": "lookup",
+        "arguments": "{\"city\":\"Hanoi\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_a",
+        "output": "Sunny"
+      },
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Done"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "lookup",
+        "description": "Weather",
+        "parameters": {
+          "type": "object"
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "function",
+      "name": "lookup"
+    }
+  }
+}
