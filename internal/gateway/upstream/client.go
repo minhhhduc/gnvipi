@@ -38,6 +38,8 @@ type Options struct {
 	// DisableProxy prevents a second proxy layer. The callback is trusted.
 	DialContext  func(context.Context, string, string) (net.Conn, error)
 	DisableProxy bool
+	// CheckRedirect must be immutable for the lifetime of cached clients.
+	CheckRedirect func(*http.Request, []*http.Request) error
 }
 
 // RegisterFlags exposes options on an explicitly supplied flag set without
@@ -90,6 +92,7 @@ type clientConfig struct {
 	controlOwner *Options
 	controlCode  uintptr
 	dialCode     uintptr
+	redirectCode uintptr
 	disableProxy bool
 }
 
@@ -190,6 +193,9 @@ func (f *Factory) NewClient(p *provider.Provider, options *Options) (*http.Clien
 		base = chrome
 	}
 	client := &http.Client{Transport: &timeoutTransport{base: base, timeouts: config.timeouts, proxy: proxy}}
+	if options != nil {
+		client.CheckRedirect = options.CheckRedirect
+	}
 	// Copy only on configuration changes. Cache lookups do not serialize or
 	// copy provider credentials, maps or model slices.
 	snapshot := provider.Clone(p)
@@ -229,6 +235,10 @@ func resolveConfig(p *provider.Provider, o *Options) (config clientConfig, contr
 		config.timeouts, config.proxyURL, config.tls = o.Timeouts, o.ProxyURL, o.TLS
 		control = o.Control
 		config.disableProxy = o.DisableProxy
+		if o.CheckRedirect != nil {
+			config.controlOwner = o
+			config.redirectCode = reflect.ValueOf(o.CheckRedirect).Pointer()
+		}
 		if o.DialContext != nil {
 			config.controlOwner = o
 			config.dialCode = reflect.ValueOf(o.DialContext).Pointer()

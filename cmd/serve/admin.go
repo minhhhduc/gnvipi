@@ -146,6 +146,10 @@ func (p *modelPrefs) load(path string) error {
 		p.loadErr = err
 		return err
 	}
+	if err := validateLegacyProviderURLs(fromLegacyProviders(gatewayprovider.LegacyView(file.ProvidersV2))); err != nil {
+		p.loadErr = err
+		return err
+	}
 	p.providerStore = store
 	p.applyPrefsLocked(&file)
 	if err := p.refreshRoutingLocked(); err != nil {
@@ -319,6 +323,9 @@ func normalizeSearchURL(raw string) string {
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
+	if err := validateLegacyProviderURLs(list); err != nil {
+		return err
+	}
 	return p.commitPrefs(func(file *prefsFile) error {
 		var err error
 		file.ProvidersV2, err = gatewayprovider.MergeLegacy(file.ProvidersV2, toLegacyProviders(list))

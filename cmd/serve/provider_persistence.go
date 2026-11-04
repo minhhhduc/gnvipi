@@ -132,6 +132,9 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 		if err := edit(&file); err != nil {
 			return err
 		}
+		if err := validateLegacyProviderURLs(fromLegacyProviders(gatewayprovider.LegacyView(file.ProvidersV2))); err != nil {
+			return err
+		}
 		sort.Strings(file.MasksID)
 		sort.Strings(file.DeletedID)
 		doc.Providers = file.ProvidersV2

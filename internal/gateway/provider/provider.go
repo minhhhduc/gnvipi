@@ -3,7 +3,6 @@ package provider
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/textproto"
 	"net/url"
 	"sort"
@@ -136,6 +135,11 @@ var hopByHopHeaders = map[string]bool{
 // Validate reports every problem in p, or nil. It canonicalizes the names in
 // p.Headers to their canonical spelling before checking them.
 func (p *Provider) Validate() error {
+	return p.ValidateWithPolicy(DefaultURLPolicy())
+}
+
+// ValidateWithPolicy validates configuration against an explicit URL policy.
+func (p *Provider) ValidateWithPolicy(policy URLPolicy) error {
 	if p == nil {
 		return &ValidationError{Errors: []*FieldError{{Provider: "<nil>", Field: "id", Problem: "provider is nil"}}}
 	}
@@ -157,7 +161,7 @@ func (p *Provider) Validate() error {
 	if _, err := ParseProtocol(p.Protocol.String()); err != nil {
 		add("protocol", err.Error())
 	}
-	if err := validateBaseURL(p.BaseURL); err != nil {
+	if err := policy.validate(p.BaseURL, true); err != nil {
 		add("base_url", err.Error())
 	}
 	if p.ProxyURL != "" {
@@ -276,22 +280,6 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 			add(t.field, "must not be negative")
 		}
 	}
-}
-
-func validateBaseURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("must be a valid URL: %w", err)
-	}
-	switch {
-	case u.Scheme != "http" && u.Scheme != "https":
-		return fmt.Errorf("must use http or https, not %q", u.Scheme)
-	case u.Host == "":
-		return errors.New("must include a host")
-	case u.RawQuery != "" || u.Fragment != "":
-		return errors.New("must not include a query or fragment")
-	}
-	return nil
 }
 
 func validateProxyURL(raw string) error {
