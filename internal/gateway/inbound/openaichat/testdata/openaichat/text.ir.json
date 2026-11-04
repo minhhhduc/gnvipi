@@ -1,0 +1,37 @@
+{
+  "model": "client/text",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "temperature": 0,
+    "top_p": 0,
+    "seed": 0,
+    "max_output_tokens": 0,
+    "stop": [
+      "END"
+    ]
+  },
+  "extensions": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "stop": [
+      "END"
+    ],
+    "stream_options": {
+      "include_usage": false
+    }
+  }
+}

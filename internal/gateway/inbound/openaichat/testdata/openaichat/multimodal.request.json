@@ -1,0 +1,46 @@
+{
+  "model": "client/vision",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Compare",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://images.invalid/a.png",
+            "detail": "high"
+          }
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,aGVsbG8=",
+            "detail": "low"
+          }
+        },
+        {
+          "type": "input_audio",
+          "input_audio": {
+            "data": "raw-audio",
+            "format": "wav"
+          }
+        }
+      ],
+      "name": "photo-user",
+      "vendor_message": {
+        "x": 1
+      }
+    }
+  ],
+  "metadata": {
+    "trace": "image"
+  },
+  "vendor_flag": 0
+}

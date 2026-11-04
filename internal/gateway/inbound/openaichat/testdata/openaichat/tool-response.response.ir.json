@@ -1,0 +1,29 @@
+{
+  "id": "tool-response",
+  "model": "client/tools",
+  "content": [
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call_exact",
+        "name": "lookup",
+        "input": {"key":"value"}
+      }
+    },
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call_string",
+        "name": "partial",
+        "input": "{partial"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 14,
+    "output_tokens": 9,
+    "cache_read_tokens": 6,
+    "cache_write_tokens": 3
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "model": "client/legacy",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Legacy budget"
+    }
+  ],
+  "max_tokens": 32,
+  "stop": "STOP"
+}

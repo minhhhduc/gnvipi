@@ -1,0 +1,25 @@
+{
+  "id": "reason-response",
+  "object": "chat.completion",
+  "created": 1735689600,
+  "model": "client/reasoner",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Answer",
+        "reasoning_content": "Plan carefully"
+      },
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 11,
+    "completion_tokens": 8,
+    "total_tokens": 19,
+    "completion_tokens_details": {
+      "reasoning_tokens": 5
+    }
+  }
+}

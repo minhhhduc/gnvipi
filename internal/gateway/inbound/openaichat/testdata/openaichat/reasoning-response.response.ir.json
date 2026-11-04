@@ -1,0 +1,29 @@
+{
+  "id": "reason-response",
+  "model": "client/reasoner",
+  "content": [
+    {
+      "type": "reasoning",
+      "reasoning": {
+        "content": "Plan ",
+        "signature": "not-a-chat-field"
+      }
+    },
+    {
+      "type": "reasoning",
+      "reasoning": {
+        "content": "carefully"
+      }
+    },
+    {
+      "type": "text",
+      "text": "Answer"
+    }
+  ],
+  "stop_reason": "max_tokens",
+  "usage": {
+    "input_tokens": 11,
+    "output_tokens": 8,
+    "reasoning_tokens": 5
+  }
+}
