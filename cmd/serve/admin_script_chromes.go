@@ -2,7 +2,7 @@ package main
 
 const adminChromeScript = `
 // --- Captcha chromes (kill = free RAM, start = respawn) ---
-if (CHROMES && PAGE === 'chromes') {
+if (PAGE === 'chromes') {
   const box = document.getElementById('chromes');
   const fmtLast = t => {
     const d = new Date(t);
@@ -35,8 +35,14 @@ if (CHROMES && PAGE === 'chromes') {
     try {
       const res = await fetch('/admin/chromes');
       if (!res.ok) { box.textContent = 'chromes error: ' + res.status; return; }
-      const list = (await res.json()).chromes || [];
-      box.innerHTML = (list.length
+      const status = await res.json();
+      const list = status.chromes || [];
+      const transitioning = status.state === 'starting' || status.state === 'stopping';
+      const label = status.state === 'starting' ? 'Starting Chrome captcha…'
+                  : status.state === 'stopping' ? 'Stopping Chrome captcha…'
+                  : status.enabled ? 'Chrome captcha enabled · ' + status.ready + ' ready tokens'
+                  : 'Chrome captcha is off / ' + (status.state === 'stopped' ? 'stopped' : 'idle');
+      box.innerHTML = '<div class=row><span class=id>' + label + '</span></div>' + (list.length
         ? list.map(c =>
             '<div class=row data-id="chrome' + c.index + '">' +
               '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
@@ -50,10 +56,11 @@ if (CHROMES && PAGE === 'chromes') {
                 (c.killed ? 'start' : 'kill') + '">' +
                 (c.killed ? 'start' : 'kill') + '</button>' +
             '</div>').join('')
-        : '<div class=row><span class=id>no chromes</span>') +
-        (list.length ? '<div class=bar style="margin-top:.6rem">' +
-          '<button type=button data-mode-all=kill>kill all</button>' +
-          '<button type=button data-mode-all=start>start all</button></div>' : '');
+        : '<div class=row><span class=id>No Chrome processes allocated</span></div>') +
+        '<div class=bar style="margin-top:.6rem">' +
+          '<button type=button data-mode-all=start' + (transitioning ? ' disabled' : '') + '>' +
+            (status.enabled ? 'Start All' : 'Turn On / Start All') + '</button>' +
+          '<button type=button data-mode-all=kill' + (status.state === 'stopping' || (!status.enabled && status.state !== 'starting') ? ' disabled' : '') + '>Kill All</button></div>';
     } catch (err) {
       box.textContent = 'chromes error: ' + err;
     }

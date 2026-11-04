@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -68,6 +69,83 @@ func TestBrowserGroupSnapshotDoesNotWaitForBusyBrowser(t *testing.T) {
 		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("Snapshot blocked on busy Chrome")
+	}
+}
+
+func TestBrowserGroupPartialAllocationCloseWakesPoolBorrowers(t *testing.T) {
+	runtimeCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	browser, browserCloses := newTrackedBrowser()
+	attempts := 0
+	group, err := newBrowserGroup(runtimeCtx, 2, BrowserConfig{URLProvider: StaticURLProvider{URL: "https://nvidia.test/model"}}, func(context.Context, BrowserConfig) (*Browser, error) {
+		attempts++
+		if attempts == 1 {
+			return browser, nil
+		}
+		return nil, errors.New("second Chrome could not allocate")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Len() != 1 {
+		t.Fatalf("partial allocation produced %d slots, want one usable Chrome", group.Len())
+	}
+	borrowed, err := group.borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.releaseBorrowed(borrowed)
+	// Browser.Close waits for extraction's lock. Hold it until pool workers
+	// have exited so no fake CDP process or concurrent closed-field read is needed.
+	browser.mu.Lock()
+	var unlockOnce sync.Once
+	unlockBrowser := func() { unlockOnce.Do(browser.mu.Unlock) }
+	t.Cleanup(unlockBrowser)
+	workersEntered := make(chan struct{}, 2)
+	pool := NewPool(runtimeCtx, func(context.Context) (string, error) {
+		workersEntered <- struct{}{}
+		// This is the same context-independent wait used by Extract/ExtractN,
+		// but stops before invoking the external CDP extraction boundary.
+		b, borrowErr := group.borrow()
+		if b != nil {
+			group.releaseBorrowed(b)
+		}
+		return "", borrowErr
+	}, PoolConfig{Size: 2, Workers: 2})
+	t.Cleanup(func() { unlockBrowser(); group.Close(); pool.Close() })
+	for range 2 {
+		select {
+		case <-workersEntered:
+		case <-time.After(time.Second):
+			t.Fatal("partial allocation's surplus pool workers did not enter borrow")
+		}
+	}
+	cancel()
+	groupClosed := make(chan struct{})
+	go func() { group.Close(); close(groupClosed) }()
+	select {
+	case <-group.done:
+	case <-time.After(time.Second):
+		t.Fatal("closing group did not wake browser waiters before closing busy Chrome")
+	}
+	poolClosed := make(chan struct{})
+	go func() { pool.Close(); close(poolClosed) }()
+	select {
+	case <-poolClosed:
+	case <-time.After(time.Second):
+		t.Fatal("canceled pool retained a borrower from the partially allocated group")
+	}
+	unlockBrowser()
+	select {
+	case <-groupClosed:
+	case <-time.After(time.Second):
+		t.Fatal("browser group teardown did not finish after extraction released its lock")
+	}
+	if browserCloses.Load() != 1 {
+		t.Fatalf("partial allocation closed its live Chrome %d times", browserCloses.Load())
+	}
+	if _, err := pool.Take(t.Context()); err == nil {
+		t.Fatal("partially allocated retired pool still returned a token")
 	}
 }
 

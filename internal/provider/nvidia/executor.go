@@ -27,7 +27,6 @@ const providerKey = "nvidia"
 
 // Options configures the Nvidia playground executor.
 type Options struct {
-	Auto         bool
 	FlagCaptcha  string
 	Coalesce     time.Duration
 	MaxInflight  int
@@ -42,7 +41,6 @@ type Options struct {
 
 // Executor implements coreauth.ProviderExecutor for NVIDIA playground predict.
 type Executor struct {
-	auto         bool
 	coalesce     time.Duration
 	httpClient   *http.Client
 	inflight     chan struct{}
@@ -61,7 +59,6 @@ type Executor struct {
 // NewExecutor builds an Executor from Options.
 func NewExecutor(opts *Options) *Executor {
 	e := &Executor{
-		auto:         opts.Auto,
 		coalesce:     opts.Coalesce,
 		httpClient:   opts.HTTPClient,
 		inflightWait: opts.InflightWait,
@@ -82,14 +79,15 @@ func NewExecutor(opts *Options) *Executor {
 // Identifier returns the provider key.
 func (e *Executor) Identifier() string { return providerKey }
 
-// Pool returns the captcha pool (may be nil).
+// Pool returns the current runtime captcha pool (nil while Chrome is off).
 func (e *Executor) Pool() *captcha.Pool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.pool
 }
 
-// SetPool attaches the captcha pool after the gateway listener is already up.
+// SetPool publishes or detaches the runtime captcha pool under the same lock
+// used by NVIDIA requests. A non-nil pool enables pooled captcha resolution.
 func (e *Executor) SetPool(pool *captcha.Pool) {
 	e.mu.Lock()
 	e.pool = pool
@@ -353,7 +351,7 @@ func (e *Executor) doPredict(ctx context.Context, info models.ModelInfo, body []
 		clientToken = opts.Headers.Get("nv-captcha-token")
 	}
 	maxAttempts := 1
-	if clientToken == "" && (e.Pool() != nil || e.auto) {
+	if clientToken == "" && e.Pool() != nil {
 		maxAttempts = 3
 	}
 
@@ -566,15 +564,12 @@ func (e *Executor) resolveCaptcha(ctx context.Context, clientToken string, allow
 		token := lease.Token()
 		return token, lease, nil
 	}
-	if e.auto {
-		return "", nil, fmt.Errorf("captcha pool empty after startup; retry later")
-	}
-	return "", nil, fmt.Errorf("captcha token required: send nv-captcha-token, or restart with -captcha / -auto")
+	return "", nil, fmt.Errorf("captcha token required: enable Chrome captcha from /admin?page=chromes, send nv-captcha-token, or use -captcha")
 }
 
 func captchaErr(err error) error {
 	status := http.StatusUnauthorized
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "captcha pool empty after") || strings.Contains(err.Error(), "captcha token required") {
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "captcha pool empty after") || strings.Contains(err.Error(), "captcha token required") || strings.Contains(err.Error(), "captcha pool closed") {
 		status = http.StatusServiceUnavailable
 	} else if errors.Is(err, context.Canceled) {
 		status = http.StatusRequestTimeout
