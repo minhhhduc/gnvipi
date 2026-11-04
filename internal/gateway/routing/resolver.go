@@ -1,7 +1,9 @@
 package routing
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,8 +34,9 @@ type Resolver interface {
 }
 
 type resolvedRoute struct {
-	route Route
-	alias string
+	route  Route
+	alias  string
+	hidden bool
 }
 
 type snapshot struct {
@@ -95,6 +98,58 @@ func (r *LegacyResolver) Update(list []provider.LegacyProvider, hidden []string)
 	return nil
 }
 
+// UpdateProviders retains complete v2 provider policies while preserving the
+// existing exact-alias/bare-model precedence. Wildcard registry routing belongs
+// to the registry resolver, not this legacy-precedence resolver.
+func (r *LegacyResolver) UpdateProviders(list []provider.Provider, hidden []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	owned := make([]provider.Provider, len(list))
+	type row struct {
+		provider *provider.Provider
+		mapping  *provider.ModelMapping
+	}
+	var rows []row
+	for i := range list {
+		owned[i] = provider.Clone(&list[i])
+		p := &owned[i]
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if !p.Enabled {
+			continue
+		}
+		for j := range p.Models {
+			rows = append(rows, row{provider: p, mapping: &p.Models[j]})
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b row) int {
+		first, second := a.mapping.LegacyPosition, b.mapping.LegacyPosition
+		if first == 0 && second != 0 {
+			return 1
+		}
+		if second == 0 && first != 0 {
+			return -1
+		}
+		return cmp.Compare(first, second)
+	})
+	next := &snapshot{routes: make(map[string]resolvedRoute, 2*len(rows)), hidden: make(map[string]bool, len(hidden))}
+	for _, id := range hidden {
+		next.hidden[id] = true
+	}
+	for _, current := range rows {
+		mapping, p := current.mapping, current.provider
+		entry := resolvedRoute{route: Route{Provider: p, UpstreamModel: mapping.UpstreamModel, UpstreamProtocol: p.Protocol, Kind: Custom}, alias: mapping.Alias, hidden: mapping.Hidden}
+		for _, model := range []string{mapping.Alias, mapping.UpstreamModel} {
+			if _, exists := next.routes[model]; !exists {
+				next.routes[model] = entry
+			}
+		}
+	}
+	r.current.Store(next)
+	return nil
+}
+
 func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, _ ir.Protocol) (Route, error) {
 	if err := ctx.Err(); err != nil {
 		return Route{}, err
@@ -110,7 +165,7 @@ func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, _ ir.P
 	if !found {
 		return Route{Kind: Fallthrough}, nil
 	}
-	if current.hidden[clientModel] || current.hidden[entry.alias] {
+	if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
 		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 	}
 	return entry.route, nil

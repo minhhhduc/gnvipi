@@ -220,6 +220,14 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
   cannot replace the canonical client ID. The normalized core exposes an opt-in,
   once-only IR usage recorder with first-byte timing and JSON access logs; legacy
   traffic keeps its existing recorder and is not counted twice.
+- **Gateway v2 dispatcher**: `-gateway-v2` opts custom same-protocol traffic into
+  the shared relay, including Anthropic `count_tokens`; disabled by default.
+  NVIDIA and cross-protocol requests keep the legacy path. With the flag enabled,
+  the resolver rejects hidden models with protocol-shaped errors; disabled mode
+  preserves legacy routing, including its Responses hidden-model fallthrough.
+  Persisted transport/auth/header/endpoint policies remain intact. Exact alias
+  precedence is unchanged; registry/wildcard routing is a separate backlog item.
+  Core-owned cycle requests record only the committed attempt's usage/error.
 
 ## Notable flags
 
@@ -241,6 +249,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -max-body-bytes N         client API body limit (default 32 MiB)
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
 -gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
+-gateway-v2               same-protocol gateway dispatcher (default off)
 -admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
 -deny-private-upstreams   deny loopback/LAN custom upstreams
 -allow-unsafe-upstreams  permit link-local/cloud metadata targets (unsafe)
