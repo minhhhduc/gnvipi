@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
@@ -61,6 +62,7 @@ type modelPrefs struct {
 	cycleIndex   int
 	onChange     func([]customProvider) // rewrites config.yaml so cliproxy reloads
 	onMaskChange func()                 // triggers re-registration of models in cliproxy
+	resolver     *routing.LegacyResolver
 }
 
 type prefsFile struct {
@@ -121,6 +123,11 @@ func (p *customProvider) modelID() string {
 func (p *modelPrefs) load(path string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	defer func() {
+		if err := p.refreshRoutingLocked(); err != nil {
+			log.Printf("model resolver snapshot: %v", err)
+		}
+	}()
 	p.path, p.hidden, p.deleted, p.providers, p.autoModel, p.searchURL, p.cycle, p.cycleIndex = path, map[string]struct{}{}, map[string]struct{}{}, nil, "", "", &cycleConfig{Name: "cycle"}, 0
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -325,7 +332,13 @@ func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
 	p.mu.Lock()
-	p.providers = list
+	previous := p.providers
+	p.providers = append([]customProvider(nil), list...)
+	if err := p.refreshRoutingLocked(); err != nil {
+		p.providers = previous
+		p.mu.Unlock()
+		return err
+	}
 	notify := p.onChange
 	onMask := p.onMaskChange
 	p.mu.Unlock()
@@ -343,6 +356,12 @@ func (p *modelPrefs) setProviders(list []customProvider) error {
 
 // save writes the whole mask file: hidden ids, deleted ids, plus custom endpoints.
 func (p *modelPrefs) save() error {
+	p.mu.Lock()
+	routeErr := p.refreshRoutingLocked()
+	p.mu.Unlock()
+	if routeErr != nil {
+		return routeErr
+	}
 	p.mu.RLock()
 	path := p.path
 	hiddenIDs := make([]string, 0, len(p.hidden))
