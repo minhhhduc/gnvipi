@@ -32,6 +32,8 @@ func splitDialAddress(address string) (host, port string, err error) {
 // destination. Use it with upstream.Options.DialContext and DisableProxy=true
 // when composing with the upstream factory; Control is still available for
 // native, direct dialers. A returned tunnel keeps the original HTTP Host/SNI.
+// A caller deadline bounds resolution, connection and tunneling together; an
+// unbounded caller gets a ten-second fallback.
 func (p URLPolicy) Dialer(proxyURL *url.URL, resolver IPResolver, tlsConfig *tls.Config) netx.DialFunc {
 	if proxyURL != nil {
 		copyURL := *proxyURL
@@ -41,6 +43,15 @@ func (p URLPolicy) Dialer(proxyURL *url.URL, resolver IPResolver, tlsConfig *tls
 		tlsConfig = tlsConfig.Clone()
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		timeout := 10 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			timeout = time.Until(deadline)
+			if timeout <= 0 {
+				return nil, context.DeadlineExceeded
+			}
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 		host, port, err := splitDialAddress(address)
 		if err != nil {
 			return nil, err
@@ -54,9 +65,7 @@ func (p URLPolicy) Dialer(proxyURL *url.URL, resolver IPResolver, tlsConfig *tls
 			if lookup == nil {
 				lookup = net.DefaultResolver
 			}
-			lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			addresses, err := lookup.LookupIPAddr(lookupCtx, host)
+			addresses, err := lookup.LookupIPAddr(ctx, host)
 			if err != nil {
 				return nil, fmt.Errorf("resolve upstream host: %w", err)
 			}
@@ -82,7 +91,7 @@ func (p URLPolicy) Dialer(proxyURL *url.URL, resolver IPResolver, tlsConfig *tls
 			}
 			pinned = net.JoinHostPort(selected.String(), port)
 		}
-		dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: p.Control}
+		dialer := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second, Control: p.Control}
 		if proxyURL != nil {
 			// The configured proxy is a trusted hop, not the upstream. Its
 			// loopback/LAN socket must not inherit the origin's private-IP ban;
