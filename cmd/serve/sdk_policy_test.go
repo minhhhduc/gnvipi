@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,7 +34,15 @@ func (f sdkPolicyResolver) LookupIPAddr(ctx context.Context, host string) ([]net
 // consume the installed transport, rather than duplicating their priorities.
 func sdkPolicyEngine(t *testing.T, baseURL, authProxy, defaultProxy string, transports *sdkPolicyTransports) (*gin.Engine, *coreauth.Manager) {
 	t.Helper()
-	cfg, cfgPath, err := buildConfig("127.0.0.1:18080")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, cfgPath, err := buildConfig(addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +51,6 @@ func sdkPolicyEngine(t *testing.T, baseURL, authProxy, defaultProxy string, tran
 			t.Error(err)
 		}
 	})
-	cfg.Port = 0
 	cfg.ProxyURL = defaultProxy
 	cfg.OpenAICompatibility = []config.OpenAICompatibility{{
 		Name: "sdk-policy-test", BaseURL: baseURL, DisableCooling: true,
@@ -51,13 +59,21 @@ func sdkPolicyEngine(t *testing.T, baseURL, authProxy, defaultProxy string, tran
 	}}
 	core := coreauth.NewManager(nil, nil, nil)
 	ready := make(chan struct{})
+	listening := make(chan struct{})
+	var listeningOnce sync.Once
 	var engine *gin.Engine
 	svc, err := cliproxy.NewBuilder().WithConfig(cfg).WithConfigPath(cfgPath).
 		WithCoreAuthManager(core).
 		WithWatcherFactory(func(string, string, func(*config.Config)) (*cliproxy.WatcherWrapper, error) {
 			return &cliproxy.WatcherWrapper{}, nil
 		}).
-		WithServerOptions(api.WithEngineConfigurator(func(e *gin.Engine) { engine = e })).
+		WithServerOptions(api.WithEngineConfigurator(func(e *gin.Engine) { engine = e }),
+			api.WithMiddleware(func(c *gin.Context) {
+				if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/healthz" {
+					listeningOnce.Do(func() { close(listening) })
+				}
+				c.Next()
+			})).
 		WithHooks(cliproxy.Hooks{OnAfterStart: func(*cliproxy.Service) { close(ready) }}).Build()
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +111,38 @@ func sdkPolicyEngine(t *testing.T, baseURL, authProxy, defaultProxy string, tran
 	case <-time.After(10 * time.Second):
 		t.Fatal("SDK service did not start")
 	}
-	return engine, core
+	// The SDK hook follows a fixed delay, not listener initialization. A real
+	// socket request and handler signal synchronize Start's writes with cleanup.
+	healthClient := &http.Client{Transport: &http.Transport{}, Timeout: time.Second}
+	defer healthClient.CloseIdleConnections()
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	healthRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/healthz", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		response, err := healthClient.Do(healthRequest)
+		if err == nil {
+			if err := response.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-listening:
+				return engine, core
+			default:
+			}
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("SDK service exited before listener readiness: %v", err)
+		case <-timeout.C:
+			t.Fatal("SDK listener did not become ready")
+		case <-ticker.C:
+		}
+	}
 }
 
 func sdkPolicyRequest(t *testing.T, engine *gin.Engine, path string, stream bool) *httptest.ResponseRecorder {
