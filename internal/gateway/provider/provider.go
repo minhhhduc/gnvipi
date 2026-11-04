@@ -66,17 +66,18 @@ type Timeouts struct {
 
 // Provider is one upstream endpoint.
 type Provider struct {
-	ID       string
-	Name     string
-	BaseURL  string
-	ProxyURL string `json:"proxy_url,omitempty"` // empty uses the client/environment proxy
-	Protocol ir.Protocol
-	Auth     Auth
-	Headers  map[string]string
-	Models   []ModelMapping
-	Timeouts Timeouts
-	Enabled  bool
-	TLS      TLSProfile
+	ID             string
+	Name           string
+	BaseURL        string
+	ProxyURL       string `json:"proxy_url,omitempty"` // empty uses the client/environment proxy
+	Protocol       ir.Protocol
+	Auth           Auth
+	Headers        map[string]string
+	Models         []ModelMapping
+	Timeouts       Timeouts
+	Enabled        bool
+	TLS            TLSProfile
+	ForwardHeaders []string `json:"forward_headers,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.
@@ -158,6 +159,7 @@ func (p *Provider) Validate() error {
 	}
 	p.validateAuth(add)
 	p.validateHeaders(add)
+	p.validateForwardHeaders(add)
 	p.validateModels(add)
 	p.validateTimeouts(add)
 
@@ -211,8 +213,8 @@ func (p *Provider) validateHeaders(add func(field, problem string)) {
 		switch {
 		case !httpguts.ValidHeaderFieldName(name):
 			add(field, "invalid header name")
-		case hopByHopHeaders[name]:
-			add(field, "hop-by-hop headers belong to the transport, not to a provider")
+		case ForbiddenForwardHeader(name):
+			add(field, "credentials and transport headers use dedicated configuration")
 		case dupes[name]:
 			add(field, "set more than once under different spellings")
 		case !httpguts.ValidHeaderFieldValue(canonical[name]):

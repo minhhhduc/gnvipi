@@ -76,6 +76,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	}
 
 	for i := range out {
+		ApplyLegacyHeaderDefaults(&out[i])
 		var invalid *ValidationError
 		if err := out[i].Validate(); errors.As(err, &invalid) {
 			errs = append(errs, invalid.Errors...)
