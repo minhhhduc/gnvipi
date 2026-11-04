@@ -1,0 +1,9 @@
+[
+  {"type":"message_start","message":{"id":"msg_tool","role":"assistant","model":"tool-model"},"usage":{"input_tokens":5}},
+  {"type":"block_start","index":2,"block":{"type":"tool_use","index":2,"tool_use":{"id":"opaque/call-9","name":"weather","input":{}}}},
+  {"type":"block_delta","index":2,"delta":{"type":"tool_arguments_delta","tool_call_id":"opaque/call-9","tool_call_name":"weather","partial_json":"{\"city\":\"H"}},
+  {"type":"block_delta","index":2,"delta":{"type":"tool_arguments_delta","tool_call_id":"opaque/call-9","partial_json":"à Nội\",\"days\":0}"}},
+  {"type":"block_stop","index":2},
+  {"type":"usage_update","usage":{"output_tokens":12,"cache_read_tokens":2}},
+  {"type":"message_stop","stop_reason":"tool_use"}
+]
