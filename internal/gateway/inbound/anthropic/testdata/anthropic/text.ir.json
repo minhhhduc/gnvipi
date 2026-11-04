@@ -1,0 +1,17 @@
+{
+  "model": "client-alias",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello"
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "max_output_tokens": 64
+  }
+}

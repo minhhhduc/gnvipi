@@ -1,0 +1,36 @@
+{
+  "id": "msg_tool",
+  "model": "client-alias",
+  "content": [
+    {
+      "type": "reasoning",
+      "reasoning": {
+        "content": "Plan",
+        "signature": "signed"
+      }
+    },
+    {
+      "type": "text",
+      "text": ""
+    },
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call-1",
+        "name": "lookup",
+        "input": {
+          "id": 9007199254740993
+        }
+      }
+    },
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call-2",
+        "name": "ping"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {}
+}

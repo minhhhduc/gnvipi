@@ -1,0 +1,90 @@
+{
+  "decode": [
+    {
+      "name": "text",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "text.request.json"
+      },
+      "ir": "text.ir.json"
+    },
+    {
+      "name": "multi-turn",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "multi-turn.request.json"
+      },
+      "ir": "multi-turn.ir.json"
+    },
+    {
+      "name": "system-cache",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "system-cache.request.json"
+      },
+      "ir": "system-cache.ir.json"
+    },
+    {
+      "name": "images",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "images.request.json"
+      },
+      "ir": "images.ir.json"
+    },
+    {
+      "name": "optional-zero",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "optional-zero.request.json"
+      },
+      "ir": "optional-zero.ir.json"
+    },
+    {
+      "name": "tools-thinking",
+      "request": {
+        "url": "http://client.invalid/v1/messages",
+        "body": "tools-thinking.request.json"
+      },
+      "ir": "tools-thinking.ir.json"
+    },
+    {
+      "name": "invalid",
+      "request": {
+        "body": "invalid.request.json"
+      },
+      "error": "invalid.error.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "text-and-cache-usage",
+      "ir": "text.response.ir.json",
+      "golden": "text.response.golden.json"
+    },
+    {
+      "name": "thinking-and-tool-blocks",
+      "ir": "tool.response.ir.json",
+      "golden": "tool.response.golden.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "real-embedded-stream",
+      "ir": "../sse/text.ir.json",
+      "golden": "../sse/text.sse"
+    },
+    {
+      "name": "real-embedded-stream-error",
+      "ir": "../sse/error.ir.json",
+      "golden": "../sse/error.sse"
+    }
+  ],
+  "errors": [
+    {
+      "name": "invalid-request",
+      "error": "invalid.error.json",
+      "golden": "invalid.golden.json"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "model": "alias",
+  "max_tokens": 32,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Describe"
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "aGVsbG8="
+          },
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "url",
+            "url": "https://images.example.invalid/picture.png",
+            "future": "keep"
+          }
+        }
+      ]
+    }
+  ]
+}

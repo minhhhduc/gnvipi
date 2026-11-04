@@ -1,0 +1,15 @@
+{
+  "status": 400,
+  "headers": {
+    "Content-Type": [
+      "application/json"
+    ]
+  },
+  "body": {
+    "type": "error",
+    "error": {
+      "type": "invalid_request_error",
+      "message": "model must be a non-empty string"
+    }
+  }
+}

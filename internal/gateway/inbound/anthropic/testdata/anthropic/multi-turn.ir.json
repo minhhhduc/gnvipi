@@ -1,0 +1,60 @@
+{
+  "model": "alias",
+  "instructions": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Be concise"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "First"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Answer"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Next"
+        },
+        {
+          "type": "text",
+          "index": 1,
+          "text": " question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Prefill"
+        }
+      ]
+    }
+  ],
+  "sampling": {
+    "max_output_tokens": 128
+  }
+}

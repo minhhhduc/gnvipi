@@ -1,0 +1,17 @@
+{
+  "id": "msg_1",
+  "model": "client-alias",
+  "content": [
+    {
+      "type": "text",
+      "text": "Hello"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 3,
+    "output_tokens": 2,
+    "cache_read_tokens": 7,
+    "cache_write_tokens": 11
+  }
+}

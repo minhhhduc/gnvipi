@@ -1,0 +1,32 @@
+{
+  "model": "alias",
+  "max_tokens": 128,
+  "system": "Be concise",
+  "messages": [
+    {
+      "role": "user",
+      "content": "First"
+    },
+    {
+      "role": "assistant",
+      "content": "Answer"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Next"
+        },
+        {
+          "type": "text",
+          "text": " question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Prefill"
+    }
+  ]
+}

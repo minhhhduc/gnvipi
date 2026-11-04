@@ -1,0 +1,9 @@
+{
+  "max_tokens": 64,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello"
+    }
+  ]
+}
