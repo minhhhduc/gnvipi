@@ -81,6 +81,11 @@ func TestValidateRejects(t *testing.T) {
 			p.Models = append(p.Models, ModelMapping{Alias: "vendor/m", UpstreamModel: "m2"})
 		}, "models[1].alias"},
 		{"negative timeout", func(p *Provider) { p.Timeouts.Connect = -time.Second }, "timeouts.connect"},
+		{"negative tls timeout", func(p *Provider) { p.Timeouts.TLS = -time.Second }, "timeouts.tls"},
+		{"negative total timeout", func(p *Provider) { p.Timeouts.Total = -time.Second }, "timeouts.total"},
+		{"proxy without host", func(p *Provider) { p.ProxyURL = "http://" }, "proxy_url"},
+		{"proxy with path", func(p *Provider) { p.ProxyURL = "https://proxy.invalid/secret" }, "proxy_url"},
+		{"unknown proxy scheme", func(p *Provider) { p.ProxyURL = "ftp://proxy.invalid" }, "proxy_url"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -283,5 +288,18 @@ func TestFromLegacyValidatesConvertedProviders(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provider vendor:") {
 		t.Fatalf("error = %q, want it addressed to the converted provider", err)
+	}
+}
+
+func TestProxyParseErrorDoesNotExposeCredentials(t *testing.T) {
+	p := validProvider()
+	p.ProxyURL = "http://user:secret@proxy.invalid:bad"
+	err := p.Validate()
+	fields := validationFields(t, err)
+	if len(fields) != 1 || fields[0] != "proxy_url" {
+		t.Fatalf("validation fields = %v, want proxy_url", fields)
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "user") {
+		t.Fatalf("proxy credentials entered schema diagnostic: %v", err)
 	}
 }

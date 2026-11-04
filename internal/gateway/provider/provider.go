@@ -58,22 +58,26 @@ type ModelMapping struct {
 // Timeouts bounds one upstream call. Zero means "use the client default".
 type Timeouts struct {
 	Connect        time.Duration // TCP connect
+	TLS            time.Duration `json:"tls,omitempty"` // TLS handshake
 	ResponseHeader time.Duration // until the response headers arrive
 	Idle           time.Duration // longest silence inside a streamed body
+	Total          time.Duration `json:"total,omitempty"` // non-stream request, including body
 }
 
 // Provider is one upstream endpoint.
 type Provider struct {
-	ID       string
-	Name     string
-	BaseURL  string
-	Protocol ir.Protocol
-	Auth     Auth
-	Headers  map[string]string
-	Models   []ModelMapping
-	Timeouts Timeouts
-	Enabled  bool
-	TLS      TLSProfile
+	ID             string
+	Name           string
+	BaseURL        string
+	ProxyURL       string `json:"proxy_url,omitempty"` // empty uses the client/environment proxy
+	Protocol       ir.Protocol
+	Auth           Auth
+	Headers        map[string]string
+	Models         []ModelMapping
+	Timeouts       Timeouts
+	Enabled        bool
+	TLS            TLSProfile
+	ForwardHeaders []string `json:"forward_headers,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.
@@ -143,6 +147,11 @@ func (p *Provider) Validate() error {
 	if err := validateBaseURL(p.BaseURL); err != nil {
 		add("base_url", err.Error())
 	}
+	if p.ProxyURL != "" {
+		if err := validateProxyURL(p.ProxyURL); err != nil {
+			add("proxy_url", err.Error())
+		}
+	}
 	switch p.TLS {
 	case "", TLSDefault, TLSChrome:
 	default:
@@ -150,6 +159,7 @@ func (p *Provider) Validate() error {
 	}
 	p.validateAuth(add)
 	p.validateHeaders(add)
+	p.validateForwardHeaders(add)
 	p.validateModels(add)
 	p.validateTimeouts(add)
 
@@ -203,8 +213,8 @@ func (p *Provider) validateHeaders(add func(field, problem string)) {
 		switch {
 		case !httpguts.ValidHeaderFieldName(name):
 			add(field, "invalid header name")
-		case hopByHopHeaders[name]:
-			add(field, "hop-by-hop headers belong to the transport, not to a provider")
+		case ForbiddenForwardHeader(name):
+			add(field, "credentials and transport headers use dedicated configuration")
 		case dupes[name]:
 			add(field, "set more than once under different spellings")
 		case !httpguts.ValidHeaderFieldValue(canonical[name]):
@@ -243,8 +253,10 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 		value time.Duration
 	}{
 		{"timeouts.connect", p.Timeouts.Connect},
+		{"timeouts.tls", p.Timeouts.TLS},
 		{"timeouts.response_header", p.Timeouts.ResponseHeader},
 		{"timeouts.idle", p.Timeouts.Idle},
+		{"timeouts.total", p.Timeouts.Total},
 	} {
 		if t.value < 0 {
 			add(t.field, "must not be negative")
@@ -264,6 +276,22 @@ func validateBaseURL(raw string) error {
 		return errors.New("must include a host")
 	case u.RawQuery != "" || u.Fragment != "":
 		return errors.New("must not include a query or fragment")
+	}
+	return nil
+}
+
+func validateProxyURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("must be a valid proxy URL")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return errors.New("must use http, https, socks5 or socks5h")
+	}
+	if u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return errors.New("must include a host and no path, query or fragment")
 	}
 	return nil
 }
