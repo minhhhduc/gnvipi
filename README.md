@@ -164,6 +164,12 @@ disables them. Link-local and cloud-metadata targets are always blocked unless
 requests, redirects and final resolved addresses; trusted configured proxy
 hops may remain local while the ultimate upstream is checked.
 
+The next successful `-models-file` save migrates legacy providers to
+`schema_version: 2` and `providers_v2`, preserving model order, masks and extra
+catalog fields. Writes are v2-only: keep a backup before upgrading; downgrading
+requires restoring the pre-migration file. Invalid or future-version files are
+rejected without overwriting them.
+
 ## How it works
 
 ```

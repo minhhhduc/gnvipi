@@ -61,7 +61,9 @@ func TestAdminDeleteRestorePreservesIndependentMasks(t *testing.T) {
 				post("/admin/models", fmt.Sprintf(`{"masks_id":[%q]}`, id), http.StatusOK)
 			}
 			var deleted modelPrefs
-			deleted.load(p.path)
+			if err := deleted.load(p.path); err != nil {
+				t.Fatal(err)
+			}
 			mount(&deleted)
 			post("/v1/chat/completions", chat, http.StatusNotFound)
 			post("/admin/delete", fmt.Sprintf(`{"id":%q,"restore":true}`, id), http.StatusOK)
@@ -71,7 +73,9 @@ func TestAdminDeleteRestorePreservesIndependentMasks(t *testing.T) {
 			}
 			post("/v1/chat/completions", chat, want)
 			var restored modelPrefs
-			restored.load(p.path)
+			if err := restored.load(p.path); err != nil {
+				t.Fatal(err)
+			}
 			mount(&restored)
 			post("/v1/chat/completions", chat, want)
 		})

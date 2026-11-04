@@ -31,6 +31,7 @@ func (p *modelPrefs) cycleSnapshot() (cfg cycleConfig, index int) {
 func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
+	cfg.Models = append([]string(nil), cfg.Models...)
 	cfg.Name = "cycle"
 	for i := range cfg.Models {
 		cfg.Models[i] = strings.TrimSpace(cfg.Models[i])
@@ -55,17 +56,15 @@ func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 			return fmt.Errorf("unknown cycle model %q", id)
 		}
 	}
-	p.mu.Lock()
-	old, oldIndex := p.cycle, p.cycleIndex
-	p.cycle = &cycleConfig{Name: "cycle", Models: append([]string(nil), cfg.Models...)}
-	p.cycleIndex = 0
-	p.mu.Unlock()
-	if err := p.save(); err != nil {
-		p.mu.Lock()
-		p.cycle, p.cycleIndex = old, oldIndex
-		p.mu.Unlock()
+	if err := p.commitPrefs(func(file *prefsFile) error {
+		file.Cycle = &cycleConfig{Name: "cycle", Models: append([]string(nil), cfg.Models...)}
+		return nil
+	}, false); err != nil {
 		return err
 	}
+	p.mu.Lock()
+	p.cycleIndex = 0
+	p.mu.Unlock()
 	return nil
 }
 

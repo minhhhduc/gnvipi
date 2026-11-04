@@ -112,9 +112,8 @@ func run() (err error) {
 	}
 
 	if *modelsFile != "" {
-		prefs.load(*modelsFile)
-		if err := validateLegacyProviderURLs(prefs.listProviders()); err != nil {
-			return fmt.Errorf("provider URL policy: %w", err)
+		if err := prefs.load(*modelsFile); err != nil {
+			return fmt.Errorf("models file: %w", err)
 		}
 	}
 
@@ -194,12 +193,21 @@ func run() (err error) {
 
 	// Register /admin custom endpoints (e.g. OpenRouter) as OpenAI-compat
 	// providers so CLIProxyAPI routes their aliases.
-	cfg.OpenAICompatibility = compatProviders(prefs.listProviders())
+	providerConfigs, err := prefs.listProvidersV2()
+	if err != nil {
+		return fmt.Errorf("provider configuration: %w", err)
+	}
+	cfg.OpenAICompatibility = compatProviders(providerConfigs)
 	if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 		log.Printf("warning: could not write initial config for providers: %v", err)
 	}
-	prefs.onChange = func(list []customProvider) {
-		cfg.OpenAICompatibility = compatProviders(list)
+	prefs.onChange = func(_ []customProvider) {
+		providerConfigs, err := prefs.listProvidersV2()
+		if err != nil {
+			log.Printf("provider reload: %v", err)
+			return
+		}
+		cfg.OpenAICompatibility = compatProviders(providerConfigs)
 		if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 			log.Printf("warning: could not rewrite config for providers: %v", err)
 		}

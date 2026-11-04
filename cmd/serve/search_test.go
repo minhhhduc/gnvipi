@@ -60,7 +60,9 @@ func TestSearchConfigPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded := &modelPrefs{}
-	loaded.load(path)
+	if err := loaded.load(path); err != nil {
+		t.Fatal(err)
+	}
 	if got := loaded.searchTemplate(); got != searchURL {
 		t.Fatalf("loaded search URL = %q", got)
 	}
