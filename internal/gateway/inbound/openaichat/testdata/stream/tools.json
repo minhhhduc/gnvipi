@@ -1,0 +1,14 @@
+[
+  {"type":"message_start","message":{"id":"chat-tools","role":"assistant","model":"client-alias"}},
+  {"type":"block_start","index":0,"block":{"type":"text"}},
+  {"type":"block_delta","index":0,"delta":{"type":"text_delta","text":"Calling tools"}},
+  {"type":"block_stop","index":0},
+  {"type":"block_start","index":4,"block":{"type":"tool_use","tool_use":{"id":"call-raw-1","name":"weather"}}},
+  {"type":"block_delta","index":4,"delta":{"type":"tool_arguments_delta","tool_call_id":"call-raw-1","partial_json":"{\"city\":\"Pa"}},
+  {"type":"block_delta","index":4,"delta":{"type":"tool_arguments_delta","tool_call_id":"call-raw-1","partial_json":"ris\",\"options\":{\"vendor\":true}}"}},
+  {"type":"block_stop","index":4},
+  {"type":"block_start","index":11,"block":{"type":"tool_use"}},
+  {"type":"block_delta","index":11,"delta":{"type":"tool_arguments_delta","tool_call_id":"call-raw-2","tool_call_name":"clock","partial_json":"{}"}},
+  {"type":"block_stop","index":11},
+  {"type":"message_stop","stop_reason":"tool_use"}
+]

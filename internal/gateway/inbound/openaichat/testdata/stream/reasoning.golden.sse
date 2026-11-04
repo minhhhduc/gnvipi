@@ -1,0 +1,12 @@
+data: {"id":"chat-reasoning","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chat-reasoning","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"reasoning_content":"Consider "},"finish_reason":null}]}
+
+data: {"id":"chat-reasoning","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"reasoning_content":"the constraints"},"finish_reason":null}]}
+
+data: {"id":"chat-reasoning","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"content":"Answer"},"finish_reason":null}]}
+
+data: {"id":"chat-reasoning","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

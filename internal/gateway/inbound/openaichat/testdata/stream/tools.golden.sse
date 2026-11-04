@@ -1,0 +1,16 @@
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"content":"Calling tools"},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-raw-1","type":"function","function":{"name":"weather","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Pa"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ris\",\"options\":{\"vendor\":true}}"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call-raw-2","type":"function","function":{"name":"clock","arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"id":"chat-tools","object":"chat.completion.chunk","created":1700000000,"model":"client-alias","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

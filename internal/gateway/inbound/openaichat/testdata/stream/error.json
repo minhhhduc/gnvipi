@@ -1,0 +1,6 @@
+[
+  {"type":"message_start","message":{"id":"chat-error","role":"assistant","model":"client-alias"}},
+  {"type":"block_start","block":{"type":"text"}},
+  {"type":"block_delta","delta":{"type":"text_delta","text":"Partial answer"}},
+  {"type":"error","error":{"kind":"rate_limit","message":"Capacity exhausted"}}
+]
