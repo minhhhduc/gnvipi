@@ -1,0 +1,11 @@
+[
+  {"type":"message_start","message":{"id":"msg_think","role":"assistant","model":"thinking-model"}},
+  {"type":"block_start","index":4,"block":{"type":"reasoning","index":4,"reasoning":{"content":"First, ","signature":"opaque-signed-thinking"}}},
+  {"type":"block_delta","index":4,"delta":{"type":"reasoning_delta","text":"consider the facts."}},
+  {"type":"block_stop","index":4},
+  {"type":"block_start","index":8,"block":{"type":"text","index":8}},
+  {"type":"block_delta","index":8,"delta":{"type":"text_delta","text":"The answer is 42."}},
+  {"type":"block_stop","index":8},
+  {"type":"usage_update","usage":{"input_tokens":7,"output_tokens":9}},
+  {"type":"message_stop","stop_reason":"max_tokens"}
+]
