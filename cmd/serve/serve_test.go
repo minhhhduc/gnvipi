@@ -25,7 +25,9 @@ func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	var prefs modelPrefs
-	prefs.load(path)
+	if err := prefs.load(path); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := models.Lookup("nvidia/nemotron-3.5-lightning-30b-a3b"); err != nil {
 		t.Fatalf("embedded new model missing after loading saved prefs: %v", err)
 	}
@@ -41,7 +43,9 @@ func TestAutoModelPersistsWithModelPrefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var loaded modelPrefs
-	loaded.load(path)
+	if err := loaded.load(path); err != nil {
+		t.Fatal(err)
+	}
 	if got := loaded.autoModelID(); got != "z-ai/glm-5.2" {
 		t.Fatalf("loaded automode target = %q", got)
 	}

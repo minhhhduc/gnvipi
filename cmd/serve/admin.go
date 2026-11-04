@@ -5,7 +5,6 @@ package main
 // gateway restart.
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -20,6 +19,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
@@ -50,30 +51,34 @@ type gatewayModel struct {
 var prefs = &modelPrefs{}
 
 type modelPrefs struct {
-	mu           sync.RWMutex
-	changeMu     sync.Mutex // serializes mutations, persistence, and reload callbacks
-	path         string
-	hidden       map[string]struct{}
-	deleted      map[string]struct{}
-	providers    []customProvider
-	autoModel    string
-	searchURL    string
-	cycle        *cycleConfig
-	cycleIndex   int
-	onChange     func([]customProvider) // rewrites config.yaml so cliproxy reloads
-	onMaskChange func()                 // triggers re-registration of models in cliproxy
-	resolver     *routing.LegacyResolver
+	mu            sync.RWMutex
+	changeMu      sync.Mutex // serializes mutations, persistence, and reload callbacks
+	path          string
+	hidden        map[string]struct{}
+	deleted       map[string]struct{}
+	providers     []customProvider
+	providerStore *gatewayprovider.Store
+	loadErr       error // refuses mutation after an unreadable or unsupported models file
+	autoModel     string
+	searchURL     string
+	cycle         *cycleConfig
+	cycleIndex    int
+	onChange      func([]customProvider) // rewrites config.yaml so cliproxy reloads
+	onMaskChange  func()                 // triggers re-registration of models in cliproxy
+	resolver      *routing.LegacyResolver
 }
 
 type prefsFile struct {
-	Meta      map[string]any   `json:"_meta,omitempty"`
-	Groups    []ModelGroup     `json:"groups"`
-	MasksID   []string         `json:"masks_id"`
-	DeletedID []string         `json:"deleted_id"`
-	Providers []customProvider `json:"providers,omitempty"` // kept for admin UI custom providers
-	AutoModel string           `json:"auto_model,omitempty"`
-	SearchURL string           `json:"search_url,omitempty"`
-	Cycle     *cycleConfig     `json:"cycle,omitempty"`
+	Meta          map[string]any             `json:"_meta,omitempty"`
+	Groups        []ModelGroup               `json:"groups"`
+	MasksID       []string                   `json:"masks_id"`
+	DeletedID     []string                   `json:"deleted_id"`
+	Providers     []customProvider           `json:"providers,omitempty"` // kept for admin UI custom providers
+	ProvidersV2   []gatewayprovider.Provider `json:"providers_v2"`
+	SchemaVersion int                        `json:"schema_version"`
+	AutoModel     string                     `json:"auto_model,omitempty"`
+	SearchURL     string                     `json:"search_url,omitempty"`
+	Cycle         *cycleConfig               `json:"cycle,omitempty"`
 }
 
 type ModelGroup struct {
@@ -119,36 +124,33 @@ func (p *customProvider) modelID() string {
 	return p.alias()
 }
 
-// load reads the mask file; a missing file simply means everything is on.
-func (p *modelPrefs) load(path string) {
+// load reads preferences and migrates legacy providers in memory. It never
+// overwrites a malformed or future-schema file; the caller must handle errors.
+func (p *modelPrefs) load(path string) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	defer func() {
-		if err := p.refreshRoutingLocked(); err != nil {
-			log.Printf("model resolver snapshot: %v", err)
-		}
-	}()
-	p.path, p.hidden, p.deleted, p.providers, p.autoModel, p.searchURL, p.cycle, p.cycleIndex = path, map[string]struct{}{}, map[string]struct{}{}, nil, "", "", &cycleConfig{Name: "cycle"}, 0
-	raw, err := os.ReadFile(path)
+	p.path = path
+	p.hidden, p.deleted = map[string]struct{}{}, map[string]struct{}{}
+	p.providers, p.providerStore, p.loadErr = nil, nil, nil
+	p.autoModel, p.searchURL, p.cycle, p.cycleIndex = "", "", &cycleConfig{Name: "cycle"}, 0
+	store, err := gatewayprovider.OpenStore(path, nil)
 	if err != nil {
-		return
+		p.loadErr = err
+		return err
 	}
-	var file prefsFile
-	if err = json.Unmarshal(raw, &file); err != nil {
-		log.Printf("models file %s: %v (ignored)", path, err)
-		return
+	doc := store.Snapshot()
+	file, err := decodePrefsDocument(doc)
+	if err != nil {
+		p.loadErr = err
+		return err
 	}
-	for _, id := range file.MasksID {
-		p.hidden[id] = struct{}{}
-	}
-	for _, id := range file.DeletedID {
-		p.deleted[id] = struct{}{}
-	}
-	p.providers = file.Providers
-	p.autoModel = file.AutoModel
-	p.searchURL = file.SearchURL
-	if file.Cycle != nil {
-		p.cycle.Models = append([]string(nil), file.Cycle.Models...)
+	p.providerStore = store
+	p.applyPrefsLocked(&file)
+	if err := p.refreshRoutingLocked(); err != nil {
+		p.loadErr = err
+		return err
 	}
 	log.Printf("models file %s: %d model(s) off, %d deleted, %d custom endpoint(s)", path, len(p.hidden), len(p.deleted), len(p.providers))
 	// Merge catalog entries from the local file into the embedded registry.
@@ -172,6 +174,7 @@ func (p *modelPrefs) load(path string) {
 			}
 		}
 	}
+	return nil
 }
 
 func (p *modelPrefs) isHidden(id string) bool {
@@ -195,36 +198,41 @@ func (p *modelPrefs) isDeleted(id string) bool {
 func (p *modelPrefs) setHidden(ids []string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	p.hidden = make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		p.hidden[id] = struct{}{}
-	}
-	p.mu.Unlock()
-	return p.save()
+	return p.commitPrefs(func(file *prefsFile) error {
+		file.MasksID = append([]string(nil), ids...)
+		return nil
+	}, false)
 }
 
 // addDeleted adds a single model to the deleted set.
 func (p *modelPrefs) addDeleted(id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	if p.deleted == nil {
-		p.deleted = map[string]struct{}{}
-	}
-	p.deleted[id] = struct{}{}
-	p.mu.Unlock()
-	return p.save()
+	return p.commitPrefs(func(file *prefsFile) error {
+		for _, existing := range file.DeletedID {
+			if existing == id {
+				return nil
+			}
+		}
+		file.DeletedID = append(file.DeletedID, id)
+		return nil
+	}, false)
 }
 
 // removeDeleted restores a model from the deleted set.
 func (p *modelPrefs) removeDeleted(id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	delete(p.deleted, id)
-	p.mu.Unlock()
-	return p.save()
+	return p.commitPrefs(func(file *prefsFile) error {
+		var retained []string
+		for _, existing := range file.DeletedID {
+			if existing != id {
+				retained = append(retained, existing)
+			}
+		}
+		file.DeletedID = retained
+		return nil
+	}, false)
 }
 
 // listDeleted returns the deleted model ids.
@@ -258,17 +266,7 @@ func (p *modelPrefs) autoModelID() string {
 func (p *modelPrefs) setAutoModel(id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	old := p.autoModel
-	p.autoModel = id
-	p.mu.Unlock()
-	if err := p.save(); err != nil {
-		p.mu.Lock()
-		p.autoModel = old
-		p.mu.Unlock()
-		return err
-	}
-	return nil
+	return p.commitPrefs(func(file *prefsFile) error { file.AutoModel = id; return nil }, false)
 }
 
 func (p *modelPrefs) searchTemplate() string {
@@ -280,17 +278,7 @@ func (p *modelPrefs) searchTemplate() string {
 func (p *modelPrefs) setSearchURL(raw string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	old := p.searchURL
-	p.searchURL = raw
-	p.mu.Unlock()
-	if err := p.save(); err != nil {
-		p.mu.Lock()
-		p.searchURL = old
-		p.mu.Unlock()
-		return err
-	}
-	return nil
+	return p.commitPrefs(func(file *prefsFile) error { file.SearchURL = raw; return nil }, false)
 }
 
 func validSearchURL(raw string) bool {
@@ -331,151 +319,49 @@ func normalizeSearchURL(raw string) string {
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	p.mu.Lock()
-	previous := p.providers
-	p.providers = append([]customProvider(nil), list...)
-	if err := p.refreshRoutingLocked(); err != nil {
-		p.providers = previous
-		p.mu.Unlock()
+	return p.commitPrefs(func(file *prefsFile) error {
+		var err error
+		file.ProvidersV2, err = gatewayprovider.MergeLegacy(file.ProvidersV2, toLegacyProviders(list))
 		return err
-	}
-	notify := p.onChange
-	onMask := p.onMaskChange
-	p.mu.Unlock()
-	if err := p.save(); err != nil {
-		return err
-	}
-	if notify != nil {
-		notify(list)
-	}
-	if onMask != nil {
-		onMask() // refresh /v1/models and Claude Code's model cache
-	}
-	return nil
+	}, true)
 }
 
-// save writes the whole mask file: hidden ids, deleted ids, plus custom endpoints.
+// save persists a defensive candidate, then publishes and notifies.
 func (p *modelPrefs) save() error {
-	p.mu.Lock()
-	routeErr := p.refreshRoutingLocked()
-	p.mu.Unlock()
-	if routeErr != nil {
-		return routeErr
-	}
-	p.mu.RLock()
-	path := p.path
-	hiddenIDs := make([]string, 0, len(p.hidden))
-	for id := range p.hidden {
-		hiddenIDs = append(hiddenIDs, id)
-	}
-	deletedIDs := make([]string, 0, len(p.deleted))
-	for id := range p.deleted {
-		deletedIDs = append(deletedIDs, id)
-	}
-
-	// Reconstruct groups from models.Models
-	groupMap := make(map[string][]ModelItem)
-	for id, m := range models.Models {
-		publisher, _, _ := strings.Cut(id, "/")
-		if publisher == "" {
-			publisher = "unknown"
-		}
-		groupMap[publisher] = append(groupMap[publisher], ModelItem{
-			Model:      id,
-			Slug:       m.Slug,
-			Namespace:  m.Namespace,
-			FunctionID: m.FunctionID,
-		})
-	}
-
-	var groups []ModelGroup
-	for pub, list := range groupMap {
-		sort.Slice(list, func(i, j int) bool {
-			return list[i].Model < list[j].Model
-		})
-		groups = append(groups, ModelGroup{
-			Publisher: pub,
-			Models:    list,
-		})
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		return groups[i].Publisher < groups[j].Publisher
-	})
-
-	file := prefsFile{
-		Meta: map[string]any{
-			"count":      len(models.Models),
-			"namespaces": []string{models.Namespace},
-		},
-		Groups:    groups,
-		MasksID:   hiddenIDs,
-		DeletedID: deletedIDs,
-		Providers: append([]customProvider(nil), p.providers...),
-		AutoModel: p.autoModel,
-		SearchURL: p.searchURL,
-		Cycle:     p.cycle,
-	}
-	p.mu.RUnlock()
-	if path == "" {
-		if notify := p.onMaskChange; notify != nil {
-			notify()
-		}
-		return nil
-	}
-	sort.Strings(file.MasksID)
-	sort.Strings(file.DeletedID)
-	out, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := atomicWriteFile(path, append(out, '\n'), 0o600); err != nil {
-		return err
-	}
-	if notify := p.onMaskChange; notify != nil {
-		notify()
-	}
-	return nil
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
+	return p.commitPrefs(func(*prefsFile) error { return nil }, false)
 }
 
-// compatProviders converts the saved endpoints into CLIProxyAPI provider
-// config. Endpoints sharing a name are merged into one provider entry so none
-// of their models shadow another.
-func compatProviders(list []customProvider) []config.OpenAICompatibility {
-	type merged struct {
-		baseURL string
-		apiKey  string
-		models  []*customProvider
-	}
-	order := make([]*merged, 0, len(list))
-	byName := make(map[string]*merged, len(list))
+// compatProviders generates CLIProxyAPI routes only for enabled openai-chat
+// providers. Messages and Responses endpoints remain local passthroughs.
+func compatProviders(list []gatewayprovider.Provider) []config.OpenAICompatibility {
+	var out []config.OpenAICompatibility
 	for i := range list {
 		p := &list[i]
-		m, ok := byName[p.Name]
-		if !ok {
-			m = &merged{baseURL: p.BaseURL, apiKey: p.APIKey}
-			byName[p.Name] = m
-			order = append(order, m)
+		if !p.Enabled || p.Protocol != ir.ProtocolOpenAIChat {
+			continue
 		}
-		m.models = append(m.models, p)
-	}
-
-	out := make([]config.OpenAICompatibility, 0, len(order))
-	for _, m := range order {
-		entry := config.OpenAICompatibility{
-			Name:    m.models[0].Name,
-			BaseURL: m.baseURL,
+		entry := config.OpenAICompatibility{Name: p.ID, BaseURL: p.BaseURL, Headers: gatewayprovider.Clone(p).Headers}
+		key := p.Auth.Key
+		if p.Auth.KeyEnv != "" {
+			key = os.Getenv(p.Auth.KeyEnv)
 		}
-		if m.apiKey != "" {
-			entry.APIKeyEntries = []config.OpenAICompatibilityAPIKey{{APIKey: m.apiKey}}
+		if key != "" {
+			switch p.Auth.Scheme {
+			case gatewayprovider.AuthBearer:
+				entry.APIKeyEntries = []config.OpenAICompatibilityAPIKey{{APIKey: key}}
+			case gatewayprovider.AuthAPIKey:
+				if entry.Headers == nil {
+					entry.Headers = map[string]string{}
+				}
+				entry.Headers["X-Api-Key"] = key
+			}
 		}
-		for _, p := range m.models {
-			entry.Models = append(entry.Models,
-				config.OpenAICompatibilityModel{
-					Name:        p.Model,
-					Alias:       p.alias(),
-					DisplayName: p.alias(),
-				},
-			)
+		for _, m := range p.Models {
+			if !m.Hidden {
+				entry.Models = append(entry.Models, config.OpenAICompatibilityModel{Name: m.UpstreamModel, Alias: m.Alias, DisplayName: m.Alias})
+			}
 		}
 		out = append(out, entry)
 	}

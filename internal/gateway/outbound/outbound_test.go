@@ -176,7 +176,7 @@ func TestCustomSelectedThroughProviderConfig(t *testing.T) {
 	registry := adapter.NewRegistry()
 	outbound.RegisterCustom(registry, "vendor", chatAdapter{})
 	var p provider.Provider
-	if err := json.Unmarshal([]byte(`{"ID":"vendor","Name":"vendor","BaseURL":"`+server.URL+`/prefix","Protocol":"custom:vendor","endpoint_path":{"openai-chat":"/api/chat"}}`), &p); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"vendor","name":"vendor","base_url":"`+server.URL+`/prefix","protocol":"custom:vendor","endpoint_path":{"openai-chat":"/api/chat"}}`), &p); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Validate(); err != nil {
