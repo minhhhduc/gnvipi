@@ -1,0 +1,88 @@
+{
+  "model": "client/reasoner",
+  "instructions": [
+    {
+      "role": "developer",
+      "content": [
+        {
+          "type": "text",
+          "text": "First developer"
+        }
+      ]
+    },
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Second system"
+        }
+      ]
+    },
+    {
+      "role": "developer",
+      "content": [
+        {
+          "type": "text",
+          "text": "Third developer"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Prior answer"
+        }
+      ]
+    }
+  ],
+  "sampling": {},
+  "reasoning": {
+    "effort": "high"
+  },
+  "metadata": {
+    "user_id": "end-user"
+  },
+  "extensions": {
+    "messages": [
+      {
+        "role": "developer",
+        "content": "First developer"
+      },
+      {
+        "role": "user",
+        "content": "Question"
+      },
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "Second system"
+          }
+        ]
+      },
+      {
+        "role": "developer",
+        "content": "Third developer"
+      },
+      {
+        "role": "assistant",
+        "content": "Prior answer"
+      }
+    ]
+  }
+}

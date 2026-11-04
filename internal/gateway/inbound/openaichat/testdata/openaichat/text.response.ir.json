@@ -1,0 +1,19 @@
+{
+  "id": "chat-response",
+  "model": "client/text",
+  "content": [
+    {
+      "type": "text",
+      "text": "Hello "
+    },
+    {
+      "type": "text",
+      "text": "world"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 7
+  }
+}

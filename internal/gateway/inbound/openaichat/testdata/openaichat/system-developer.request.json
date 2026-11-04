@@ -1,0 +1,32 @@
+{
+  "model": "client/reasoner",
+  "messages": [
+    {
+      "role": "developer",
+      "content": "First developer"
+    },
+    {
+      "role": "user",
+      "content": "Question"
+    },
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Second system"
+        }
+      ]
+    },
+    {
+      "role": "developer",
+      "content": "Third developer"
+    },
+    {
+      "role": "assistant",
+      "content": "Prior answer"
+    }
+  ],
+  "reasoning_effort": "high",
+  "user": "end-user"
+}

@@ -1,0 +1,98 @@
+{
+  "model": "client/tools",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": null,
+      "reasoning_content": "Need lookup",
+      "tool_calls": [
+        {
+          "id": "call_exact",
+          "type": "function",
+          "function": {
+            "name": "lookup",
+            "arguments": "{ \"key\": \"value\" }",
+            "vendor": 9
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_exact",
+      "content": "Found",
+      "name": "lookup"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup",
+        "description": "Find a value",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          }
+        },
+        "strict": false,
+        "vendor": {
+          "cache": "keep"
+        }
+      }
+    },
+    {
+      "type": "custom",
+      "custom": {
+        "name": "opaque",
+        "format": {
+          "type": "text"
+        }
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "lookup",
+      "vendor": "kept"
+    }
+  },
+  "parallel_tool_calls": false,
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "answer",
+      "strict": false,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "keep this"
+    }
+  },
+  "stream": true,
+  "stream_options": {
+    "include_usage": true,
+    "vendor_stream": 0
+  },
+  "temperature": null,
+  "user": "tool-user",
+  "reasoning_effort": "medium",
+  "metadata": {
+    "cache": {
+      "type": "ephemeral"
+    }
+  },
+  "unknown_extension": {
+    "zero": 0,
+    "flag": false
+  }
+}

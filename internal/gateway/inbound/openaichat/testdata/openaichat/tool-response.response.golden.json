@@ -1,0 +1,43 @@
+{
+  "id": "tool-response",
+  "object": "chat.completion",
+  "created": 1735689600,
+  "model": "client/tools",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_exact",
+            "type": "function",
+            "function": {
+              "name": "lookup",
+              "arguments": "{\"key\":\"value\"}"
+            }
+          },
+          {
+            "id": "call_string",
+            "type": "function",
+            "function": {
+              "name": "partial",
+              "arguments": "{partial"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 9,
+    "total_tokens": 23,
+    "prompt_tokens_details": {
+      "cached_tokens": 6,
+      "cache_creation_tokens": 3
+    }
+  }
+}
