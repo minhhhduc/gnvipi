@@ -89,6 +89,18 @@ type Recorder interface {
 	Record(*Completion)
 }
 
+type recorderContextKey struct{}
+
+// WithRecorder selects a request-local completion consumer. Re-entrant attempt
+// handlers can retain usage without publishing each attempt as a client request.
+// A scoped consumer takes precedence over a handler's default recorder.
+func WithRecorder(ctx context.Context, recorder Recorder) context.Context {
+	if recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, recorderContextKey{}, recorder)
+}
+
 // BeginRecording opts only normalized pipeline requests into the recorder.
 // Call it after resolving routing metadata and before upstream work starts.
 // Nil selects DefaultRecorder. Cancellation records even if dispatch never
@@ -100,12 +112,23 @@ func (r *RequestContext) BeginRecording(ctx context.Context, recorder Recorder) 
 	if r.recorder != nil || r.completed {
 		return false
 	}
+	if scoped, ok := ctx.Value(recorderContextKey{}).(Recorder); ok {
+		recorder = scoped
+	}
 	if recorder == nil {
 		recorder = DefaultRecorder{}
 	}
 	r.ctx, r.recorder = ctx, recorder
 	r.stop = context.AfterFunc(ctx, func() { r.Complete(ir.Usage{}, ctx.Err()) })
 	return true
+}
+
+// RecordingStarted reports whether normalized accounting was claimed, even
+// when a competing terminal callback is still publishing its completion.
+func (r *RequestContext) RecordingStarted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.recorder != nil
 }
 
 // MarkFirstByte captures the first observed upstream byte/token (or the

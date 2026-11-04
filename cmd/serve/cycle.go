@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
@@ -106,6 +108,14 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		rc := core.RequestContextFrom(c.Request.Context())
+		if rc == nil {
+			rc = core.NewRequestContext(c.Request.Header.Get(core.RequestIDHeader))
+			c.Request = c.Request.WithContext(core.WithRequestContext(c.Request.Context(), rc))
+		}
+		if rc.ClientModel == "" {
+			rc.ClientModel = cfg.Name
+		}
 		var last *cycleAttemptWriter
 		for offset := range cfg.Models {
 			if path == "/v1/messages/count_tokens" && offset > 0 {
@@ -116,16 +126,21 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 				continue
 			}
 			rewritten, _ := rewriteJSONModel(body, cfg.Name, id)
-			req := c.Request.Clone(c.Request.Context())
+			writer := &cycleAttemptWriter{dest: c.Writer, header: make(http.Header), recorded: make(chan struct{})}
+			attempt := core.NewRequestContext(rc.ID)
+			attempt.ClientModel = rc.ClientModel
+			writer.request = attempt
+			attemptContext := core.WithRequestContext(core.WithRecorder(c.Request.Context(), writer), attempt)
+			req := c.Request.Clone(attemptContext)
 			req.Body = io.NopCloser(bytes.NewReader(rewritten))
 			req.ContentLength = int64(len(rewritten))
-			writer := &cycleAttemptWriter{dest: c.Writer, header: make(http.Header)}
 			engine.ServeHTTP(writer, req)
 			if writer.status == 0 {
 				writer.status = http.StatusOK
 			}
 			if writer.committed || c.Request.Context().Err() != nil || path == "/v1/messages/count_tokens" || !retryableCycleStatus(writer.status) {
 				writer.commit()
+				writer.complete(rc, c.Request.Context())
 				c.Abort()
 				return
 			}
@@ -134,6 +149,7 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 		}
 		if last != nil {
 			last.commit()
+			last.complete(rc, c.Request.Context())
 		} else {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no available cycle models; configure cycle in the gateway"})
 		}
@@ -142,11 +158,37 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 }
 
 type cycleAttemptWriter struct {
-	dest      http.ResponseWriter
-	header    http.Header
-	status    int
-	buffer    bytes.Buffer
-	committed bool
+	dest       http.ResponseWriter
+	header     http.Header
+	status     int
+	buffer     bytes.Buffer
+	committed  bool
+	request    *core.RequestContext
+	completion *core.Completion
+	recorded   chan struct{}
+}
+
+func (w *cycleAttemptWriter) Record(completion *core.Completion) {
+	w.completion = completion
+	close(w.recorded)
+}
+
+// Only the committed attempt contributes normalized client-request accounting.
+// Legacy attempts never install a core recorder and leave completion nil.
+func (w *cycleAttemptWriter) complete(request *core.RequestContext, ctx context.Context) {
+	if w.request == nil || !w.request.RecordingStarted() {
+		return
+	}
+	<-w.recorded
+	completion := w.completion
+	finished := completion.Request
+	request.InboundProtocol, request.UpstreamProtocol = finished.InboundProtocol, finished.UpstreamProtocol
+	request.ResolvedProvider, request.UpstreamModel, request.Stream = finished.ResolvedProvider, finished.UpstreamModel, finished.Stream
+	if request.FirstByte.IsZero() {
+		request.FirstByte = finished.FirstByte
+	}
+	request.BeginRecording(ctx, nil)
+	request.Complete(completion.Usage, completion.Err)
 }
 
 func (w *cycleAttemptWriter) Header() http.Header { return w.header }

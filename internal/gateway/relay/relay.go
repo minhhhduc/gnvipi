@@ -146,6 +146,16 @@ func providerEndpoint(base, suffix string) string {
 // count_tokens). It consumes the request body; dispatch must select the relay
 // before calling it. Successful response bytes are not translated or redacted.
 func (h *Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.serveHTTP(w, r, nil, false)
+}
+
+// ServeBuffered relays a body already read by the dispatcher. The caller must
+// retain the bytes unchanged until return; no second body-sized copy is made.
+func (h *Relay) ServeBuffered(w http.ResponseWriter, r *http.Request, body []byte) {
+	h.serveHTTP(w, r, body, true)
+}
+
+func (h *Relay) serveHTTP(w http.ResponseWriter, r *http.Request, body []byte, buffered bool) {
 	rc := core.RequestContextFrom(r.Context())
 	if rc == nil {
 		rc = core.NewRequestContext(r.Header.Get(core.RequestIDHeader))
@@ -157,7 +167,6 @@ func (h *Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var model string
 	var streamed bool
 	var requestErr *gwerr.Error
-	var body []byte
 	switch {
 	case r.Method != http.MethodPost || r.URL.Path != h.path && !countTokens:
 		requestErr = &gwerr.Error{Kind: gwerr.KindNotFound, Message: "endpoint is not served by this relay"}
@@ -165,7 +174,7 @@ func (h *Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		requestErr = &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "same-protocol relay cannot translate this request"}
 	default:
 		var readErr error
-		if r.Body != nil {
+		if !buffered && r.Body != nil {
 			body, readErr = io.ReadAll(r.Body)
 		}
 		switch {

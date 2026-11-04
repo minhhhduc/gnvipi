@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -33,9 +35,14 @@ func mountChain(t *testing.T, p *modelPrefs, stub gin.HandlerFunc) *gin.Engine {
 	// path with no cleanup, same as serve_test.go.
 	t.Setenv("GNVIPI_STATS_FILE", filepath.Join(os.TempDir(), "gnvipi-characterization-stats.jsonl"))
 	engine := gin.New()
+	gateway, err := gatewayV2Middleware(p, characterizationV2Enabled(), characterizationProxyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	engine.Use(
 		anthropicResponsesPassthrough(p),
 		sanitizeClaudeToolResults(),
+		gateway,
 		customOpenAIResponsesPassthrough(p),
 		customOpenAICompatPassthrough(p),
 		messagesOnlyPassthrough(p),
@@ -85,12 +92,20 @@ func requestModel(c *gin.Context) string {
 func fakeUpstream(t *testing.T, body string) *upstreamLog {
 	t.Helper()
 	log := &upstreamLog{}
+	if characterizationV2Enabled() {
+		previousResolver := net.DefaultResolver
+		net.DefaultResolver = characterizationResolver(t)
+		t.Cleanup(func() { net.DefaultResolver = previousResolver })
+		previousProxy := characterizationProxyURL
+		characterizationProxyURL = characterizationProxy(t, log, body)
+		t.Cleanup(func() { characterizationProxyURL = previousProxy })
+	}
 	rt := testRoundTripper(func(r *http.Request) (*http.Response, error) {
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			b = nil
 		}
-		log.entries = append(log.entries, upstreamCall{URL: r.URL.String(), Header: r.Header, Body: string(b)})
+		log.record(upstreamCall{URL: r.URL.String(), Header: r.Header.Clone(), Body: string(b)})
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"application/json"}},
@@ -110,12 +125,27 @@ type upstreamCall struct {
 	Body   string
 }
 
-type upstreamLog struct{ entries []upstreamCall }
+type upstreamLog struct {
+	mu      sync.Mutex
+	entries []upstreamCall
+}
 
-func (l *upstreamLog) count() int { return len(l.entries) }
+func (l *upstreamLog) record(call upstreamCall) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, call)
+}
+
+func (l *upstreamLog) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.entries)
+}
 
 func (l *upstreamLog) last(t *testing.T) upstreamCall {
 	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if len(l.entries) == 0 {
 		t.Fatal("fakeUpstream: no upstream call recorded")
 	}
@@ -140,9 +170,9 @@ func jsonModel(t *testing.T, body string) string {
 // documented base-URL forms.
 func TestChatRoutePassthrough(t *testing.T) {
 	for _, tc := range []struct{ name, baseURL string }{
-		{"bare base", "https://up.invalid"},
-		{"v1 base", "https://up.invalid/v1"},
-		{"full endpoint", "https://up.invalid/v1/chat/completions"},
+		{"bare base", "http://up.invalid"},
+		{"v1 base", "http://up.invalid/v1"},
+		{"full endpoint", "http://up.invalid/v1/chat/completions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
@@ -165,7 +195,7 @@ func TestChatRoutePassthrough(t *testing.T) {
 				t.Fatalf("upstream calls=%d, want 1", log.count())
 			}
 			call := log.last(t)
-			if !strings.HasSuffix(call.URL, "/v1/chat/completions") || !strings.HasPrefix(call.URL, "https://up.invalid") {
+			if !strings.HasSuffix(call.URL, "/v1/chat/completions") || !strings.HasPrefix(call.URL, "http://up.invalid") {
 				t.Fatalf("target=%s", call.URL)
 			}
 			if got := jsonModel(t, call.Body); got != "gpt-5.6-terra" {
@@ -191,9 +221,9 @@ func TestChatRoutePassthrough(t *testing.T) {
 // at providerEndpoint's three accepted base-URL forms.
 func TestResponsesRoutePassthrough(t *testing.T) {
 	for _, tc := range []struct{ name, baseURL, wantTarget string }{
-		{"bare base", "https://zen.invalid", "https://zen.invalid/v1/responses"},
-		{"v1 base", "https://zen.invalid/v1", "https://zen.invalid/v1/responses"},
-		{"full endpoint", "https://zen.invalid/v1/responses", "https://zen.invalid/v1/responses"},
+		{"bare base", "http://zen.invalid", "http://zen.invalid/v1/responses"},
+		{"v1 base", "http://zen.invalid/v1", "http://zen.invalid/v1/responses"},
+		{"full endpoint", "http://zen.invalid/v1/responses", "http://zen.invalid/v1/responses"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
@@ -234,7 +264,7 @@ func TestResponsesRoutePassthrough(t *testing.T) {
 // the upstream's /v1/messages with Anthropic-style auth headers.
 func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{
-		Name: "justworker", Model: "gpt-5.6-terra", BaseURL: "https://up.invalid/v1", APIKey: "mw-key", MessagesOnly: true,
+		Name: "justworker", Model: "gpt-5.6-terra", BaseURL: "http://up.invalid/v1", APIKey: "mw-key", MessagesOnly: true,
 	}}}
 	log := fakeUpstream(t, `{"type":"message","content":[{"type":"text","text":"hi"}]}`)
 	engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
@@ -253,7 +283,7 @@ func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 		t.Fatalf("upstream calls=%d, want 1", log.count())
 	}
 	call := log.last(t)
-	if call.URL != "https://up.invalid/v1/messages" {
+	if call.URL != "http://up.invalid/v1/messages" {
 		t.Fatalf("target=%s", call.URL)
 	}
 	if got := jsonModel(t, call.Body); got != "gpt-5.6-terra" {
@@ -278,7 +308,7 @@ func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 // provider's model name, and the client receives an Anthropic-shaped reply.
 func TestMessagesRouteResponsesAdapter(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{
-		Name: "gateway", Model: "muse", BaseURL: "https://up.invalid/v1", APIKey: "secret", ResponsesOnly: true,
+		Name: "gateway", Model: "muse", BaseURL: "http://up.invalid/v1", APIKey: "secret", ResponsesOnly: true,
 	}}}
 	log := fakeUpstream(t, `{"id":"r","model":"muse","status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}`)
 	engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
@@ -293,7 +323,7 @@ func TestMessagesRouteResponsesAdapter(t *testing.T) {
 		t.Fatalf("upstream calls=%d, want 1", log.count())
 	}
 	call := log.last(t)
-	if call.URL != "https://up.invalid/v1/responses" {
+	if call.URL != "http://up.invalid/v1/responses" {
 		t.Fatalf("target=%s", call.URL)
 	}
 	var sent map[string]any
@@ -315,17 +345,19 @@ func TestHiddenModelsRejected(t *testing.T) {
 		route string
 		body  string
 		prov  customProvider
-		want  string
 	}{
 		{"chat", "/v1/chat/completions", `{"model":"vendor/m"}`,
-			customProvider{Name: "vendor", Model: "m"}, `"model is hidden"`},
+			customProvider{Name: "vendor", Model: "m"}},
 		{"messages passthrough", "/v1/messages", `{"model":"vendor/m","messages":[{"role":"user","content":"hi"}]}`,
-			customProvider{Name: "vendor", Model: "m", MessagesOnly: true}, `"model is hidden"`},
+			customProvider{Name: "vendor", Model: "m", MessagesOnly: true}},
 		{"messages adapter", "/v1/messages", `{"model":"vendor/m","messages":[{"role":"user","content":"hi"}]}`,
-			customProvider{Name: "vendor", Model: "m", ResponsesOnly: true}, `"not_found_error"`},
+			customProvider{Name: "vendor", Model: "m", ResponsesOnly: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.prov.BaseURL == "" {
+				tc.prov.BaseURL = "http://up.invalid/v1"
+			}
 			p := &modelPrefs{
 				hidden:    map[string]struct{}{"vendor/m": {}},
 				providers: []customProvider{tc.prov},
@@ -335,11 +367,15 @@ func TestHiddenModelsRejected(t *testing.T) {
 			w := httptest.NewRecorder()
 			engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.route, strings.NewReader(tc.body)))
 
-			if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), tc.want) {
-				t.Fatalf("response=%d %s, want 404 containing %s", w.Code, w.Body.String(), tc.want)
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusNotFound || len(envelope["error"]) == 0 {
+				t.Fatalf("hidden-model response = %d %s", w.Code, w.Body.String())
 			}
 			if log.count() != 0 {
-				t.Fatalf("hidden model reached upstream: %v", log.entries)
+				t.Fatalf("hidden model reached upstream: calls=%d", log.count())
 			}
 		})
 	}
@@ -347,7 +383,7 @@ func TestHiddenModelsRejected(t *testing.T) {
 
 // Models no custom provider owns fall through to CLIProxyAPI's own handlers.
 func TestUnknownModelsFallThrough(t *testing.T) {
-	p := &modelPrefs{providers: []customProvider{{Name: "vendor", Model: "m", ResponsesOnly: true}}}
+	p := &modelPrefs{providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "http://up.invalid/v1", ResponsesOnly: true}}}
 	log := fakeUpstream(t, `{}`)
 	engine := mountChain(t, p, echoStub(`{}`))
 	for _, tc := range []struct{ route, body string }{
@@ -366,18 +402,16 @@ func TestUnknownModelsFallThrough(t *testing.T) {
 		})
 	}
 	if log.count() != 0 {
-		t.Fatalf("unknown model reached upstream: %v", log.entries)
+		t.Fatalf("unknown model reached upstream: calls=%d", log.count())
 	}
 }
 
-// Today customOpenAIResponsesPassthrough checks ownership, not visibility: a
-// hidden responses_only model on /v1/responses is served by the downstream
-// handler rather than rejected. Pinned because it is observable behavior the
-// dispatcher must reproduce, not because it is desirable.
-func TestResponsesRouteHiddenModelFallsThrough(t *testing.T) {
+// Flag-off retains the legacy Responses fallthrough. The gateway resolver
+// rejects hidden models when flag-on, before either upstream or downstream.
+func TestResponsesHiddenModelRouting(t *testing.T) {
 	p := &modelPrefs{
 		hidden:    map[string]struct{}{"vendor/m": {}},
-		providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "https://up.invalid/v1", ResponsesOnly: true}},
+		providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "http://up.invalid/v1", ResponsesOnly: true}},
 	}
 	log := fakeUpstream(t, `{}`)
 	engine := mountChain(t, p, echoStub(`{}`))
@@ -385,11 +419,21 @@ func TestResponsesRouteHiddenModelFallsThrough(t *testing.T) {
 	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses",
 		strings.NewReader(`{"model":"vendor/m","input":"ping"}`)))
 
-	if w.Code != http.StatusOK || w.Body.String() != `{"model":"vendor/m","input":"ping"}` {
-		t.Fatalf("response=%d %s, want the stub's round-trip", w.Code, w.Body.String())
+	if characterizationV2Enabled() {
+		var envelope struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != http.StatusNotFound || len(envelope.Error) == 0 || envelope.Error[0] != '{' {
+			t.Fatalf("hidden Responses model was not rejected: %d %s", w.Code, w.Body.String())
+		}
+	} else if w.Code != http.StatusOK || w.Body.String() != `{"model":"vendor/m","input":"ping"}` {
+		t.Fatalf("response=%d %s, want the legacy stub's round-trip", w.Code, w.Body.String())
 	}
 	if log.count() != 0 {
-		t.Fatalf("hidden responses_only model reached upstream: %v", log.entries)
+		t.Fatalf("hidden responses_only model reached upstream: calls=%d", log.count())
 	}
 }
 
@@ -401,8 +445,8 @@ func TestAgentRouterClientSpoofed(t *testing.T) {
 		baseURL string
 		wantUA  string
 	}{
-		{"agentrouter.org", "https://agentrouter.org/v1", "opencode/1.18.25"},
-		{"other host", "https://up.invalid/v1", "test-client/1"},
+		{"agentrouter.org", "http://agentrouter.org/v1", "opencode/1.18.25"},
+		{"other host", "http://up.invalid/v1", "test-client/1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
@@ -435,7 +479,7 @@ func TestAutomodeRewritten(t *testing.T) {
 	t.Run("alias replaced", func(t *testing.T) {
 		p := &modelPrefs{
 			autoModel: "vendor/m",
-			providers: []customProvider{{Name: "vendor", Model: "m"}},
+			providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "http://up.invalid/v1"}},
 		}
 		engine := mountChain(t, p, echoStub(`{}`))
 		w := httptest.NewRecorder()
@@ -453,7 +497,7 @@ func TestAutomodeRewritten(t *testing.T) {
 		p := &modelPrefs{
 			autoModel: "vendor/m",
 			hidden:    map[string]struct{}{"vendor/m": {}},
-			providers: []customProvider{{Name: "vendor", Model: "m"}},
+			providers: []customProvider{{Name: "vendor", Model: "m", BaseURL: "http://up.invalid/v1"}},
 		}
 		engine := mountChain(t, p, echoStub(`{}`))
 		w := httptest.NewRecorder()
