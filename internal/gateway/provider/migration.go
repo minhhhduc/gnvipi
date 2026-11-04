@@ -78,7 +78,7 @@ func legacyRepresentable(protocol ir.Protocol) bool {
 func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) {
 	list = slices.Clone(list)
 	for i := range list {
-		list[i].Alias = legacyAlias(&list[i])
+		list[i].Alias = LegacyAlias(&list[i])
 	}
 	if slices.Equal(LegacyView(current), list) {
 		out := make([]Provider, len(current))

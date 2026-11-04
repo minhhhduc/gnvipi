@@ -21,6 +21,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/captcha"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
@@ -64,6 +65,7 @@ type modelPrefs struct {
 	cycleIndex    int
 	onChange      func([]customProvider) // rewrites config.yaml so cliproxy reloads
 	onMaskChange  func()                 // triggers re-registration of models in cliproxy
+	resolver      *routing.LegacyResolver
 }
 
 type prefsFile struct {
@@ -146,6 +148,10 @@ func (p *modelPrefs) load(path string) error {
 	}
 	p.providerStore = store
 	p.applyPrefsLocked(&file)
+	if err := p.refreshRoutingLocked(); err != nil {
+		p.loadErr = err
+		return err
+	}
 	log.Printf("models file %s: %d model(s) off, %d deleted, %d custom endpoint(s)", path, len(p.hidden), len(p.deleted), len(p.providers))
 	// Merge catalog entries from the local file into the embedded registry.
 	// This preserves newly embedded models while still honoring a refreshed

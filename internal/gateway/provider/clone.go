@@ -1,36 +1,18 @@
 package provider
 
-import "reflect"
+import (
+	"maps"
+	"slices"
+)
 
-// Clone defensively copies every provider collection. Configuration collection
-// elements are immutable values (strings, model mappings, protocol paths and
-// raw JSON bytes); copying their containers isolates all current schema fields.
-// Reflecting at this configuration boundary also keeps independently added
-// collections isolated without serializing credentials on cache publication.
+// Clone returns an owned snapshot of every provider collection. Scalar fields,
+// including credential strings, proxy URLs and model positions, copy by value.
 func Clone(p *Provider) Provider {
 	out := *p
-	value := reflect.ValueOf(&out).Elem()
-	for i := range value.NumField() {
-		field := value.Field(i)
-		switch field.Kind() {
-		case reflect.Map:
-			if field.IsNil() {
-				continue
-			}
-			copied := reflect.MakeMapWithSize(field.Type(), field.Len())
-			iterator := field.MapRange()
-			for iterator.Next() {
-				copied.SetMapIndex(iterator.Key(), iterator.Value())
-			}
-			field.Set(copied)
-		case reflect.Slice:
-			if field.IsNil() {
-				continue
-			}
-			copied := reflect.MakeSlice(field.Type(), field.Len(), field.Len())
-			reflect.Copy(copied, field)
-			field.Set(copied)
-		}
-	}
+	out.Headers = maps.Clone(p.Headers)
+	out.Models = slices.Clone(p.Models)
+	out.ForwardHeaders = slices.Clone(p.ForwardHeaders)
+	out.EndpointPaths = maps.Clone(p.EndpointPaths)
+	out.ExtraBody = slices.Clone(p.ExtraBody)
 	return out
 }

@@ -46,7 +46,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 
 	for i := range list {
 		e := &list[i]
-		protocol, ok := legacyProtocol(e)
+		protocol, ok := LegacyProtocol(e)
 		if !ok {
 			errs = append(errs, &FieldError{
 				Provider: "legacy[" + strconv.Itoa(i) + "]",
@@ -55,7 +55,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			})
 			continue
 		}
-		mapping := ModelMapping{Alias: legacyAlias(e), UpstreamModel: e.Model, LegacyPosition: i + 1}
+		mapping := ModelMapping{Alias: LegacyAlias(e), UpstreamModel: e.Model, LegacyPosition: i + 1}
 		key := identity{e.Name, e.BaseURL, e.APIKey, protocol}
 		at := -1
 		for _, candidate := range merged[key] {
@@ -90,6 +90,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	}
 
 	for i := range out {
+		ApplyLegacyHeaderDefaults(&out[i])
 		var invalid *ValidationError
 		if err := out[i].Validate(); errors.As(err, &invalid) {
 			errs = append(errs, invalid.Errors...)
@@ -110,7 +111,8 @@ func nextLegacyID(name string, usedIDs, reservedNames map[string]bool) string {
 	return id
 }
 
-func legacyProtocol(e *LegacyProvider) (ir.Protocol, bool) {
+// LegacyProtocol returns the old flag-selected wire protocol; both flags set is invalid.
+func LegacyProtocol(e *LegacyProvider) (ir.Protocol, bool) {
 	switch {
 	case e.MessagesOnly && e.ResponsesOnly:
 		return "", false
@@ -132,9 +134,9 @@ func legacyAuth(apiKey string) Auth {
 	return Auth{Scheme: AuthBearer, Key: apiKey}
 }
 
-// legacyAlias reproduces customProvider.alias(): an explicit alias wins, then a
+// LegacyAlias reproduces customProvider.alias(): an explicit alias wins, then a
 // model already namespaced by the provider name, otherwise name/model.
-func legacyAlias(e *LegacyProvider) string {
+func LegacyAlias(e *LegacyProvider) string {
 	if e.Alias != "" {
 		return e.Alias
 	}
