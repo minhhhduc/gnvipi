@@ -1,0 +1,6 @@
+[
+  {"type":"message_start","message":{"id":"msg_err","role":"assistant","model":"claude-3"},"usage":{"input_tokens":5}},
+  {"type":"block_start","index":0,"block":{"type":"text","index":0}},
+  {"type":"block_delta","index":0,"delta":{"type":"text_delta","text":"Partial answer"}},
+  {"type":"error","error":{"kind":"overloaded","message":"Provider busy"}}
+]
