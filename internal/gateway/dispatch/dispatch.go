@@ -189,7 +189,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		handler.ServeBuffered(c.Writer, c.Request, body)
 		return
 	}
-	if c.Request.URL.Path == "/v1/messages/count_tokens" || requestedStream(payload.Stream) || d.Registry == nil {
+	if c.Request.URL.Path == "/v1/messages/count_tokens" || d.Registry == nil {
 		restoreAndContinue(c, body)
 		return
 	}
@@ -199,9 +199,18 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		restoreAndContinue(c, body)
 		return
 	}
+	isStream := requestedStream(payload.Stream)
+	if isStream && !base.Capabilities().Streaming {
+		restoreAndContinue(c, body)
+		return
+	}
 	handler, err := d.translator(payload.Model, route, base)
 	if err != nil {
-		d.failTranslation(c, protocol, route, rc, err)
+		d.failTranslation(c, protocol, route, rc, isStream, err)
+		return
+	}
+	if isStream {
+		handler.ServeStream(c, body, inbound, rc)
 		return
 	}
 	handler.Serve(c, body, inbound, rc)
