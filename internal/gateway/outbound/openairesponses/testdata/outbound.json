@@ -75,13 +75,53 @@
   ],
   "streams": [
     {
-      "name": "unsupported",
+      "name": "text",
       "response": {
         "status": 200,
         "headers": {"Content-Type": ["text/event-stream"]},
-        "body": "completed.response.json"
+        "body": "stream.text.sse"
       },
-      "error": "unsupported-stream.error.json"
+      "ir": "stream.text.ir.json"
+    },
+    {
+      "name": "reasoning",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.reasoning.sse"
+      },
+      "ir": "stream.reasoning.ir.json"
+    },
+    {
+      "name": "tool",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.tool.sse"
+      },
+      "ir": "stream.tool.ir.json"
+    },
+    {
+      "name": "failed",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.failed.sse"
+      },
+      "ir": "stream.failed.ir.json"
+    },
+    {
+      "name": "upstream-rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "Retry-After": ["30"],
+          "X-Request-Id": ["req_responses_123"]
+        },
+        "body": "upstream-error.response.json"
+      },
+      "error": "upstream-error.golden.json"
     }
   ]
 }
