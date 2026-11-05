@@ -1,5 +1,5 @@
-// Package dispatch selects same-protocol custom-provider relays. NVIDIA and
-// cross-protocol requests retain their original bodies for the legacy chain.
+// Package dispatch selects same-protocol relays and registered non-streaming
+// translations. NVIDIA, streaming and unregistered traffic retain legacy flow.
 package dispatch
 
 import (
@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -28,21 +29,28 @@ type cachedRelay struct {
 	handler  *relay.Relay
 }
 
-// Dispatcher reuses relays for configured aliases, not arbitrary request models.
-// Call Reset after a provider catalog update to retire removed aliases/clients.
-// Resolver snapshots and options must remain immutable while being consumed.
+// Dispatcher reuses relays and translations for configured aliases, not
+// arbitrary request models. Set Registry before serving; nil or missing
+// adapters preserve the legacy fallthrough path. Call Reset after a provider
+// catalog update to retire removed aliases and cached clients.
+// Resolver snapshots, Registry and options must remain immutable while used.
 type Dispatcher struct {
-	resolver routing.Resolver
-	options  relay.Options
-	mu       sync.Mutex
-	handlers map[string]cachedRelay
+	// Registry is optional so construction remains compatible with the legacy
+	// dispatcher. Assign it before serving requests; do not replace it live.
+	Registry *adapter.Registry
+
+	resolver     routing.Resolver
+	options      relay.Options
+	mu           sync.Mutex
+	handlers     map[string]cachedRelay
+	translations map[string]cachedTranslation
 }
 
 func New(resolver routing.Resolver, options *relay.Options) *Dispatcher {
 	if resolver == nil {
 		panic("dispatch: resolver is required")
 	}
-	d := &Dispatcher{resolver: resolver, handlers: make(map[string]cachedRelay)}
+	d := &Dispatcher{resolver: resolver, handlers: make(map[string]cachedRelay), translations: make(map[string]cachedTranslation)}
 	if options != nil {
 		d.options = *options
 	}
@@ -59,7 +67,11 @@ func (d *Dispatcher) Reset() {
 	for _, entry := range d.handlers {
 		d.options.Factory.Invalidate(entry.provider.ID)
 	}
+	for _, entry := range d.translations {
+		d.options.Factory.Invalidate(entry.provider.ID)
+	}
 	clear(d.handlers)
+	clear(d.translations)
 }
 
 func routeProtocol(path string) ir.Protocol {
@@ -73,6 +85,16 @@ func routeProtocol(path string) ir.Protocol {
 	default:
 		return ""
 	}
+}
+
+func restoreAndContinue(c *gin.Context, body []byte) {
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Next()
+}
+
+func requestedStream(raw json.RawMessage) bool {
+	var stream bool
+	return len(raw) != 0 && json.Unmarshal(raw, &stream) == nil && stream
 }
 
 func (d *Dispatcher) handler(model string, route routing.Route) (*relay.Relay, error) {
@@ -134,11 +156,11 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		return
 	}
 	var payload struct {
-		Model string `json:"model"`
+		Model  string          `json:"model"`
+		Stream json.RawMessage `json:"stream"`
 	}
 	if json.Unmarshal(body, &payload) != nil || strings.TrimSpace(payload.Model) == "" {
-		c.Request.Body = io.NopCloser(bytes.NewReader(body))
-		c.Next()
+		restoreAndContinue(c, body)
 		return
 	}
 	if rc.ClientModel == "" {
@@ -149,20 +171,38 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, err)
 		return
 	}
-	if route.Kind == routing.Fallthrough || route.Kind == routing.Custom && route.UpstreamProtocol != protocol {
-		c.Request.Body = io.NopCloser(bytes.NewReader(body))
-		c.Next()
+	if route.Kind == routing.Fallthrough {
+		restoreAndContinue(c, body)
 		return
 	}
-	if route.Kind != routing.Custom || route.Provider == nil {
+	if route.Kind != routing.Custom || route.Provider == nil || route.UpstreamProtocol != route.Provider.Protocol {
 		writeDispatchError(c, protocol, &gwerr.Error{Kind: gwerr.KindInternal, Message: "resolver returned an invalid route"})
 		return
 	}
-	handler, err := d.handler(payload.Model, route)
-	if err != nil {
-		writeDispatchError(c, protocol, err)
+	if route.UpstreamProtocol == protocol {
+		handler, err := d.handler(payload.Model, route)
+		if err != nil {
+			writeDispatchError(c, protocol, err)
+			return
+		}
+		c.Abort()
+		handler.ServeBuffered(c.Writer, c.Request, body)
 		return
 	}
-	c.Abort()
-	handler.ServeBuffered(c.Writer, c.Request, body)
+	if c.Request.URL.Path == "/v1/messages/count_tokens" || requestedStream(payload.Stream) || d.Registry == nil {
+		restoreAndContinue(c, body)
+		return
+	}
+	inbound, inboundOK := d.Registry.Inbound(protocol)
+	base, outboundOK := d.Registry.Outbound(route.Provider.Protocol)
+	if !inboundOK || !outboundOK {
+		restoreAndContinue(c, body)
+		return
+	}
+	handler, err := d.translator(payload.Model, route, base)
+	if err != nil {
+		d.failTranslation(c, protocol, route, rc, err)
+		return
+	}
+	handler.Serve(c, body, inbound, rc)
 }

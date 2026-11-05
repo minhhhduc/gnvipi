@@ -2,7 +2,11 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/dispatch"
+	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
+	inboundchat "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openaichat"
+	inboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 )
 
@@ -16,7 +20,12 @@ func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string) (gin.
 	if err != nil {
 		return nil, err
 	}
+	registry := adapter.NewRegistry()
+	registry.RegisterInbound(inboundanthropic.New())
+	registry.RegisterInbound(inboundchat.New())
+	registry.RegisterInbound(inboundresponses.New())
 	dispatcher := dispatch.New(resolver, &relay.Options{ProxyURL: proxyURL})
+	dispatcher.Registry = registry
 	previousReload := prefs.onChange
 	prefs.onChange = func(list []customProvider) {
 		dispatcher.Reset()
