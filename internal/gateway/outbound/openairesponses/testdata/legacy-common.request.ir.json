@@ -1,0 +1,60 @@
+{
+  "model": "client-alias",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Compare"},
+        {"type": "image", "image": {"base64": "aGVsbG8=", "media_type": "image/png"}},
+        {"type": "image", "image": {"url": "https://images.invalid/a.png"}}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [{"type": "text", "text": "I can compare."}]
+    },
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "Continue"}]
+    }
+  ],
+  "sampling": {
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "stop": ["STOP"],
+    "max_output_tokens": 42
+  },
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "answer",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "n": {"type": "integer", "minimum": 9007199254740993}
+        }
+      }
+    }
+  },
+  "reasoning": {"effort": "high"},
+  "metadata": {"user_id": "customer"},
+  "extensions": {
+    "model": "stale-model",
+    "input": [{"role": "user", "content": "stale input"}],
+    "instructions": "stale instructions",
+    "stream": true,
+    "store": true,
+    "previous_response_id": "resp_stale",
+    "conversation": {"id": "conv_stale"},
+    "background": true,
+    "max_output_tokens": 999,
+    "temperature": 1,
+    "top_p": 1,
+    "reasoning": {"effort": "low"},
+    "text": {"format": {"type": "text"}},
+    "user": "stale-user",
+    "service_tier": "flex",
+    "vendor_limit": 9007199254740993
+  }
+}

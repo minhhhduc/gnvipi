@@ -1,0 +1,87 @@
+{
+  "requests": [
+    {
+      "name": "legacy-common",
+      "ir": "legacy-common.request.ir.json",
+      "target": {
+        "BaseURL": "https://provider.invalid/v1",
+        "Model": "resolved-model",
+        "Headers": {
+          "Authorization": ["Bearer provider-credential"],
+          "X-Trace": ["first", "second"]
+        }
+      },
+      "golden": "legacy-common.request.golden.json"
+    },
+    {
+      "name": "instructions",
+      "ir": "instructions.request.ir.json",
+      "target": {
+        "BaseURL": "https://provider.invalid/v1",
+        "Model": "resolved-model",
+        "Headers": {
+          "Authorization": ["Bearer provider-credential"],
+          "X-Trace": ["first", "second"]
+        }
+      },
+      "golden": "instructions.request.golden.json"
+    },
+    {
+      "name": "mixed-instructions",
+      "ir": "mixed-instructions.request.ir.json",
+      "target": {
+        "BaseURL": "https://provider.invalid/v1",
+        "Model": "resolved-model",
+        "Headers": {
+          "Authorization": ["Bearer provider-credential"],
+          "X-Trace": ["first", "second"]
+        }
+      },
+      "golden": "mixed-instructions.request.golden.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "completed",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "completed.response.json"
+      },
+      "ir": "completed.response.ir.json"
+    },
+    {
+      "name": "incomplete",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "incomplete.response.json"
+      },
+      "ir": "incomplete.response.ir.json"
+    },
+    {
+      "name": "rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "Retry-After": ["30"],
+          "X-Request-Id": ["req_responses_123"]
+        },
+        "body": "upstream-error.response.json"
+      },
+      "error": "upstream-error.golden.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "unsupported",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "completed.response.json"
+      },
+      "error": "unsupported-stream.error.json"
+    }
+  ]
+}

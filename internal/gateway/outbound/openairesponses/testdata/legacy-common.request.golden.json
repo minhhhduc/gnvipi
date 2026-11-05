@@ -1,0 +1,53 @@
+{
+  "method": "POST",
+  "url": "https://provider.invalid/v1/responses",
+  "headers": {
+    "Authorization": ["Bearer provider-credential"],
+    "Content-Type": ["application/json"],
+    "X-Trace": ["first", "second"]
+  },
+  "body": {
+    "model": "resolved-model",
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "input_text", "text": "Compare"},
+          {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+          {"type": "input_image", "image_url": "https://images.invalid/a.png"}
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "I can compare."}]
+      },
+      {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Continue"}]
+      }
+    ],
+    "max_output_tokens": 42,
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "stop": ["STOP"],
+    "reasoning": {"effort": "high"},
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "answer",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "n": {"type": "integer", "minimum": 9007199254740993}
+          }
+        }
+      }
+    },
+    "user": "customer",
+    "service_tier": "flex",
+    "vendor_limit": 9007199254740993,
+    "stream": false,
+    "store": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "resp_incomplete",
+  "object": "response",
+  "created_at": 1710000001,
+  "status": "incomplete",
+  "incomplete_details": {"reason": "max_output_tokens"},
+  "model": "upstream-model",
+  "output": [
+    {
+      "id": "msg_2",
+      "type": "message",
+      "status": "incomplete",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "Partial"}
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 2,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens": 3,
+    "output_tokens_details": {"reasoning_tokens": 1},
+    "total_tokens": 5
+  }
+}

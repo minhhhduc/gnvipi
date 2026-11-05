@@ -1,0 +1,20 @@
+{
+  "model": "client-alias",
+  "instructions": [
+    {
+      "role": "system",
+      "content": [{"type": "text", "text": "Safety first."}]
+    },
+    {
+      "role": "developer",
+      "content": [{"type": "text", "text": "Be terse."}]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "Hello"}]
+    }
+  ],
+  "sampling": {}
+}

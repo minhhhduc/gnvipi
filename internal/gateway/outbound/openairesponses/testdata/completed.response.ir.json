@@ -1,0 +1,31 @@
+{
+  "id": "resp_complete",
+  "model": "upstream-model",
+  "content": [
+    {
+      "type": "reasoning",
+      "reasoning": {
+        "content": "Think carefully",
+        "signature": "cipher"
+      }
+    },
+    {"type": "text", "text": "Hello"},
+    {"type": "text", "text": " world"},
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call_a",
+        "name": "lookup",
+        "input": {"n": 9007199254740993}
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 3,
+    "output_tokens": 6,
+    "cache_read_tokens": 1,
+    "cache_write_tokens": 2,
+    "reasoning_tokens": 2
+  }
+}
