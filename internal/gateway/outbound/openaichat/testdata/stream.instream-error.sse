@@ -1,0 +1,5 @@
+data: {"id":"chat-error","object":"chat.completion.chunk","created":1700000000,"model":"chat-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"id":"chat-error","object":"chat.completion.chunk","created":1700000000,"model":"chat-model","choices":[{"index":0,"delta":{"content":"Partial "},"finish_reason":null}]}
+
+data: {"error":{"message":"Rate limit exceeded","type":"rate_limit_exceeded","code":"rate_limit"}}

@@ -1,0 +1,6 @@
+[
+  {"type":"message_start","message":{"id":"chat-error","role":"assistant","model":"chat-model"}},
+  {"type":"block_start","index":0,"block":{"type":"text","index":0}},
+  {"type":"block_delta","index":0,"delta":{"type":"text_delta","text":"Partial "}},
+  {"type":"error","error":{"kind":"rate_limit","message":"Rate limit exceeded"}}
+]

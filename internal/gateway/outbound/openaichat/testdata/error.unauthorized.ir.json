@@ -1,0 +1,6 @@
+{
+  "kind": "authentication",
+  "message": "Incorrect API key provided",
+  "code": "invalid_api_key",
+  "upstream_status": 401
+}
