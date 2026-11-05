@@ -1,0 +1,14 @@
+{
+  "id": "chatcmpl_openai_fixture",
+  "model": "gpt-5.2-2026-10-01",
+  "content": [
+    {"type": "text", "text": "A concise answer."}
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 37,
+    "output_tokens": 12,
+    "cache_read_tokens": 16,
+    "reasoning_tokens": 4
+  }
+}

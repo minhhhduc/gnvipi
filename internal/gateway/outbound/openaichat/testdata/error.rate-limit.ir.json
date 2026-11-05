@@ -1,0 +1,8 @@
+{
+  "kind": "rate_limit",
+  "message": "You exceeded your current quota.",
+  "code": "insufficient_quota",
+  "upstream_status": 429,
+  "upstream_request_id": "req_rate_fixture",
+  "retry_after_ms": 7000
+}

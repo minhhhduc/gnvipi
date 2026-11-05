@@ -1,0 +1,23 @@
+{
+  "id": "gen-openrouter-fixture",
+  "model": "deepseek/deepseek-r1",
+  "content": [
+    {"type": "reasoning", "reasoning": {"content": "A lookup is required."}},
+    {"type": "text", "text": "I will look that up."},
+    {
+      "type": "tool_use",
+      "tool_use": {
+        "id": "call_fixture_1",
+        "name": "lookup",
+        "input": {"key": "value", "serial": 900719925474099312345678901}
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 101,
+    "output_tokens": 23,
+    "cache_read_tokens": 80,
+    "reasoning_tokens": 17
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/prefix/v1/chat/completions",
+  "headers": {
+    "Authorization": ["Bearer fixture-only"],
+    "Content-Type": ["application/json"],
+    "X-Fixture": ["one", "two"]
+  },
+  "body": {
+    "model": "resolved/chat-model",
+    "messages": [
+      {"role": "system", "content": "Follow policy"},
+      {"role": "system", "content": "Prefer concise answers"},
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Compare these images"},
+          {"type": "image_url", "image_url": {"url": "https://images.invalid/one.png"}},
+          {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+        ]
+      },
+      {"role": "assistant", "content": "They differ.", "reasoning_content": "I compared both inputs"}
+    ],
+    "temperature": 0,
+    "top_p": 0.95,
+    "top_k": 40,
+    "stop": ["DONE", "END"],
+    "max_tokens": 256,
+    "seed": 9007199254740993,
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "answer",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {"answer": {"type": "string"}},
+          "required": ["answer"]
+        }
+      }
+    },
+    "reasoning_effort": "high",
+    "reasoning": {"enabled": true, "max_tokens": 512},
+    "user": "fixture-user",
+    "vendor_integer": 900719925474099312345678901,
+    "vendor_options": {
+      "route": ["provider-a", "provider-b"],
+      "threshold": 0.000000000000000000123456789
+    }
+  }
+}

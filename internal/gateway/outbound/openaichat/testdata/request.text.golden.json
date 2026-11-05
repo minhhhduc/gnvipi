@@ -1,0 +1,13 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/v1/chat/completions",
+  "headers": {
+    "Content-Type": ["application/json"],
+    "X-Fixture": ["full-endpoint"]
+  },
+  "body": {
+    "model": "resolved/text-model",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": false
+  }
+}
