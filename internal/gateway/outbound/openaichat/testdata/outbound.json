@@ -1,0 +1,85 @@
+{
+  "requests": [
+    {
+      "name": "normalized-multimodal",
+      "ir": "request.multimodal.ir.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/prefix",
+        "Model": "resolved/chat-model",
+        "Headers": {
+          "Authorization": ["Bearer fixture-only"],
+          "X-Fixture": ["one", "two"]
+        }
+      },
+      "golden": "request.multimodal.golden.json"
+    },
+    {
+      "name": "full-endpoint",
+      "ir": "request.text.ir.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/v1/chat/completions",
+        "Model": "resolved/text-model",
+        "Headers": {
+          "X-Fixture": ["full-endpoint"]
+        }
+      },
+      "golden": "request.text.golden.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "openai-text",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "response.openai.json"
+      },
+      "ir": "response.openai.ir.json"
+    },
+    {
+      "name": "openrouter-reasoning-tool",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "response.openrouter.json"
+      },
+      "ir": "response.openrouter.ir.json"
+    },
+    {
+      "name": "rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "Retry-After": ["7"],
+          "X-Request-Id": ["req_rate_fixture"]
+        },
+        "body": "error.rate-limit.json"
+      },
+      "error": "error.rate-limit.ir.json"
+    },
+    {
+      "name": "openrouter-overloaded",
+      "response": {
+        "status": 503,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "X-Request-Id": ["req_overloaded_fixture"]
+        },
+        "body": "error.openrouter.json"
+      },
+      "error": "error.openrouter.ir.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "unsupported",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.sse"
+      },
+      "error": "error.unsupported-stream.ir.json"
+    }
+  ]
+}

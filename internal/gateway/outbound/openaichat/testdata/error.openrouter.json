@@ -1,0 +1,10 @@
+{
+  "error": {
+    "message": "Provider is temporarily unavailable.",
+    "code": 503,
+    "metadata": {
+      "provider_name": "FixtureProvider",
+      "raw": "upstream overloaded"
+    }
+  }
+}

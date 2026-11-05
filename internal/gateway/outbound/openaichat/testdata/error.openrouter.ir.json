@@ -1,0 +1,7 @@
+{
+  "kind": "overloaded",
+  "message": "Provider is temporarily unavailable.",
+  "code": "503",
+  "upstream_status": 503,
+  "upstream_request_id": "req_overloaded_fixture"
+}

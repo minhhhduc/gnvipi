@@ -1,0 +1,36 @@
+{
+  "id": "chatcmpl_openai_fixture",
+  "object": "chat.completion",
+  "created": 1793851200,
+  "model": "gpt-5.2-2026-10-01",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "A concise answer.",
+        "refusal": null,
+        "annotations": []
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 37,
+    "completion_tokens": 12,
+    "total_tokens": 49,
+    "prompt_tokens_details": {
+      "cached_tokens": 16,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 4,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "service_tier": "default",
+  "system_fingerprint": "fp_fixture"
+}
