@@ -193,11 +193,11 @@ func RunInboundContract(t *testing.T, a adapter.Inbound, fixturesDir string) {
 // fixturesDir, including normalized error mapping and stream ownership.
 func RunOutboundContract(t *testing.T, a adapter.Outbound, fixturesDir string) {
 	t.Helper()
-	f, err := loadOutbound(fixturesDir)
-	must(t, err)
 	if a == nil {
 		t.Fatal("nil outbound adapter")
 	}
+	f, err := loadOutbound(fixturesDir, a.Capabilities().Streaming)
+	must(t, err)
 	for _, c := range f.Requests {
 		t.Run("request/"+c.Name, func(t *testing.T) {
 			var input ir.Request
@@ -335,13 +335,16 @@ func loadInbound(dir string) (inboundFixtures, error) {
 	}
 	return f, nil
 }
-func loadOutbound(dir string) (outboundFixtures, error) {
+func loadOutbound(dir string, streaming bool) (outboundFixtures, error) {
 	var f outboundFixtures
 	if err := readStrict(resolve(dir, "outbound.json"), &f); err != nil {
 		return f, err
 	}
-	if len(f.Requests) == 0 || len(f.Responses) == 0 || len(f.Streams) == 0 {
-		return f, fmt.Errorf("outbound fixture requires requests, responses and streams cases")
+	if len(f.Requests) == 0 || len(f.Responses) == 0 {
+		return f, fmt.Errorf("outbound fixture requires requests and responses cases")
+	}
+	if streaming && len(f.Streams) == 0 {
+		return f, fmt.Errorf("streaming outbound fixture requires streams cases")
 	}
 	for _, c := range f.Requests {
 		if err := validCase(c.Name, c.IR, c.Golden, c.Target.BaseURL, c.Target.Model); err != nil {
@@ -368,6 +371,14 @@ func loadOutbound(dir string) (outboundFixtures, error) {
 	}
 	if !success || !failure {
 		return f, fmt.Errorf("response fixtures require both success and error cases")
+	}
+	if !streaming {
+		for _, c := range f.Streams {
+			if c.IR != "" {
+				return f, fmt.Errorf("non-streaming adapter fixture %q must expect a ParseStream error", c.Name)
+			}
+		}
+		return f, nil
 	}
 	var streams []encodeCase
 	for _, c := range f.Streams {

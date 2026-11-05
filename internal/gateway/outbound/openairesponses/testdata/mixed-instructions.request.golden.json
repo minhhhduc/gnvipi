@@ -1,0 +1,28 @@
+{
+  "method": "POST",
+  "url": "https://provider.invalid/v1/responses",
+  "headers": {
+    "Authorization": ["Bearer provider-credential"],
+    "Content-Type": ["application/json"],
+    "X-Trace": ["first", "second"]
+  },
+  "body": {
+    "model": "resolved-model",
+    "input": [
+      {
+        "role": "system",
+        "content": [{"type": "input_text", "text": "Safety first."}]
+      },
+      {
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "Be terse."}]
+      },
+      {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Hello"}]
+      }
+    ],
+    "stream": false,
+    "store": false
+  }
+}

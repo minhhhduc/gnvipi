@@ -1,0 +1,6 @@
+{
+  "kind": "invalid_request",
+  "message": "openairesponses: streaming response parsing is not implemented",
+  "status": 400,
+  "code": "unsupported_feature"
+}

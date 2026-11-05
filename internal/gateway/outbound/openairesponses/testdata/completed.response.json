@@ -1,0 +1,49 @@
+{
+  "id": "resp_complete",
+  "object": "response",
+  "created_at": 1710000000,
+  "status": "completed",
+  "model": "upstream-model",
+  "output": [
+    {
+      "id": "rs_1",
+      "type": "reasoning",
+      "status": "completed",
+      "summary": [
+        {"type": "summary_text", "text": "Think "},
+        {"type": "summary_text", "text": "carefully"}
+      ],
+      "encrypted_content": "cipher"
+    },
+    {
+      "id": "msg_1",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "Hello", "annotations": []},
+        {"type": "output_text", "text": " world", "logprobs": []}
+      ]
+    },
+    {
+      "id": "fc_1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call_a",
+      "name": "lookup",
+      "arguments": "{\"n\":9007199254740993}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 3,
+    "input_tokens_details": {
+      "cached_tokens": 1,
+      "cache_write_tokens": 2
+    },
+    "output_tokens": 6,
+    "output_tokens_details": {
+      "reasoning_tokens": 2
+    },
+    "total_tokens": 9
+  }
+}

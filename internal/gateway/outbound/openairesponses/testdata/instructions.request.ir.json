@@ -1,0 +1,27 @@
+{
+  "model": "client-alias",
+  "instructions": [
+    {
+      "role": "system",
+      "content": [{"type": "text", "text": "Safety first."}]
+    },
+    {
+      "role": "system",
+      "content": [{"type": "text", "text": "Cite sources."}]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "Hello"}]
+    }
+  ],
+  "sampling": {},
+  "extensions": {
+    "model": "stale-model",
+    "instructions": "stale instructions",
+    "input": [{"role": "user", "content": "stale input"}],
+    "stream": true,
+    "store": true
+  }
+}

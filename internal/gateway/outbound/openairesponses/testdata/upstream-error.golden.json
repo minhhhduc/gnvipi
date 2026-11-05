@@ -1,0 +1,8 @@
+{
+  "kind": "rate_limit",
+  "message": "quota exceeded",
+  "code": "insufficient_quota",
+  "upstream_status": 429,
+  "upstream_request_id": "req_responses_123",
+  "retry_after_ms": 30000
+}

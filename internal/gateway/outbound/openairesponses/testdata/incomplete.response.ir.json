@@ -1,0 +1,13 @@
+{
+  "id": "resp_incomplete",
+  "model": "upstream-model",
+  "content": [
+    {"type": "text", "text": "Partial"}
+  ],
+  "stop_reason": "max_tokens",
+  "usage": {
+    "input_tokens": 2,
+    "output_tokens": 3,
+    "reasoning_tokens": 1
+  }
+}
