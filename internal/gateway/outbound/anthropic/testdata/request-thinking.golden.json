@@ -1,0 +1,22 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/prefix/v1/messages",
+  "headers": {
+    "Authorization": ["Bearer fixture-secret"],
+    "Content-Type": ["application/json"]
+  },
+  "body": {
+    "model": "claude-thinking-resolved",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "solve this"}
+        ]
+      }
+    ],
+    "max_tokens": 2048,
+    "thinking": {"type": "enabled", "budget_tokens": 1024},
+    "beta_flag": {"mode": "safe", "id": 9007199254740995}
+  }
+}

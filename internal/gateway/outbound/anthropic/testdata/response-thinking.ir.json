@@ -1,0 +1,15 @@
+{
+  "id": "msg_thinking",
+  "model": "claude-thinking",
+  "content": [
+    {"type": "reasoning", "reasoning": {"content": "I should inspect the data.", "signature": "sig_abc"}},
+    {"type": "text", "text": "I need one lookup."},
+    {"type": "tool_use", "tool_use": {"id": "toolu_1", "name": "lookup", "input": {"city": "Hanoi", "exact": 9007199254740993}}}
+  ],
+  "stop_reason": "tool_use",
+  "usage": {
+    "input_tokens": 31,
+    "output_tokens": 12,
+    "cache_read_tokens": 4
+  }
+}

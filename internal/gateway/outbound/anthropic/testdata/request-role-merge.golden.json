@@ -1,0 +1,41 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/prefix/v1/messages",
+  "headers": {
+    "Content-Type": ["application/json"],
+    "X-Api-Key": ["fixture-secret"],
+    "X-Multi": ["one", "two"]
+  },
+  "body": {
+    "model": "claude-resolved",
+    "system": [
+      {"type": "text", "text": "Follow policy."},
+      {"type": "text", "text": "Be concise."}
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "first"},
+          {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}},
+          {"type": "image", "source": {"type": "url", "url": "https://images.invalid/cat.png"}},
+          {"type": "text", "text": "second"}
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {"type": "text", "text": "prefill"},
+          {"type": "text", "text": "continued"}
+        ]
+      }
+    ],
+    "max_tokens": 4096,
+    "temperature": 0,
+    "top_p": 0.75,
+    "top_k": 7,
+    "stop_sequences": ["END"],
+    "vendor_exact": 9007199254740993,
+    "service_tier": "priority"
+  }
+}
