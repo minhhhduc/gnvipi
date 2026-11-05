@@ -1,0 +1,73 @@
+{
+  "requests": [
+    {
+      "name": "role-merge",
+      "ir": "request-role-merge.ir.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/prefix/v1",
+        "Model": "claude-resolved",
+        "Headers": {
+          "X-Api-Key": ["fixture-secret"],
+          "X-Multi": ["one", "two"]
+        }
+      },
+      "golden": "request-role-merge.golden.json"
+    },
+    {
+      "name": "thinking",
+      "ir": "request-thinking.ir.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/prefix/v1/messages",
+        "Model": "claude-thinking-resolved",
+        "Headers": {
+          "Authorization": ["Bearer fixture-secret"]
+        }
+      },
+      "golden": "request-thinking.golden.json"
+    }
+  ],
+  "responses": [
+    {
+      "name": "text",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "response-text.json"
+      },
+      "ir": "response-text.ir.json"
+    },
+    {
+      "name": "thinking",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "response-thinking.json"
+      },
+      "ir": "response-thinking.ir.json"
+    },
+    {
+      "name": "rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "Request-Id": ["req_header"],
+          "Retry-After": ["3"]
+        },
+        "body": "response-error.json"
+      },
+      "error": "response-error.ir.json"
+    }
+  ],
+  "streams": [
+    {
+      "name": "unsupported",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "response-text.json"
+      },
+      "error": "unsupported-stream.error.json"
+    }
+  ]
+}

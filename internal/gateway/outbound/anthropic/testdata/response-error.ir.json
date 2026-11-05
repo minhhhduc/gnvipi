@@ -1,0 +1,7 @@
+{
+  "kind": "rate_limit",
+  "message": "Too many requests.",
+  "upstream_status": 429,
+  "upstream_request_id": "req_header",
+  "retry_after_ms": 3000
+}
