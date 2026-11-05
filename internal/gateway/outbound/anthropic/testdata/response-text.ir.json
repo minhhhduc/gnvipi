@@ -1,0 +1,15 @@
+{
+  "id": "msg_text",
+  "model": "claude-text",
+  "content": [
+    {"type": "text", "text": "Hello from Claude."}
+  ],
+  "stop_reason": "stop_sequence",
+  "stop_sequence": "</done>",
+  "usage": {
+    "input_tokens": 23,
+    "output_tokens": 7,
+    "cache_read_tokens": 11,
+    "cache_write_tokens": 5
+  }
+}

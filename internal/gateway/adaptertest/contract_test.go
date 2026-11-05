@@ -31,6 +31,66 @@ func TestConformingAdapters(t *testing.T) {
 	t.Run("outbound", func(t *testing.T) { RunOutboundContract(t, wireOutbound{}, fakeFixtures) })
 }
 
+func TestNonStreamingOutboundContract(t *testing.T) {
+	var fixtures outboundFixtures
+	if err := readStrict(resolve(fakeFixtures, "outbound.json"), &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	absolute := func(path string) string {
+		path, err := filepath.Abs(resolve(fakeFixtures, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for i := range fixtures.Requests {
+		fixtures.Requests[i].IR = absolute(fixtures.Requests[i].IR)
+		fixtures.Requests[i].Golden = absolute(fixtures.Requests[i].Golden)
+	}
+	for i := range fixtures.Responses {
+		fixtures.Responses[i].Response.Body = absolute(fixtures.Responses[i].Response.Body)
+		if fixtures.Responses[i].IR != "" {
+			fixtures.Responses[i].IR = absolute(fixtures.Responses[i].IR)
+		} else {
+			fixtures.Responses[i].Error = absolute(fixtures.Responses[i].Error)
+		}
+	}
+
+	for _, explicitUnsupported := range []bool{false, true} {
+		name := "no-stream-cases"
+		if explicitUnsupported {
+			name = "explicit-unsupported-stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			manifest := fixtures
+			manifest.Streams = nil
+			dir := t.TempDir()
+			if explicitUnsupported {
+				errorPath := filepath.Join(dir, "unsupported.json")
+				if err := os.WriteFile(errorPath, []byte(`{"kind":"invalid_request","message":"streaming is unsupported","status":400,"code":"unsupported_feature"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				manifest.Streams = []parseCase{{Name: "unsupported", Response: wireInput{Status: http.StatusOK, Body: absolute("stream.sse")}, Error: errorPath}}
+			}
+			body, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "outbound.json"), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			RunOutboundContract(t, nonStreamingOutbound{}, dir)
+		})
+	}
+}
+
+type nonStreamingOutbound struct{ wireOutbound }
+
+func (nonStreamingOutbound) Capabilities() adapter.Capabilities { return adapter.Capabilities{} }
+func (nonStreamingOutbound) ParseStream(context.Context, *http.Response) (adapter.Stream, error) {
+	return nil, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Status: http.StatusBadRequest, Code: "unsupported_feature", Message: "streaming is unsupported"}
+}
+
 // Re-exec the test binary, not the go command, so expected contract failures
 // cannot poison the parent test's testing.T or require a compiler at runtime.
 func TestViolatingAdapters(t *testing.T) {
