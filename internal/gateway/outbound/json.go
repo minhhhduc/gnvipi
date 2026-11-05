@@ -154,3 +154,25 @@ func retryAfter(value string) time.Duration {
 	}
 	return 0
 }
+
+// JSONObject reports whether raw is a non-empty, valid JSON object {...}.
+func JSONObject(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) >= 2 && raw[0] == '{' && raw[len(raw)-1] == '}' && json.Valid(raw)
+}
+
+// ExtensionFields copies unreserved extension fields into a newly allocated
+// map[string]any. It reports an error if any retained extension is not valid JSON.
+func ExtensionFields(extensions map[string]json.RawMessage, isReserved func(name string) bool) (map[string]any, error) {
+	fields := make(map[string]any, len(extensions)+8)
+	for name, value := range extensions {
+		if isReserved != nil && isReserved(name) {
+			continue
+		}
+		if !json.Valid(value) {
+			return nil, fmt.Errorf("outbound: extension %q contains invalid JSON", name)
+		}
+		fields[name] = value
+	}
+	return fields, nil
+}

@@ -120,3 +120,51 @@ func TestUpstreamErrorMapsEnvelopeHeadersAndRetryAfter(t *testing.T) {
 		t.Fatalf("fallback = %+v", fallback)
 	}
 }
+
+func TestJSONObject(t *testing.T) {
+	tests := []struct {
+		input json.RawMessage
+		want  bool
+	}{
+		{json.RawMessage(`{"a": 1}`), true},
+		{json.RawMessage(`   { "key": "value" }  `), true},
+		{json.RawMessage(`{}`), true},
+		{json.RawMessage(`[]`), false},
+		{json.RawMessage(`"hello"`), false},
+		{json.RawMessage(`123`), false},
+		{json.RawMessage(`null`), false},
+		{json.RawMessage(``), false},
+		{json.RawMessage(`{not-json}`), false},
+	}
+	for _, tc := range tests {
+		if got := outbound.JSONObject(tc.input); got != tc.want {
+			t.Errorf("JSONObject(%q) = %v, want %v", string(tc.input), got, tc.want)
+		}
+	}
+}
+
+func TestExtensionFields(t *testing.T) {
+	extensions := map[string]json.RawMessage{
+		"keep_str": json.RawMessage(`"val"`),
+		"keep_obj": json.RawMessage(`{"nested": 1}`),
+		"skip_me":  json.RawMessage(`123`),
+	}
+	isReserved := func(name string) bool { return name == "skip_me" }
+	fields, err := outbound.ExtensionFields(extensions, isReserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 2 || fields["skip_me"] != nil {
+		t.Fatalf("unexpected fields: %+v", fields)
+	}
+	if string(fields["keep_str"].(json.RawMessage)) != `"val"` {
+		t.Fatalf("keep_str = %s", fields["keep_str"])
+	}
+
+	invalid := map[string]json.RawMessage{
+		"broken": json.RawMessage(`{invalid`),
+	}
+	if _, err := outbound.ExtensionFields(invalid, nil); err == nil {
+		t.Fatal("expected error for invalid JSON extension")
+	}
+}

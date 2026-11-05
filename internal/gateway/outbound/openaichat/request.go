@@ -36,11 +36,9 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if err != nil {
 		return nil, err
 	}
-	fields := make(map[string]any, len(request.Extensions)+12)
-	for name, value := range request.Extensions {
-		if !normalizedRequestField(name) {
-			fields[name] = value
-		}
+	fields, err := outbound.ExtensionFields(request.Extensions, normalizedRequestField)
+	if err != nil {
+		return nil, invalid(err.Error())
 	}
 	fields["messages"] = messages
 	fields["stream"] = request.Stream

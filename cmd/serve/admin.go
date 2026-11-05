@@ -5,24 +5,20 @@ package main
 // gateway restart.
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
-	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
@@ -377,183 +373,25 @@ func compatProviders(list []gatewayprovider.Provider) []config.OpenAICompatibili
 
 // adminRoutes serves the manager page and its actions.
 func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo) {
-	// c.Abort() was incorrectly added here
-	page := c.DefaultQuery("page", "dashboard")
 	switch c.Request.URL.Path {
 	case "/admin":
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog)))
+		handleAdminDashboard(c, catalog)
 	case "/admin/stats":
-		interval := nvidia.StatsReadInterval()
-		if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {
-			ev, tf, err := nvidia.ReadFrame(n)
-			if err != nil {
-				if errors.Is(err, nvidia.ErrStatsReadLimited) {
-					c.Header("Retry-After", strconv.FormatInt(int64((interval-1)/time.Second+1), 10))
-					c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
-					return
-				}
-				c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"frame": n, "total_frames": tf, "events": ev})
-			return
-		}
-		adminStatsCache.Lock()
-		if adminStatsCache.data == nil || time.Since(adminStatsCache.at) >= interval {
-			adminStatsCache.data = gin.H{
-				"models":          nvidia.GlobalStats.Snapshot(),
-				"series":          nvidia.GlobalStats.Series(60),
-				"series_by_model": nvidia.GlobalStats.ModelSeries(60),
-				"events":          nvidia.GlobalStats.Events(200),
-				"started_at":      nvidia.GlobalStats.StartedAt(),
-				"total_frames":    nvidia.FramesCount(),
-			}
-			adminStatsCache.at = time.Now()
-		}
-		data := adminStatsCache.data
-		adminStatsCache.Unlock()
-		c.JSON(http.StatusOK, data)
+		handleAdminStats(c)
 	case "/admin/models":
-		var payload prefsFile
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if err := prefs.setHidden(payload.MasksID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"off": len(payload.MasksID)})
+		handleAdminModels(c)
 	case "/admin/automode":
-		var payload struct {
-			Model string `json:"model"`
-		}
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		id := strings.TrimSpace(payload.Model)
-		valid := false
-		if id != "automode" && !prefs.isHidden(id) {
-			_, valid = models.Models[id]
-			if cycle, _ := prefs.cycleSnapshot(); cycle.Name == id && id != "" {
-				valid = true
-			}
-			if !valid {
-				for _, p := range prefs.listProviders() {
-					if p.modelID() == id {
-						valid = true
-						break
-					}
-				}
-			}
-		}
-		if !valid {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "choose an enabled gateway model"})
-			return
-		}
-		if err := prefs.setAutoModel(id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"model": id})
+		handleAdminAutomode(c)
 	case "/admin/search":
-		var payload struct {
-			URL string `json:"url"`
-		}
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		payload.URL = normalizeSearchURL(payload.URL)
-		if payload.URL != "" && !validSearchURL(payload.URL) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "enter an HTTPS search URL containing {query}"})
-			return
-		}
-		if err := prefs.setSearchURL(payload.URL); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"url": payload.URL})
+		handleAdminSearch(c)
 	case "/admin/cycle":
-		var payload cycleConfig
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if err := prefs.setCycle(payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"name": "cycle", "models": payload.Models})
+		handleAdminCycle(c)
 	case "/admin/providers":
-		var list []customProvider
-		if err := c.ShouldBindJSON(&list); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		for i, p := range list {
-			if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.BaseURL) == "" ||
-				strings.TrimSpace(p.Model) == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
-					": name, base_url and model required"})
-				return
-			}
-			if p.MessagesOnly && p.ResponsesOnly {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
-					": choose one API format: responses or messages"})
-				return
-			}
-			// Control characters (newline, tab, NUL) would let a value escape its
-			// YAML scalar and inject config keys, so they never reach the file.
-			for _, field := range []struct{ label, value string }{
-				{"name", p.Name},
-				{"base_url", p.BaseURL},
-				{"api_key", p.APIKey},
-				{"model", p.Model},
-				{"alias", p.Alias},
-			} {
-				if strings.ContainsFunc(field.value, unicode.IsControl) {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "endpoint " + strconv.Itoa(i+1) +
-						": " + field.label + " contains control characters"})
-					return
-				}
-			}
-		}
-		if err := prefs.setProviders(list); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"providers": len(list)})
+		handleAdminProviders(c)
 	case "/admin/delete":
-		var payload struct {
-			ID      string `json:"id"`
-			Restore bool   `json:"restore"`
-		}
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if strings.TrimSpace(payload.ID) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
-			return
-		}
-		if payload.Restore {
-			if err := prefs.removeDeleted(payload.ID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"restored": payload.ID})
-		} else {
-			if err := prefs.addDeleted(payload.ID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"deleted": payload.ID})
-		}
+		handleAdminDelete(c)
 	case "/admin/retry-failed":
-		deadModels.Clear()
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		handleAdminRetryFailed(c)
 	default:
 		c.JSON(http.StatusNotFound, gin.H{"error": "unknown admin path"})
 	}
