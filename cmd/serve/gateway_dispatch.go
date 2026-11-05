@@ -7,6 +7,9 @@ import (
 	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
 	inboundchat "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openaichat"
 	inboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openairesponses"
+	outboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/outbound/anthropic"
+	outboundchat "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openaichat"
+	outboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 )
 
@@ -24,6 +27,9 @@ func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string) (gin.
 	registry.RegisterInbound(inboundanthropic.New())
 	registry.RegisterInbound(inboundchat.New())
 	registry.RegisterInbound(inboundresponses.New())
+	registry.RegisterOutbound(outboundanthropic.New())
+	registry.RegisterOutbound(outboundchat.New())
+	registry.RegisterOutbound(outboundresponses.New())
 	dispatcher := dispatch.New(resolver, &relay.Options{ProxyURL: proxyURL})
 	dispatcher.Registry = registry
 	previousReload := prefs.onChange

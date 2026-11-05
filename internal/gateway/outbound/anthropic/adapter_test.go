@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
+	"github.com/minhhhduc/gnvipi/internal/gateway/adaptertest"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 )
@@ -231,8 +232,14 @@ func TestParseAnthropicErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestMain(m *testing.M) {
+	adaptertest.RegisterFlags()
+	os.Exit(m.Run())
+}
+
 func TestOutboundContract(t *testing.T) {
 	a := New()
+	adaptertest.RunOutboundContract(t, a, "testdata")
 	if a.Protocol() != ir.ProtocolAnthropicMessages {
 		t.Fatalf("Protocol = %q, want %q", a.Protocol(), ir.ProtocolAnthropicMessages)
 	}

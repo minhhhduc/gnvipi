@@ -1,0 +1,6 @@
+{
+  "kind": "invalid_request",
+  "message": "Anthropic response streaming is not supported by this adapter",
+  "status": 400,
+  "code": "unsupported_feature"
+}

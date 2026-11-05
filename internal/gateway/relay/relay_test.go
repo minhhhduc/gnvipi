@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -39,6 +40,34 @@ func (r *recording) completions() []*core.Completion {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]*core.Completion(nil), r.calls...)
+}
+
+func (r *recording) wait(t *testing.T, count int, timeout time.Duration) []*core.Completion {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		r.mu.Lock()
+		if len(r.calls) >= count {
+			res := append([]*core.Completion(nil), r.calls...)
+			r.mu.Unlock()
+			return res
+		}
+		r.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d completion(s)", count)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func formatCompletions(calls []*core.Completion) string {
+	deref := make([]core.Completion, len(calls))
+	for i, c := range calls {
+		if c != nil {
+			deref[i] = *c
+		}
+	}
+	return fmt.Sprintf("%+v", deref)
 }
 
 func newTestRelay(t *testing.T, base string, protocol ir.Protocol, recorder core.Recorder) *Relay {
@@ -235,9 +264,11 @@ func TestRelaySSEFlushesAndPreservesSuccessfulBytes(t *testing.T) {
 	if string(tail) != last {
 		t.Fatalf("remaining stream changed: %q", tail)
 	}
-	calls := recorder.completions()
-	if len(calls) != 1 || calls[0].Err != nil || !calls[0].Request.Stream || calls[0].TTFB <= 0 || calls[0].Usage.InputTokens != 17 || calls[0].Usage.OutputTokens != 9 {
-		t.Fatalf("stream completion = %+v", calls)
+	calls := recorder.wait(t, 1, 2*time.Second)
+	if len(calls) != 1 || calls[0].Err != nil || !calls[0].Request.Stream ||
+		calls[0].Request.FirstByte.IsZero() || calls[0].Request.FirstByte.Before(calls[0].Request.Start) ||
+		calls[0].TTFB < 0 || calls[0].Usage.InputTokens != 17 || calls[0].Usage.OutputTokens != 9 {
+		t.Fatalf("stream completion = %s", formatCompletions(calls))
 	}
 }
 
