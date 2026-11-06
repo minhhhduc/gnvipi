@@ -1,0 +1,4 @@
+[
+  {"type":"message_start","message":{"id":"resp_fail","role":"assistant","model":"gpt-4o"}},
+  {"type":"error","error":{"kind":"upstream_error","message":"Generation failure"}}
+]

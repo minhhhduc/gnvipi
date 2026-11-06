@@ -1,0 +1,11 @@
+[
+  {"type":"message_start","message":{"id":"resp_reason","role":"assistant","model":"o3-mini"}},
+  {"type":"block_start","index":0,"block":{"type":"reasoning","index":0,"reasoning":{}}},
+  {"type":"block_delta","index":0,"delta":{"type":"reasoning_delta","text":"Thinking step"}},
+  {"type":"block_stop","index":0},
+  {"type":"block_start","index":1,"block":{"type":"text","index":1}},
+  {"type":"block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}},
+  {"type":"block_stop","index":1},
+  {"type":"usage_update","usage":{"input_tokens":15,"output_tokens":10,"reasoning_tokens":6}},
+  {"type":"message_stop","stop_reason":"end_turn"}
+]

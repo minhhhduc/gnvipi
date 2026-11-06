@@ -1,0 +1,8 @@
+[
+  {"type":"message_start","message":{"id":"resp_tool","role":"assistant","model":"gpt-4o"}},
+  {"type":"block_start","index":0,"block":{"type":"tool_use","index":0,"tool_use":{"id":"call_123","name":"get_weather"}}},
+  {"type":"block_delta","index":0,"delta":{"type":"tool_arguments_delta","tool_call_id":"call_123","partial_json":"{\"location\":\"Tokyo\"}"}},
+  {"type":"block_stop","index":0},
+  {"type":"usage_update","usage":{"input_tokens":20,"output_tokens":5}},
+  {"type":"message_stop","stop_reason":"tool_use"}
+]

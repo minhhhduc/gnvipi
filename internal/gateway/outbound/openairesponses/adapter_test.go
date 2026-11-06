@@ -61,7 +61,7 @@ func TestAdapterContract(t *testing.T) {
 	if out == nil || out.Protocol() != ir.ProtocolOpenAIResponses {
 		t.Fatalf("New/Protocol = %#v/%q", out, out.Protocol())
 	}
-	want := adapter.Capabilities{Images: true, Reasoning: true, StructuredOutput: true}
+	want := adapter.Capabilities{Streaming: true, Images: true, Reasoning: true, StructuredOutput: true}
 	if got := out.Capabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, want)
 	}
@@ -153,7 +153,6 @@ func TestBuildRequestRejectsMalformedOrUnsupportedIR(t *testing.T) {
 		request *ir.Request
 	}{
 		{"nil request", nil},
-		{"streaming", &ir.Request{Stream: true, Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}}},
 		{"unsupported role", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.Role("system"), ir.NewTextBlock("hello"))}}},
 		{"invalid image", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, invalidImage)}}},
 		{"invalid response format", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, ResponseFormat: &badSchema}},
@@ -260,22 +259,34 @@ func TestParseResponseRejectsMalformedWire(t *testing.T) {
 	}
 }
 
-func TestParseStreamIsTypedUnsupportedWithoutTakingBodyOwnership(t *testing.T) {
-	body := newTrackedBody([]byte("data: should-not-be-read\n\n"))
+func TestParseStreamPreservesBodyOwnership(t *testing.T) {
+	body := newTrackedBody([]byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"))
 	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}
 	stream, err := openairesponses.New().ParseStream(context.Background(), response)
-	if stream != nil {
-		t.Fatalf("ParseStream returned fake stream: %#v", stream)
+	if err != nil {
+		t.Fatalf("ParseStream failed: %v", err)
 	}
-	var gatewayError *gwerr.Error
-	if !errors.As(err, &gatewayError) || gatewayError.Code != "unsupported_feature" || gatewayError.Kind != gwerr.KindInvalidRequest {
-		t.Fatalf("ParseStream error = %T %v", err, err)
+	if body.closed {
+		t.Fatal("ParseStream closed body before stream.Close()")
 	}
-	if body.closed || body.Len() != len("data: should-not-be-read\n\n") {
-		t.Fatalf("ParseStream touched caller-owned body: closed %v, remaining %d", body.closed, body.Len())
-	}
-	if err := body.Close(); err != nil {
+	if err := stream.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if !body.closed {
+		t.Fatal("stream.Close() did not close stream body")
+	}
+
+	errorBody := newTrackedBody([]byte(`{"error":{"message":"bad request"}}`))
+	errResp := &http.Response{StatusCode: http.StatusBadRequest, Body: errorBody}
+	errStream, err := openairesponses.New().ParseStream(context.Background(), errResp)
+	if errStream != nil {
+		t.Fatal("expected nil stream on 400")
+	}
+	if err == nil {
+		t.Fatal("expected error on 400")
+	}
+	if !errorBody.closed {
+		t.Fatal("ParseStream failed to close error body")
 	}
 }
 

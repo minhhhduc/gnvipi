@@ -1,5 +1,5 @@
 // Package openairesponses converts normalized requests and responses to and
-// from the non-streaming OpenAI Responses wire format.
+// from the OpenAI Responses wire format.
 package openairesponses
 
 import (
@@ -16,19 +16,23 @@ type Adapter struct{}
 
 var _ adapter.Outbound = (*Adapter)(nil)
 
-// New returns a non-streaming OpenAI Responses outbound adapter.
+// New returns an OpenAI Responses outbound adapter.
 func New() *Adapter { return &Adapter{} }
 
 func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolOpenAIResponses }
 
 func (*Adapter) Capabilities() adapter.Capabilities {
-	return adapter.Capabilities{Images: true, Reasoning: true, StructuredOutput: true}
+	return adapter.Capabilities{
+		Streaming:        true,
+		Images:           true,
+		Reasoning:        true,
+		StructuredOutput: true,
+	}
 }
 
-// ParseStream is intentionally unavailable until issue #28. Rejection does
-// not read or close the response body, so ownership remains with the caller.
-func (*Adapter) ParseStream(context.Context, *http.Response) (adapter.Stream, error) {
-	return nil, unsupported("streaming response parsing is not implemented")
+// ParseStream reads an upstream OpenAI Responses SSE stream into normalized IR events.
+func (*Adapter) ParseStream(ctx context.Context, resp *http.Response) (adapter.Stream, error) {
+	return parseStream(ctx, resp)
 }
 
 func invalid(message string) *gwerr.Error {

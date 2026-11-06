@@ -23,9 +23,6 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request.Stream {
-		return nil, unsupported("streaming Responses requests require the streaming adapter")
-	}
 	if len(request.Tools) != 0 || request.ToolChoice != nil {
 		return nil, unsupported("Responses tools require the tool-calling adapter")
 	}
@@ -88,7 +85,7 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	if request.Metadata != nil {
 		fields["user"] = request.Metadata.UserID
 	}
-	fields["stream"] = false
+	fields["stream"] = request.Stream
 	fields["store"] = false
 	return gatewayoutbound.NewJSONRequest(ctx, target, "/responses", fields)
 }
