@@ -61,13 +61,53 @@
   ],
   "streams": [
     {
-      "name": "unsupported",
+      "name": "text",
       "response": {
         "status": 200,
         "headers": {"Content-Type": ["text/event-stream"]},
-        "body": "response-text.json"
+        "body": "stream.text.sse"
       },
-      "error": "unsupported-stream.error.json"
+      "ir": "stream.text.ir.json"
+    },
+    {
+      "name": "thinking",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.thinking.sse"
+      },
+      "ir": "stream.thinking.ir.json"
+    },
+    {
+      "name": "tool",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.tool.sse"
+      },
+      "ir": "stream.tool.ir.json"
+    },
+    {
+      "name": "overloaded",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.overloaded.sse"
+      },
+      "ir": "stream.overloaded.ir.json"
+    },
+    {
+      "name": "upstream-rate-limit",
+      "response": {
+        "status": 429,
+        "headers": {
+          "Content-Type": ["application/json"],
+          "Request-Id": ["req_header"],
+          "Retry-After": ["3"]
+        },
+        "body": "response-error.json"
+      },
+      "error": "response-error.ir.json"
     }
   ]
 }

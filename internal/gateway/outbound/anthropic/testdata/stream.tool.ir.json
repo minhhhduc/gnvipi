@@ -1,0 +1,8 @@
+[
+  {"type":"message_start","message":{"id":"msg_tool","role":"assistant","model":"tool-model"},"usage":{"input_tokens":5}},
+  {"type":"block_start","index":0,"block":{"type":"tool_use","index":0,"tool_use":{"id":"call-1","name":"weather"}}},
+  {"type":"block_delta","index":0,"delta":{"type":"tool_arguments_delta","tool_call_id":"call-1","partial_json":"{\"city\":\"Paris\"}"}},
+  {"type":"block_stop","index":0},
+  {"type":"usage_update","usage":{"input_tokens":5,"output_tokens":12,"cache_read_tokens":2}},
+  {"type":"message_stop","stop_reason":"tool_use"}
+]

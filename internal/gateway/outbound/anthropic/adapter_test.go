@@ -26,7 +26,7 @@ func TestOutboundContract(t *testing.T) {
 	if a.Protocol() != ir.ProtocolAnthropicMessages {
 		t.Fatalf("Protocol = %q, want %q", a.Protocol(), ir.ProtocolAnthropicMessages)
 	}
-	wantCapabilities := adapter.Capabilities{Images: true, Reasoning: true, TopK: true}
+	wantCapabilities := adapter.Capabilities{Streaming: true, Images: true, Reasoning: true, TopK: true}
 	if got := a.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, wantCapabilities)
 	}
@@ -57,6 +57,31 @@ func TestDefaultMaxTokensIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestBuildRequestAllowsStreaming(t *testing.T) {
+	a := anthropic.New()
+	request, err := a.BuildRequest(t.Context(), &ir.Request{
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))},
+		Stream:   true,
+	}, adapter.Target{BaseURL: "https://upstream.invalid", Model: "claude-resolved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := request.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var body struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Stream {
+		t.Fatalf("stream = %v, want true", body.Stream)
+	}
+}
+
 func TestBuildRequestRejectsUnrepresentableInput(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -77,14 +102,6 @@ func TestBuildRequestRejectsUnrepresentableInput(t *testing.T) {
 				Tools:    []ir.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)}},
 			},
 			message: "tool",
-		},
-		{
-			name: "streaming deferred",
-			request: ir.Request{
-				Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))},
-				Stream:   true,
-			},
-			message: "stream",
 		},
 	}
 	for _, test := range tests {

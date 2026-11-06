@@ -29,6 +29,9 @@ const (
 	DeltaToolArguments DeltaType = "tool_arguments_delta"
 	// DeltaReasoning is an incremental reasoning/thinking fragment.
 	DeltaReasoning DeltaType = "reasoning_delta"
+	// DeltaSignature is a cryptographic signature for a reasoning/thinking
+	// block, emitted by providers such as Anthropic.
+	DeltaSignature DeltaType = "signature_delta"
 )
 
 // Delta is one incremental content update. ToolCallID and ToolCallName
@@ -40,6 +43,7 @@ type Delta struct {
 	PartialJSON  string    `json:"partial_json,omitempty"`
 	ToolCallID   string    `json:"tool_call_id,omitempty"`
 	ToolCallName string    `json:"tool_call_name,omitempty"`
+	Signature    string    `json:"signature,omitempty"`
 }
 
 // StreamError is the protocol-neutral payload of an error event. Kind uses
@@ -114,6 +118,16 @@ func NewReasoningDelta(index int, text string) StreamEvent {
 		Type:  EventBlockDelta,
 		Index: index,
 		Delta: &Delta{Type: DeltaReasoning, Text: text},
+	}
+}
+
+// NewSignatureDelta builds a signature delta event for the block with the
+// given index.
+func NewSignatureDelta(index int, signature string) StreamEvent {
+	return StreamEvent{
+		Type:  EventBlockDelta,
+		Index: index,
+		Delta: &Delta{Type: DeltaSignature, Signature: signature},
 	}
 }
 

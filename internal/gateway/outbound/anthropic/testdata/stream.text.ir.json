@@ -1,0 +1,8 @@
+[
+  {"type":"message_start","message":{"id":"msg_text","role":"assistant","model":"client-model"},"usage":{"input_tokens":11,"cache_read_tokens":4,"cache_write_tokens":2}},
+  {"type":"block_start","index":0,"block":{"type":"text","index":0}},
+  {"type":"block_delta","index":0,"delta":{"type":"text_delta","text":"Hello \"world\"\n"}},
+  {"type":"block_stop","index":0},
+  {"type":"usage_update","usage":{"input_tokens":11,"output_tokens":3,"cache_read_tokens":4,"cache_write_tokens":2}},
+  {"type":"message_stop","stop_reason":"end_turn"}
+]

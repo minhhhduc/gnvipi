@@ -22,9 +22,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request.Stream || request.StreamIncludeUsage {
-		return nil, unsupported("Anthropic streaming requires the streaming adapter")
-	}
+
 	if len(request.Tools) > 0 || request.ToolChoice != nil {
 		return nil, unsupported("Anthropic tool requests require the tool adapter")
 	}
@@ -78,6 +76,9 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	}
 	if thinking != nil {
 		fields["thinking"] = thinking
+	}
+	if request.Stream {
+		fields["stream"] = true
 	}
 	if request.Metadata != nil {
 		fields["metadata"] = struct {
