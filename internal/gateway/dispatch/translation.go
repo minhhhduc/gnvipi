@@ -52,11 +52,11 @@ func (d *Dispatcher) translator(model string, route routing.Route, base adapter.
 	return handler, nil
 }
 
-func (d *Dispatcher) failTranslation(c *gin.Context, protocol ir.Protocol, route routing.Route, request *core.RequestContext, err error) {
+func (d *Dispatcher) failTranslation(c *gin.Context, protocol ir.Protocol, route routing.Route, request *core.RequestContext, stream bool, err error) {
 	request.ResolvedProvider = route.Provider.ID
 	request.UpstreamModel = route.UpstreamModel
 	request.UpstreamProtocol = route.UpstreamProtocol
-	request.Stream = false
+	request.Stream = stream
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	request.BeginRecording(ctx, d.options.Recorder)
 	writeTranslationError(c, protocol, err)
