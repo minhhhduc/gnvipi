@@ -233,6 +233,8 @@ func (s *streamState) writeDelta(block *streamBlock, delta *ir.Delta) error {
 			return nil
 		}
 		return s.writeChunk(streamDelta{Reasoning: &delta.Text}, "", false)
+	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaSignature:
+		return nil
 	case block.kind == ir.BlockToolUse && delta.Type == ir.DeltaToolArguments:
 		return s.writeTool(block, delta)
 	default:

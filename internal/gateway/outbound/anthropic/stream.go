@@ -253,6 +253,7 @@ func (s *anthropicStream) handleSSEEvent(event sse.Event) error {
 			if sb != nil {
 				sb.signature = frame.Delta.Signature
 			}
+			s.pending = append(s.pending, ir.NewSignatureDelta(idx, frame.Delta.Signature))
 		case "input_json_delta":
 			toolID := ""
 			if sb != nil {

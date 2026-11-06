@@ -301,6 +301,12 @@ func (s *streamState) handle(event *ir.StreamEvent) (bool, error) {
 				return true, s.invalid("thinking delta for %s block", block.kind)
 			}
 			delta.Type, delta.Thinking = "thinking_delta", &event.Delta.Text
+		case ir.DeltaSignature:
+			if block.kind != ir.BlockReasoning {
+				return true, s.invalid("signature delta for %s block", block.kind)
+			}
+			block.signature = ""
+			delta.Type, delta.Signature = "signature_delta", &event.Delta.Signature
 		case ir.DeltaToolArguments:
 			if block.kind != ir.BlockToolUse {
 				return true, s.invalid("tool delta for %s block", block.kind)

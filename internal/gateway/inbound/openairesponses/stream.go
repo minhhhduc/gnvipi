@@ -359,6 +359,8 @@ func (s *responseStream) delta(block *responseStreamBlock, delta *ir.Delta) erro
 	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaReasoning:
 		typ, fragment = "response.reasoning_summary_text.delta", delta.Text
 		fields["summary_index"] = 0
+	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaSignature:
+		return nil
 	case block.kind == ir.BlockToolUse && delta.Type == ir.DeltaToolArguments:
 		if delta.ToolCallID != "" && delta.ToolCallID != block.item.CallID {
 			return fmt.Errorf("openairesponses: tool call identity changed in block %d", block.index)

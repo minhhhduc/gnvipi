@@ -3,6 +3,7 @@
   {"type":"block_start","index":0,"block":{"type":"reasoning","index":0,"reasoning":{}}},
   {"type":"block_delta","index":0,"delta":{"type":"reasoning_delta","text":"First, "}},
   {"type":"block_delta","index":0,"delta":{"type":"reasoning_delta","text":"consider the facts."}},
+  {"type":"block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque-signed-thinking"}},
   {"type":"block_stop","index":0},
   {"type":"block_start","index":1,"block":{"type":"text","index":1}},
   {"type":"block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}},
