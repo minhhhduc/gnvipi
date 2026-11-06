@@ -24,6 +24,27 @@ type Stream interface {
 	Close() error
 }
 
+// StreamOptions conveys per-request streaming configuration (such as OpenAI's
+// stream_options.include_usage) across the streaming pipeline via context.
+type StreamOptions struct {
+	IncludeUsage bool
+}
+
+type streamOptionsKey struct{}
+
+// WithStreamOptions returns a context carrying opts.
+func WithStreamOptions(ctx context.Context, opts StreamOptions) context.Context {
+	return context.WithValue(ctx, streamOptionsKey{}, opts)
+}
+
+// StreamOptionsFrom extracts StreamOptions from ctx, returning zero value if unset.
+func StreamOptionsFrom(ctx context.Context) StreamOptions {
+	if v, ok := ctx.Value(streamOptionsKey{}).(StreamOptions); ok {
+		return v
+	}
+	return StreamOptions{}
+}
+
 // Inbound adapts one client-facing wire protocol to the IR.
 //
 // Implementations live in internal/gateway/inbound/<proto>. Methods are

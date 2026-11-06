@@ -57,6 +57,10 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		return
 	}
 	normalized.Stream = true
+	if request.InboundProtocol == ir.ProtocolAnthropicMessages || request.InboundProtocol == ir.ProtocolOpenAIResponses || normalized.StreamIncludeUsage {
+		normalized.StreamIncludeUsage = true
+	}
+	ctx = adapter.WithStreamOptions(ctx, adapter.StreamOptions{IncludeUsage: normalized.StreamIncludeUsage})
 
 	headerRequest := c.Request.Clone(ctx)
 	headerRequest.Body = http.NoBody
@@ -132,12 +136,6 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		}
 	}()
 
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("X-Accel-Buffering", "no")
-	c.Status(http.StatusOK)
-
 	fbWriter := &firstByteTrackingWriter{
 		ResponseWriter: c.Writer,
 		rc:             request,
@@ -145,9 +143,17 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 	sseWriter, err := sse.NewWriter(fbWriter)
 	if err != nil {
 		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
 		return
 	}
 
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	var streamErr error
 	observedStream := &usageObservingStream{
 		inner: upstreamStream,
 		onUsage: func(u ir.Usage) {
@@ -161,9 +167,17 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 				msg.Model = request.ClientModel
 			}
 		},
+		onError: func(e *ir.StreamError) {
+			if e != nil {
+				streamErr = errors.New(e.Message)
+			}
+		},
 	}
 
 	terminal = inbound.EncodeStream(ctx, observedStream, sseWriter)
+	if terminal == nil && streamErr != nil {
+		terminal = streamErr
+	}
 }
 
 type firstByteTrackingWriter struct {
@@ -185,6 +199,7 @@ type usageObservingStream struct {
 	inner   adapter.Stream
 	onUsage func(ir.Usage)
 	onStart func(*ir.Message, *ir.Usage)
+	onError func(*ir.StreamError)
 }
 
 func (s *usageObservingStream) Next(ctx context.Context) (ir.StreamEvent, error) {
@@ -200,6 +215,10 @@ func (s *usageObservingStream) Next(ctx context.Context) (ir.StreamEvent, error)
 	case ir.EventUsageUpdate:
 		if ev.Usage != nil && s.onUsage != nil {
 			s.onUsage(*ev.Usage)
+		}
+	case ir.EventError:
+		if ev.Error != nil && s.onError != nil {
+			s.onError(ev.Error)
 		}
 	}
 	return ev, nil
