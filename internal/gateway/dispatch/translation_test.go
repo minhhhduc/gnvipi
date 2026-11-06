@@ -17,6 +17,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
+	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
@@ -400,5 +401,40 @@ func TestTranslationCancellationStopsUpstreamAndRecordsOnce(t *testing.T) {
 	case extra := <-recorder.completions:
 		t.Fatalf("cancellation recorded more than once: %+v", extra)
 	default:
+	}
+}
+
+func TestTranslationDropsUnsupportedParametersHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(w, `{"id":"upstream-id","model":"upstream-model","answer":"pong"}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+
+	var decodes, builds atomic.Int32
+	prov := translationProvider(t, server.URL)
+	registry := translationRegistry(&decodes, &builds, true, true)
+	// Register Anthropic inbound so /v1/messages is decoded with native top_k
+	registry.RegisterInbound(inboundanthropic.New())
+	dispatcher := translationDispatcher(t, &prov, registry, newTranslationRecorder())
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	clientJSON := `{"model":"client-alias","max_tokens":100,"messages":[{"role":"user","content":"ping"}],"top_k":40}`
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(clientJSON))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer client-secret")
+
+	out := httptest.NewRecorder()
+	engine.ServeHTTP(out, request)
+
+	if out.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", out.Code, out.Body.String())
+	}
+	if got := out.Header().Get("X-Gateway-Dropped-Params"); got != "top_k" {
+		t.Errorf("X-Gateway-Dropped-Params = %q, want %q", got, "top_k")
 	}
 }

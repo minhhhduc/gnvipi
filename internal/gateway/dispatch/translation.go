@@ -16,6 +16,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
@@ -155,6 +156,16 @@ func (h *translation) Serve(c *gin.Context, body []byte, inbound adapter.Inbound
 		terminal = &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "streaming translation is not enabled"}
 		writeTranslationError(c, request.InboundProtocol, terminal)
 		return
+	}
+
+	policyRes, err := gwpolicy.Validate(normalized, h.outbound.Capabilities(), gwpolicy.ModeLenient)
+	if err != nil {
+		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
+		return
+	}
+	if dropped := policyRes.DroppedParamsHeaderValue(); dropped != "" {
+		c.Header(gwpolicy.DroppedParamsHeader, dropped)
 	}
 
 	headerRequest := c.Request.Clone(ctx)

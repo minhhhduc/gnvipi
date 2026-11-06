@@ -14,6 +14,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound"
+	"github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
@@ -57,6 +58,16 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		return
 	}
 	normalized.Stream = true
+
+	policyRes, err := policy.Validate(normalized, h.outbound.Capabilities(), policy.ModeLenient)
+	if err != nil {
+		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
+		return
+	}
+	if dropped := policyRes.DroppedParamsHeaderValue(); dropped != "" {
+		c.Writer.Header().Set(policy.DroppedParamsHeader, dropped)
+	}
 
 	headerRequest := c.Request.Clone(ctx)
 	headerRequest.Body = http.NoBody
