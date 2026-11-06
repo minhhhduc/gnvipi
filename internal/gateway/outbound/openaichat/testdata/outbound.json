@@ -73,13 +73,49 @@
   ],
   "streams": [
     {
-      "name": "unsupported",
+      "name": "openai-text",
       "response": {
         "status": 200,
         "headers": {"Content-Type": ["text/event-stream"]},
-        "body": "stream.sse"
+        "body": "stream.openai-text.sse"
       },
-      "error": "error.unsupported-stream.ir.json"
+      "ir": "stream.openai-text.ir.json"
+    },
+    {
+      "name": "openrouter-usage",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.openrouter-usage.sse"
+      },
+      "ir": "stream.openrouter-usage.ir.json"
+    },
+    {
+      "name": "deepseek-reasoning",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.deepseek-reasoning.sse"
+      },
+      "ir": "stream.deepseek-reasoning.ir.json"
+    },
+    {
+      "name": "instream-error",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["text/event-stream"]},
+        "body": "stream.instream-error.sse"
+      },
+      "ir": "stream.instream-error.ir.json"
+    },
+    {
+      "name": "upstream-unauthorized",
+      "response": {
+        "status": 401,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "error.unauthorized.json"
+      },
+      "error": "error.unauthorized.ir.json"
     }
   ]
 }

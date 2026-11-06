@@ -107,7 +107,7 @@ func TestConfiguredRequestUsesNormalizedRoutingAndContent(t *testing.T) {
 	}
 }
 
-func TestResponseAndRejectedStreamPreserveCallerBodyOwnership(t *testing.T) {
+func TestResponseAndStreamPreserveBodyOwnership(t *testing.T) {
 	out := openaichat.New()
 	responseBody := &trackedBody{Reader: strings.NewReader(`{"id":"chatcmpl_owned","object":"chat.completion","model":"vendor/model","choices":[{"index":0,"message":{"role":"assistant","content":"owned"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)}
 	response := &http.Response{StatusCode: http.StatusOK, Body: responseBody, Header: make(http.Header)}
@@ -122,20 +122,36 @@ func TestResponseAndRejectedStreamPreserveCallerBodyOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if !out.Capabilities().Streaming {
+		t.Fatal("adapter does not advertise streaming")
+	}
+
 	streamBody := &trackedBody{Reader: strings.NewReader("data: [DONE]\n\n")}
 	stream, err := out.ParseStream(t.Context(), &http.Response{StatusCode: http.StatusOK, Body: streamBody})
-	var gatewayError *gwerr.Error
-	if stream != nil || !errors.As(err, &gatewayError) || gatewayError.Code != "unsupported_feature" || gatewayError.Kind != gwerr.KindInvalidRequest {
-		t.Fatalf("stream=%v error=%v", stream, err)
+	if err != nil {
+		t.Fatalf("ParseStream failed: %v", err)
 	}
 	if streamBody.closed {
-		t.Fatal("ParseStream closed caller-owned body on rejection")
+		t.Fatal("ParseStream closed body before stream.Close()")
 	}
-	if out.Capabilities().Streaming {
-		t.Fatal("adapter advertises unimplemented streaming")
-	}
-	if err := streamBody.Close(); err != nil {
+	if err := stream.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if !streamBody.closed {
+		t.Fatal("stream.Close() did not close stream body")
+	}
+
+	errorBody := &trackedBody{Reader: strings.NewReader(`{"error":{"message":"bad request","type":"invalid_request_error"}}`)}
+	errStream, err := out.ParseStream(t.Context(), &http.Response{StatusCode: http.StatusBadRequest, Body: errorBody})
+	if errStream != nil {
+		t.Fatal("expected nil stream on HTTP 400")
+	}
+	var gatewayError *gwerr.Error
+	if !errors.As(err, &gatewayError) || gatewayError.Kind != gwerr.KindInvalidRequest {
+		t.Fatalf("expected KindInvalidRequest, got %v", err)
+	}
+	if !errorBody.closed {
+		t.Fatal("ParseStream failed to close error response body")
 	}
 }
 

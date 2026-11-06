@@ -27,13 +27,18 @@ func New() *Adapter { return &Adapter{} }
 func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolOpenAIChat }
 
 func (*Adapter) Capabilities() adapter.Capabilities {
-	return adapter.Capabilities{Images: true, Reasoning: true, StructuredOutput: true, TopK: true}
+	return adapter.Capabilities{
+		Streaming:        true,
+		Images:           true,
+		Reasoning:        true,
+		StructuredOutput: true,
+		TopK:             true,
+	}
 }
 
-// ParseStream rejects streaming truthfully without reading or closing the
-// caller-owned response body. OpenAI Chat SSE parsing is implemented by #24.
-func (*Adapter) ParseStream(context.Context, *http.Response) (adapter.Stream, error) {
-	return nil, unsupported("OpenAI Chat streaming responses are not supported")
+// ParseStream reads an upstream OpenAI Chat SSE response into normalized IR stream events.
+func (*Adapter) ParseStream(ctx context.Context, resp *http.Response) (adapter.Stream, error) {
+	return parseStream(ctx, resp)
 }
 
 func invalid(message string) error {
