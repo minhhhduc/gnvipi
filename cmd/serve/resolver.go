@@ -16,7 +16,11 @@ func (p *modelPrefs) refreshRoutingLocked() error {
 	}
 	resolver := p.resolver
 	if resolver == nil {
-		resolver = &routing.LegacyResolver{}
+		var err error
+		resolver, err = routing.NewRegistryResolver(nil, nil)
+		if err != nil {
+			return err
+		}
 	}
 	var err error
 	if p.providerStore != nil {
@@ -33,7 +37,7 @@ func (p *modelPrefs) refreshRoutingLocked() error {
 
 // modelResolver gives the dispatcher a stable resolver. Admin saves publish
 // full provider policy and mask snapshots before reload callbacks run.
-func (p *modelPrefs) modelResolver() (*routing.LegacyResolver, error) {
+func (p *modelPrefs) modelResolver() (*routing.RegistryResolver, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.resolver == nil {

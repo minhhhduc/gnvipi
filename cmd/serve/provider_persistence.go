@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
@@ -133,6 +134,9 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 			return err
 		}
 		if err := validateLegacyProviderURLs(fromLegacyProviders(gatewayprovider.LegacyView(file.ProvidersV2))); err != nil {
+			return err
+		}
+		if err := routing.CheckCollisions(file.ProvidersV2); err != nil {
 			return err
 		}
 		sort.Strings(file.MasksID)
