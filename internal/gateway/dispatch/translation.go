@@ -21,6 +21,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
@@ -148,6 +149,9 @@ func newTranslation(p *provider.Provider, upstreamModel string, base adapter.Out
 	if err != nil {
 		return nil, err
 	}
+	transClient := *client
+	transClient.Transport = reliability.ForProvider(&snapshot, client.Transport)
+	client = &transClient
 	return &translation{provider: snapshot, model: upstreamModel, outbound: configured, policy: policy, client: client, recorder: options.Recorder, policyConfig: policyConfig}, nil
 }
 
@@ -230,6 +234,14 @@ func (h *translation) Serve(c *gin.Context, body []byte, inbound adapter.Inbound
 		outgoing = outgoing.WithContext(ctx)
 	}
 	if err := h.policy.ValidateRequest(outgoing); err != nil {
+		if outgoing.Body != nil {
+			err = errors.Join(err, outgoing.Body.Close())
+		}
+		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
+		return
+	}
+	if err := reliability.MakeReplayable(outgoing); err != nil {
 		if outgoing.Body != nil {
 			err = errors.Join(err, outgoing.Body.Close())
 		}

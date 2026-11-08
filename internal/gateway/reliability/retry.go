@@ -827,3 +827,41 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, false, err
 	})
 }
+
+// CloseIdleConnections closes any idle connections on Base if it implements
+// a CloseIdleConnections method.
+func (t *Transport) CloseIdleConnections() {
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if ci, ok := base.(interface{ CloseIdleConnections() }); ok {
+		ci.CloseIdleConnections()
+	}
+}
+
+// ForProvider wraps base with a retry Transport customized for the given provider.
+// If base is nil, http.DefaultTransport is used.
+func ForProvider(prov *provider.Provider, base http.RoundTripper) *Transport {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if t, ok := base.(*Transport); ok {
+		base = t.Base
+		if base == nil {
+			base = http.DefaultTransport
+		}
+	}
+	return &Transport{
+		Base:   base,
+		Policy: DefaultPolicy().ForProvider(prov),
+	}
+}
+
+// DefaultRetryConfig returns standard gateway default retry settings.
+func DefaultRetryConfig() Policy {
+	return DefaultPolicy()
+}
+
+// RetryOptions is an alias for Policy.
+type RetryOptions = Policy

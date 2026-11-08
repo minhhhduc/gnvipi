@@ -22,6 +22,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/gatewaytest"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
 
@@ -161,7 +162,7 @@ func TestRelayUpstreamStatusesAndCredentialSafeDiagnostics(t *testing.T) {
 			const safe = " {\"error\":{\"message\":\"provider detail\"},\"large\":9007199254740993}\n"
 			u.Script(gatewaytest.RouteChat,
 				gatewaytest.Step{Status: status, Body: safe, RetryAfter: "13"},
-				gatewaytest.Step{Status: status, Body: `{"error":{"message":"echo \u006fpaque-relay-provider-credential","headers":{"Authorization":"Bearer unregistered-secret"}}}`},
+				gatewaytest.Step{Status: status, Body: `{"error":{"message":"echo \u006fpaque-relay-provider-credential","headers":{"Authorization":"Bearer unregistered-secret"}}}`, RetryAfter: "13"},
 			)
 			recorder := &recording{}
 			h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
@@ -343,8 +344,7 @@ func TestRelayTransportErrorsUseInboundProtocolShape(t *testing.T) {
 	} {
 		t.Run(string(tc.protocol), func(t *testing.T) {
 			u := gatewaytest.New(t)
-			// A disconnected upstream must not trigger retries.
-			u.Script(tc.path, gatewaytest.Step{Disconnect: true})
+			u.Script(tc.path, gatewaytest.Step{Disconnect: true}, gatewaytest.Step{Disconnect: true})
 			recorder := &recording{}
 			h := newTestRelay(t, u.URL(), tc.protocol, recorder)
 			w := httptest.NewRecorder()
@@ -362,7 +362,7 @@ func TestRelayTransportErrorsUseInboundProtocolShape(t *testing.T) {
 			if w.Code != http.StatusBadGateway || body.Error.Message == "" || body.Error.Type == "" || tc.protocol == ir.ProtocolAnthropicMessages && body.Type != "error" {
 				t.Fatalf("transport error = %d %s", w.Code, w.Body.String())
 			}
-			if len(u.RequestsFor(tc.path)) != 1 || len(recorder.completions()) != 1 || recorder.completions()[0].Err == nil {
+			if len(u.RequestsFor(tc.path)) != 2 || len(recorder.completions()) != 1 || recorder.completions()[0].Err == nil {
 				t.Fatal("transport failure retried or accounted incorrectly")
 			}
 		})
@@ -664,4 +664,148 @@ func TestRelayGuardedDialerHonorsCallerCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("caller cancellation did not interrupt proxy negotiation")
 	}
+}
+
+func TestRelayRetryPipeline(t *testing.T) {
+	initialBackoff := time.Millisecond
+	disableJitter := true
+	reliability.RegisterProviderRetry("relay-provider", reliability.ProviderRetryConfig{
+		InitialBackoff: &initialBackoff,
+		DisableJitter:  &disableJitter,
+	})
+	defer reliability.ClearProviderRetries()
+
+	t.Run("Transient upstream errors retry and succeed", func(t *testing.T) {
+		for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+			t.Run(http.StatusText(status), func(t *testing.T) {
+				u := gatewaytest.New(t)
+				const successBody = `{"id":"chat-1","choices":[{"message":{"content":"success"}}]}`
+				u.Script(gatewaytest.RouteChat,
+					gatewaytest.Step{Status: status, Body: `{"error":{"message":"temporary failure"}}`},
+					gatewaytest.Step{Status: http.StatusOK, Body: successBody},
+				)
+				recorder := &recording{}
+				h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
+				w := httptest.NewRecorder()
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(`{"model":"alias","messages":[{"role":"user","content":"hi"}]}`))
+				h.ServeHTTP(w, req)
+
+				if w.Code != http.StatusOK {
+					t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
+				}
+				if w.Body.String() != successBody {
+					t.Fatalf("expected body %q, got %q", successBody, w.Body.String())
+				}
+				requests := u.RequestsFor(gatewaytest.RouteChat)
+				if len(requests) != 2 {
+					t.Fatalf("expected 2 requests to upstream, got %d", len(requests))
+				}
+			})
+		}
+	})
+
+	t.Run("Body replay across attempts", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		const clientReq = `{"model":"alias","messages":[{"role":"user","content":"replay-test"}]}`
+		const successBody = `{"choices":[{"message":{"content":"replayed"}}]}`
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusBadGateway, Body: `{"error":"502"}`},
+			gatewaytest.Step{Status: http.StatusOK, Body: successBody},
+		)
+		recorder := &recording{}
+		h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(clientReq))
+		h.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", w.Code)
+		}
+		requests := u.RequestsFor(gatewaytest.RouteChat)
+		if len(requests) != 2 {
+			t.Fatalf("expected 2 requests, got %d", len(requests))
+		}
+		var firstBody, secondBody map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(requests[0].Body), &firstBody); err != nil {
+			t.Fatalf("unmarshal request 0: %v", err)
+		}
+		if err := json.Unmarshal([]byte(requests[1].Body), &secondBody); err != nil {
+			t.Fatalf("unmarshal request 1: %v", err)
+		}
+		if string(firstBody["messages"]) != string(secondBody["messages"]) {
+			t.Fatalf("body replay mismatch: %s vs %s", requests[0].Body, requests[1].Body)
+		}
+	})
+
+	t.Run("Body replay with ServeBuffered", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		const rawBytes = `{"model":"alias","messages":[{"role":"user","content":"buffered-replay"}]}`
+		const successBody = `{"choices":[{"message":{"content":"buffered-ok"}}]}`
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusBadGateway, Body: `{"error":"502"}`},
+			gatewaytest.Step{Status: http.StatusOK, Body: successBody},
+		)
+		recorder := &recording{}
+		h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, nil)
+		h.ServeBuffered(w, req, []byte(rawBytes))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", w.Code)
+		}
+		requests := u.RequestsFor(gatewaytest.RouteChat)
+		if len(requests) != 2 {
+			t.Fatalf("expected 2 requests, got %d", len(requests))
+		}
+	})
+
+	t.Run("Respects client context cancellation", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel() // Cancel context before request execution
+
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusBadGateway, Body: `{"error":"never reached"}`},
+		)
+		recorder := &recording{}
+		h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, gatewaytest.RouteChat, strings.NewReader(`{"model":"alias"}`))
+		h.ServeHTTP(w, req)
+
+		requests := u.RequestsFor(gatewaytest.RouteChat)
+		if len(requests) != 0 {
+			t.Fatalf("expected 0 requests due to canceled context, got %d", len(requests))
+		}
+		calls := recorder.completions()
+		if len(calls) != 1 || !errors.Is(calls[0].Err, context.Canceled) {
+			t.Fatalf("expected completion with context.Canceled, got %+v", calls)
+		}
+	})
+
+	t.Run("Retry-After exceeding MaxRetryAfter returns immediately without retry", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		const rateLimitBody = `{"error":{"message":"rate limit exceeded"}}`
+		// Script one step with Retry-After: 60 (exceeds default MaxRetryAfter 5s)
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusTooManyRequests, Body: rateLimitBody, RetryAfter: "60"},
+		)
+		recorder := &recording{}
+		h := newTestRelay(t, u.URL(), ir.ProtocolOpenAIChat, recorder)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(`{"model":"alias"}`))
+		h.ServeHTTP(w, req)
+
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("expected 429, got %d", w.Code)
+		}
+		requests := u.RequestsFor(gatewaytest.RouteChat)
+		if len(requests) != 1 {
+			t.Fatalf("expected exactly 1 request (no retry), got %d", len(requests))
+		}
+		if w.Header().Get("Retry-After") != "60" {
+			t.Fatalf("expected Retry-After header 60, got %s", w.Header().Get("Retry-After"))
+		}
+	})
 }
