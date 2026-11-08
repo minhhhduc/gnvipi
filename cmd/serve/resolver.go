@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 )
 
@@ -17,7 +19,9 @@ func (p *modelPrefs) refreshRoutingLocked() error {
 	resolver := p.resolver
 	if resolver == nil {
 		var err error
-		resolver, err = routing.NewRegistryResolver(nil, nil)
+		resolver, err = routing.NewRegistryResolver(nil, nil, routing.WithWarningFunc(func(msg string) {
+			log.Printf("routing: %s", msg)
+		}))
 		if err != nil {
 			return err
 		}
