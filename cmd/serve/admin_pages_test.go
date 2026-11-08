@@ -338,3 +338,26 @@ func TestAdminModelsPage_CRUDAndTestConnectionHandlers(t *testing.T) {
 		t.Fatalf("deleted provider still present in HTML")
 	}
 }
+
+func TestAdminPages_ReviewCommentsFixes(t *testing.T) {
+	// Comment 1: sws in adminBaseScript must be scoped to .row .sw so provider toggles are not included
+	if !strings.Contains(adminBaseScript, "const sws = [...document.querySelectorAll('.row .sw')];") {
+		t.Fatalf("expected adminBaseScript to query '.row .sw', got script:\n%s", adminBaseScript)
+	}
+
+	// Comment 2: Wildcard alias keeping upstream as empty string rather than defaulting to alias
+	if !strings.Contains(adminProviderScript, "alias.endsWith('/*') ? upstream : (upstream || alias)") {
+		t.Fatalf("expected adminProviderScript to preserve upstream for wildcard alias")
+	}
+
+	// Comment 3: Existing provider configuration preservation on edit
+	if !strings.Contains(adminProviderScript, "payload = JSON.parse(JSON.stringify(existing))") {
+		t.Fatalf("expected adminProviderScript to clone existing provider on edit")
+	}
+	if !strings.Contains(adminProviderScript, "auth.header_name = existing.auth.header_name") {
+		t.Fatalf("expected adminProviderScript to preserve existing.auth.header_name")
+	}
+	if !strings.Contains(adminProviderScript, "JSON.parse(JSON.stringify(existingModel))") {
+		t.Fatalf("expected adminProviderScript to preserve existing model mapping fields")
+	}
+}

@@ -423,14 +423,33 @@ func handleAdminAPITestProvider(c *gin.Context, p *modelPrefs) {
 			if overlay.Protocol != "" {
 				target.Protocol = overlay.Protocol
 			}
+			if overlay.Auth.Scheme == "api-key" {
+				overlay.Auth.Scheme = gatewayprovider.AuthAPIKey
+			}
 			if overlay.Auth.Scheme != "" {
 				target.Auth.Scheme = overlay.Auth.Scheme
 			}
-			if overlay.Auth.Key != "" && !isRedactedKey(overlay.Auth.Key) {
-				target.Auth.Key = overlay.Auth.Key
-			}
-			if overlay.Auth.KeyEnv != "" {
-				target.Auth.KeyEnv = overlay.Auth.KeyEnv
+			if overlay.Auth.Scheme == gatewayprovider.AuthNone {
+				target.Auth.Key = ""
+				target.Auth.KeyEnv = ""
+				target.Auth.KeyRef = ""
+			} else {
+				hasKey := overlay.Auth.Key != "" && !isRedactedKey(overlay.Auth.Key)
+				hasKeyEnv := overlay.Auth.KeyEnv != ""
+				switch {
+				case hasKey && hasKeyEnv:
+					target.Auth.Key = overlay.Auth.Key
+					target.Auth.KeyEnv = overlay.Auth.KeyEnv
+					target.Auth.KeyRef = ""
+				case hasKeyEnv:
+					target.Auth.KeyEnv = overlay.Auth.KeyEnv
+					target.Auth.Key = ""
+					target.Auth.KeyRef = ""
+				case hasKey:
+					target.Auth.Key = overlay.Auth.Key
+					target.Auth.KeyEnv = ""
+					target.Auth.KeyRef = ""
+				}
 			}
 			if overlay.Auth.HeaderName != "" {
 				target.Auth.HeaderName = overlay.Auth.HeaderName

@@ -40,7 +40,7 @@ if (searchForm) {
   searchForm.addEventListener('submit', e => { e.preventDefault(); saveSearch(); });
 }
 const rows = [...document.querySelectorAll('.row')];
-const sws = [...document.querySelectorAll('.sw')];
+const sws = [...document.querySelectorAll('.row .sw')];
 const counts = document.getElementById('counts');
 const toastEl = document.getElementById('toast');
 let toastTimer;

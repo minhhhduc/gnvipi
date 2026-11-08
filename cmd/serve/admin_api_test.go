@@ -1155,3 +1155,98 @@ func TestAdminAPI_ProviderV2EditorFeaturesAndDirectTesting(t *testing.T) {
 		t.Fatalf("POST /admin/api/providers/v2-full-featured/test with overlay = %d: %s", res.Code, res.Body.String())
 	}
 }
+
+func TestAdminAPI_TestConnectionOverlayAuthSwitching(t *testing.T) {
+	p := setupTestPrefs(t)
+	oldPrefs := prefs
+	prefs = p
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	engine := testAdminEngine(t, p, "", 0)
+
+	// Create provider with literal key
+	provPayload := map[string]any{
+		"id":       "test-auth-switch",
+		"name":     "Test Auth Switch",
+		"base_url": "https://api.switchtest.example/v1",
+		"protocol": "openai-chat",
+		"auth": map[string]any{
+			"scheme": "bearer",
+			"key":    "sk-initial-secret-key",
+		},
+		"enabled": true,
+	}
+	res := makeRequest(t, engine, http.MethodPost, "/admin/api/providers", provPayload, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("POST /admin/api/providers = %d, want 201: %s", res.Code, res.Body.String())
+	}
+
+	// 1. Overlay changes scheme to "none" -> target.Auth.Key / KeyEnv / KeyRef must be cleared
+	// It should NOT fail validation with "auth.key: must be empty when auth.scheme is none".
+	overlayNone := map[string]any{
+		"auth": map[string]any{
+			"scheme": "none",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test-auth-switch/test", overlayNone, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /admin/api/providers/test-auth-switch/test overlay scheme=none failed: %d, body: %s", res.Code, res.Body.String())
+	}
+
+	// 2. Overlay changes to KeyEnv -> target.Auth.Key must be cleared
+	// It should NOT fail validation with "set either auth.key or auth.key_env, not both".
+	t.Setenv("TEST_AUTH_SWITCH_ENV", "sk-from-env-12345")
+	overlayKeyEnv := map[string]any{
+		"auth": map[string]any{
+			"scheme":  "bearer",
+			"key_env": "TEST_AUTH_SWITCH_ENV",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test-auth-switch/test", overlayKeyEnv, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /admin/api/providers/test-auth-switch/test overlay key_env failed: %d, body: %s", res.Code, res.Body.String())
+	}
+
+	// 3. Switch stored provider to use KeyEnv
+	updatePayload := map[string]any{
+		"id":       "test-auth-switch",
+		"name":     "Test Auth Switch",
+		"base_url": "https://api.switchtest.example/v1",
+		"protocol": "openai-chat",
+		"auth": map[string]any{
+			"scheme":  "bearer",
+			"key_env": "TEST_AUTH_SWITCH_ENV",
+		},
+		"enabled": true,
+	}
+	res = makeRequest(t, engine, http.MethodPut, "/admin/api/providers/test-auth-switch", updatePayload, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("PUT /admin/api/providers/test-auth-switch failed: %d, body: %s", res.Code, res.Body.String())
+	}
+
+	// 4. Overlay from KeyEnv provider with a new literal Key -> target.Auth.KeyEnv must be cleared
+	// It should NOT fail validation with "set either auth.key or auth.key_env, not both".
+	overlayKey := map[string]any{
+		"auth": map[string]any{
+			"scheme": "bearer",
+			"key":    "sk-new-literal-secret",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test-auth-switch/test", overlayKey, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /admin/api/providers/test-auth-switch/test overlay literal key failed: %d, body: %s", res.Code, res.Body.String())
+	}
+
+	// 5. Overlay with both Key and KeyEnv provided simultaneously -> validation must reject with 400
+	overlayBoth := map[string]any{
+		"auth": map[string]any{
+			"scheme":  "bearer",
+			"key":     "sk-literal",
+			"key_env": "TEST_AUTH_SWITCH_ENV",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test-auth-switch/test", overlayBoth, nil)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when overlay specifies both key and key_env, got %d", res.Code)
+	}
+}

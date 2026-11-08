@@ -207,8 +207,9 @@ if (pCancelBtn) {
 }
 
 function collectFormData() {
-  const isEdit = !!(pEditId && pEditId.value);
-  const id = pIdInput ? pIdInput.value.trim() : '';
+  const editId = pEditId ? pEditId.value.trim() : '';
+  const isEdit = !!editId;
+  const id = isEdit ? editId : (pIdInput ? pIdInput.value.trim() : '');
   const name = pNameInput ? pNameInput.value.trim() : '';
   const baseUrl = pBaseUrlInput ? pBaseUrlInput.value.trim() : '';
   const protocol = pProtocolInput ? pProtocolInput.value : 'openai-chat';
@@ -224,6 +225,11 @@ function collectFormData() {
     if (keyEnv) auth.key_env = keyEnv;
   }
 
+  const existing = isEdit ? providersV2Data.find(x => x.id === id) : null;
+  if (isEdit && existing && existing.auth && existing.auth.header_name) {
+    auth.header_name = existing.auth.header_name;
+  }
+
   const models = [];
   if (mmList) {
     mmList.querySelectorAll('.mm-row').forEach(r => {
@@ -237,9 +243,23 @@ function collectFormData() {
       const fbStr = fbInput ? fbInput.value.trim() : '';
       const fallbacks = fbStr ? fbStr.split(',').map(s => s.trim()).filter(Boolean) : [];
       if (alias) {
-        const item = { alias: alias, upstream_model: upstream || alias };
-        if (hidden) item.hidden = true;
-        if (fallbacks.length > 0) item.fallbacks = fallbacks;
+        const upstreamModel = alias.endsWith('/*') ? upstream : (upstream || alias);
+        const existingModel = (isEdit && existing && Array.isArray(existing.models))
+          ? existing.models.find(m => m.alias === alias)
+          : null;
+        const item = existingModel ? JSON.parse(JSON.stringify(existingModel)) : {};
+        item.alias = alias;
+        item.upstream_model = upstreamModel;
+        if (hidden) {
+          item.hidden = true;
+        } else {
+          delete item.hidden;
+        }
+        if (fallbacks.length > 0) {
+          item.fallbacks = fallbacks;
+        } else {
+          delete item.fallbacks;
+        }
         models.push(item);
       }
     });
@@ -257,32 +277,49 @@ function collectFormData() {
   }
 
   const maxConcurrency = pMaxConcurrencyInput ? (parseInt(pMaxConcurrencyInput.value, 10) || 0) : 0;
-  const timeouts = {};
   const connSec = pTimeoutConnectInput ? secToNs(pTimeoutConnectInput.value) : 0;
   const idleSec = pTimeoutIdleInput ? secToNs(pTimeoutIdleInput.value) : 0;
-  if (connSec > 0) timeouts.connect = connSec;
-  if (idleSec > 0) timeouts.idle = idleSec;
-
   const queueSec = pTimeoutQueueInput ? secToNs(pTimeoutQueueInput.value) : 0;
   const tls = (pTlsInput && pTlsInput.value) ? pTlsInput.value : 'default';
 
-  const existing = providersV2Data.find(x => x.id === id);
-  const enabled = existing ? existing.enabled : true;
-
-  const payload = {
-    id: id,
-    name: name,
-    base_url: baseUrl,
-    protocol: protocol,
-    auth: auth,
-    models: models,
-    headers: Object.keys(headers).length > 0 ? headers : undefined,
-    max_concurrency: maxConcurrency,
-    timeouts: (timeouts.connect || timeouts.idle) ? timeouts : undefined,
-    queue_timeout: queueSec,
-    tls: tls,
-    enabled: enabled,
-  };
+  let payload;
+  if (isEdit && existing) {
+    payload = JSON.parse(JSON.stringify(existing));
+    payload.id = id;
+    payload.name = name;
+    payload.base_url = baseUrl;
+    payload.protocol = protocol;
+    payload.auth = auth;
+    payload.models = models;
+    payload.headers = Object.keys(headers).length > 0 ? headers : undefined;
+    payload.max_concurrency = maxConcurrency;
+    payload.queue_timeout = queueSec;
+    payload.tls = tls;
+    if (!payload.timeouts) payload.timeouts = {};
+    if (connSec > 0) payload.timeouts.connect = connSec;
+    else delete payload.timeouts.connect;
+    if (idleSec > 0) payload.timeouts.idle = idleSec;
+    else delete payload.timeouts.idle;
+    if (Object.keys(payload.timeouts).length === 0) delete payload.timeouts;
+  } else {
+    const timeouts = {};
+    if (connSec > 0) timeouts.connect = connSec;
+    if (idleSec > 0) timeouts.idle = idleSec;
+    payload = {
+      id: id,
+      name: name,
+      base_url: baseUrl,
+      protocol: protocol,
+      auth: auth,
+      models: models,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      max_concurrency: maxConcurrency,
+      timeouts: (timeouts.connect || timeouts.idle) ? timeouts : undefined,
+      queue_timeout: queueSec,
+      tls: tls,
+      enabled: true,
+    };
+  }
   return { isEdit, id, payload };
 }
 
