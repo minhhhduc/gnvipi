@@ -90,6 +90,13 @@ type Provider struct {
 	// ExtraBody shallow-merges top-level JSON fields after adapter encoding.
 	// Config wins collisions, except model and stream are forbidden overrides.
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
+	// MaxConcurrency bounds concurrent in-flight requests for this provider.
+	// Zero or negative means unbounded concurrency.
+	MaxConcurrency int `json:"max_concurrency,omitempty"`
+	// QueueTimeout is the longest duration a request will wait for an available
+	// concurrency token before returning a 503 Overloaded error. A value <= 0
+	// rejects immediately when all concurrency slots are full.
+	QueueTimeout time.Duration `json:"queue_timeout,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.
@@ -179,6 +186,7 @@ func (p *Provider) ValidateWithPolicy(policy URLPolicy) error {
 	p.validateForwardHeaders(add)
 	p.validateModels(add)
 	p.validateTimeouts(add)
+	p.validateConcurrency(add)
 	p.validateExtensions(add)
 
 	if len(errs) > 0 {
@@ -279,6 +287,15 @@ func (p *Provider) validateTimeouts(add func(field, problem string)) {
 		if t.value < 0 {
 			add(t.field, "must not be negative")
 		}
+	}
+}
+
+func (p *Provider) validateConcurrency(add func(field, problem string)) {
+	if p.MaxConcurrency < 0 {
+		add("max_concurrency", "must not be negative")
+	}
+	if p.QueueTimeout < 0 {
+		add("queue_timeout", "must not be negative")
 	}
 }
 
