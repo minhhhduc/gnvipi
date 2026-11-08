@@ -190,21 +190,42 @@ func adminSameOrigin(r *http.Request) bool {
 	if sites, present := r.Header["Sec-Fetch-Site"]; present && (len(sites) != 1 || sites[0] != "same-origin") {
 		return false
 	}
-	origins, present := r.Header["Origin"]
-	if !present {
-		// Non-browser API clients do not send browser provenance headers.
-		return true
-	}
-	if len(origins) != 1 {
-		return false
-	}
-	origin, valid := adminOrigin(origins[0])
 	scheme := "http"
 	if adminTLSRequest(r) {
 		scheme = "https"
 	}
 	target, validTarget := adminOrigin(scheme + "://" + r.Host)
-	return valid && validTarget && origin == target
+	if !validTarget {
+		return false
+	}
+
+	origins, hasOrigin := r.Header["Origin"]
+	if hasOrigin {
+		if len(origins) != 1 {
+			return false
+		}
+		origin, valid := adminOrigin(origins[0])
+		if !valid || origin != target {
+			return false
+		}
+	}
+
+	referers, hasReferer := r.Header["Referer"]
+	if hasReferer {
+		if len(referers) != 1 {
+			return false
+		}
+		refURL, err := url.Parse(referers[0])
+		if err != nil || refURL.Scheme == "" || refURL.Host == "" {
+			return false
+		}
+		refOrigin, valid := adminOrigin(refURL.Scheme + "://" + refURL.Host)
+		if !valid || refOrigin != target {
+			return false
+		}
+	}
+
+	return true
 }
 
 func adminTokenMatches(token string, expected [32]byte) bool {

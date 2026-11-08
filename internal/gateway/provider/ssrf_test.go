@@ -16,7 +16,7 @@ import (
 )
 
 func TestURLPolicySaveAndDialBoundaries(t *testing.T) {
-	for _, raw := range []string{"http://169.254.169.254", "https://169.254.1.2", "http://[fe80::1]", "http://[::ffff:169.254.169.254]", "http://metadata.google.internal.", "http://u:p@example.com", "ftp://example.com", "http:///missing"} {
+	for _, raw := range []string{"http://169.254.169.254", "https://169.254.1.2", "http://[fe80::1]", "http://[fd00:ec2::254]", "http://[::ffff:169.254.169.254]", "http://metadata.google.internal.", "http://u:p@example.com", "ftp://example.com", "http:///missing"} {
 		t.Run(raw, func(t *testing.T) {
 			err := (URLPolicy{}).Validate(raw)
 			var field *FieldError
@@ -30,7 +30,7 @@ func TestURLPolicySaveAndDialBoundaries(t *testing.T) {
 			t.Fatalf("legitimate upstream %s rejected: %v", raw, err)
 		}
 	}
-	for _, address := range []string{"169.254.169.254:80", "[fe80::1]:80", "[::ffff:169.254.169.254]:80"} {
+	for _, address := range []string{"169.254.169.254:80", "[fe80::1]:80", "[fd00:ec2::254]:80", "[::ffff:169.254.169.254]:80"} {
 		if err := (URLPolicy{}).Control("tcp", address, nil); err == nil {
 			t.Fatalf("unsafe resolved dial %s accepted", address)
 		}

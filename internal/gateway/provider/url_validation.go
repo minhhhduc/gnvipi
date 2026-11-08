@@ -94,9 +94,11 @@ func (p URLPolicy) checkHost(host string) error {
 	return nil
 }
 
+var awsIPv6Metadata = netip.MustParseAddr("fd00:ec2::254")
+
 func (p URLPolicy) checkIP(addr netip.Addr) error {
 	addr = addr.Unmap()
-	local := addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+	local := addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr == awsIPv6Metadata
 	if local && (!p.AllowUnsafe || p.DenyPrivate) {
 		return errors.New("link-local or metadata upstream is forbidden")
 	}
