@@ -285,6 +285,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		result.Tools = append(result.Tools, ir.Tool{Name: tool.Function.Name, Description: tool.Function.Description, Schema: tool.Function.Parameters})
 	}
 	if len(result.Tools) == 0 && len(wire.Functions) > 0 {
+		delete(extensions, "functions")
 		for _, fn := range wire.Functions {
 			if fn.Name == "" || (!absentJSON(fn.Parameters) && !jsonObject(fn.Parameters)) {
 				return nil, invalidChat("functions requires a name and object parameters")
@@ -319,6 +320,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 			}
 		}
 	} else if !absentJSON(wire.FunctionCall) {
+		delete(extensions, "function_call")
 		var mode string
 		if err := json.Unmarshal(wire.FunctionCall, &mode); err == nil {
 			result.ToolChoice = &ir.ToolChoice{}
@@ -341,6 +343,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		}
 	}
 	if wire.ParallelToolCalls != nil {
+		result.ParallelToolCalls = wire.ParallelToolCalls
 		if result.ToolChoice == nil && absentJSON(wire.ToolChoice) && absentJSON(wire.FunctionCall) {
 			result.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
 		}

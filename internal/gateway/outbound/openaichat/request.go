@@ -146,7 +146,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 
 func normalizedRequestField(name string) bool {
 	switch name {
-	case "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "temperature", "top_p", "top_k", "stop", "max_tokens", "max_completion_tokens", "seed", "n", "stream", "stream_options", "response_format", "reasoning", "reasoning_effort", "user":
+	case "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "temperature", "top_p", "top_k", "stop", "max_tokens", "max_completion_tokens", "seed", "n", "stream", "stream_options", "response_format", "reasoning", "reasoning_effort", "user":
 		return true
 	default:
 		return false
@@ -195,29 +195,51 @@ func encodeMessages(request *ir.Request, instructionRole ir.InstructionRole) ([]
 		messages = append(messages, chatMessage{Role: string(instructionRole), Content: content})
 	}
 	for i := range request.Messages {
-		encoded, err := encodeMessage(&request.Messages[i])
+		encodedList, err := encodeMessage(&request.Messages[i])
 		if err != nil {
 			return nil, invalid(fmt.Sprintf("OpenAI Chat message %d: %s", i, err))
 		}
-		messages = append(messages, encoded)
+		for _, enc := range encodedList {
+			if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" && enc.Role == "assistant" {
+				prev := &messages[len(messages)-1]
+				prev.ToolCalls = append(prev.ToolCalls, enc.ToolCalls...)
+				if prev.Content == nil {
+					prev.Content = enc.Content
+				} else if enc.Content != nil {
+					prevStr, ok1 := prev.Content.(string)
+					encStr, ok2 := enc.Content.(string)
+					if ok1 && ok2 {
+						prev.Content = prevStr + "\n" + encStr
+					}
+				}
+				if enc.ReasoningContent != "" {
+					if prev.ReasoningContent != "" {
+						prev.ReasoningContent += "\n" + enc.ReasoningContent
+					} else {
+						prev.ReasoningContent = enc.ReasoningContent
+					}
+				}
+			} else {
+				messages = append(messages, enc)
+			}
+		}
 	}
 	return messages, nil
 }
 
-func encodeMessage(message *ir.Message) (chatMessage, error) {
-	encoded := chatMessage{Role: string(message.Role)}
+func encodeMessage(message *ir.Message) ([]chatMessage, error) {
 	switch message.Role {
 	case ir.RoleUser:
 		content, err := encodeVisibleContent(message.Content, true)
 		if err != nil {
-			return encoded, err
+			return nil, err
 		}
 		if content == nil {
-			return encoded, fmt.Errorf("user message has no content")
+			return nil, fmt.Errorf("user message has no content")
 		}
-		encoded.Content = content
-		return encoded, nil
+		return []chatMessage{{Role: string(ir.RoleUser), Content: content}}, nil
 	case ir.RoleAssistant:
+		encoded := chatMessage{Role: string(ir.RoleAssistant)}
 		visible := make([]ir.Block, 0, len(message.Content))
 		var reasoning bytes.Buffer
 		for _, block := range message.Content {
@@ -226,49 +248,58 @@ func encodeMessage(message *ir.Message) (chatMessage, error) {
 				visible = append(visible, block)
 			case ir.BlockReasoning:
 				if block.Reasoning == nil {
-					return encoded, fmt.Errorf("reasoning block has no payload")
+					return nil, fmt.Errorf("reasoning block has no payload")
 				}
 				reasoning.WriteString(block.Reasoning.Content)
 			case ir.BlockToolUse:
 				if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
-					return encoded, fmt.Errorf("tool use requires an ID and name")
+					return nil, fmt.Errorf("tool use requires an ID and name")
 				}
 				arguments := encodeToolArguments(block.ToolUse.Input)
 				encoded.ToolCalls = append(encoded.ToolCalls, chatToolCall{ID: block.ToolUse.ID, Type: "function", Function: chatToolFunction{Name: block.ToolUse.Name, Arguments: arguments}})
 			default:
-				return encoded, fmt.Errorf("block type %q is not valid assistant content", block.Type)
+				return nil, fmt.Errorf("block type %q is not valid assistant content", block.Type)
 			}
 		}
 		content, err := encodeVisibleContent(visible, false)
 		if err != nil {
-			return encoded, err
+			return nil, err
 		}
 		if content == nil && reasoning.Len() == 0 && len(encoded.ToolCalls) == 0 {
-			return encoded, fmt.Errorf("assistant message has no content")
+			return nil, fmt.Errorf("assistant message has no content")
 		}
 		encoded.Content = content
 		encoded.ReasoningContent = reasoning.String()
-		return encoded, nil
+		return []chatMessage{encoded}, nil
 	case ir.RoleTool:
-		if len(message.Content) != 1 || message.Content[0].Type != ir.BlockToolResult || message.Content[0].ToolResult == nil {
-			return encoded, fmt.Errorf("tool message requires exactly one tool result")
+		if len(message.Content) == 0 {
+			return nil, fmt.Errorf("tool message requires at least one tool result")
 		}
-		result := message.Content[0].ToolResult
-		if result.ToolUseID == "" {
-			return encoded, fmt.Errorf("tool result requires a tool call ID")
+		out := make([]chatMessage, 0, len(message.Content))
+		for _, block := range message.Content {
+			if block.Type != ir.BlockToolResult || block.ToolResult == nil {
+				return nil, fmt.Errorf("tool message content must be tool results")
+			}
+			result := block.ToolResult
+			if result.ToolUseID == "" {
+				return nil, fmt.Errorf("tool result requires a tool call ID")
+			}
+			content, err := encodeVisibleContent(result.Content, false)
+			if err != nil {
+				return nil, err
+			}
+			if content == nil {
+				content = ""
+			}
+			out = append(out, chatMessage{
+				Role:       string(ir.RoleTool),
+				Content:    content,
+				ToolCallID: result.ToolUseID,
+			})
 		}
-		content, err := encodeVisibleContent(result.Content, false)
-		if err != nil {
-			return encoded, err
-		}
-		if content == nil {
-			content = ""
-		}
-		encoded.Content = content
-		encoded.ToolCallID = result.ToolUseID
-		return encoded, nil
+		return out, nil
 	default:
-		return encoded, fmt.Errorf("role %q is unsupported", message.Role)
+		return nil, fmt.Errorf("role %q is unsupported", message.Role)
 	}
 }
 
