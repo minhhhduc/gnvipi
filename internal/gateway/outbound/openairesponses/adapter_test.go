@@ -61,7 +61,7 @@ func TestAdapterContract(t *testing.T) {
 	if out == nil || out.Protocol() != ir.ProtocolOpenAIResponses {
 		t.Fatalf("New/Protocol = %#v/%q", out, out.Protocol())
 	}
-	want := adapter.Capabilities{Streaming: true, Images: true, Reasoning: true, StructuredOutput: true}
+	want := adapter.Capabilities{Streaming: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, StructuredOutput: true}
 	if got := out.Capabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, want)
 	}

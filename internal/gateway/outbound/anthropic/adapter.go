@@ -32,7 +32,7 @@ func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolAnthropicMessages }
 func (*Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
 		Streaming: true,
-		Images:    true,
+		Images:    adapter.ImageCapabilityBoth,
 		Reasoning: true,
 		TopK:      true,
 	}

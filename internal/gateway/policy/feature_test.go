@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func allCapabilities() adapter.Capabilities {
 		Streaming:         true,
 		Tools:             true,
 		ParallelToolCalls: true,
-		Images:            true,
+		Images:            adapter.ImageCapabilityBoth,
 		Reasoning:         true,
 		StructuredOutput:  true,
 		TopK:              true,
@@ -353,6 +354,180 @@ func TestFeatureValidationTable(t *testing.T) {
 			},
 			caps:       noCapabilities(),
 			mode:       policy.ModeStrict,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "images capability base64 preserves base64 and drops URL in lenient mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityBase64
+				return c
+			}(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages[0].Content) != 2 {
+					t.Fatalf("expected 2 blocks (text and base64 image), got %d", len(req.Messages[0].Content))
+				}
+				if req.Messages[0].Content[1].Type != ir.BlockImage || !req.Messages[0].Content[1].Image.IsBase64() {
+					t.Fatalf("expected remaining image to be base64, got %+v", req.Messages[0].Content[1])
+				}
+			},
+		},
+		{
+			name: "images capability base64 rejects URL image in strict mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityBase64
+				return c
+			}(),
+			mode:       policy.ModeStrict,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "images capability url preserves URL and drops base64 in lenient mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityURL
+				return c
+			}(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages[0].Content) != 2 {
+					t.Fatalf("expected 2 blocks (text and URL image), got %d", len(req.Messages[0].Content))
+				}
+				if req.Messages[0].Content[1].Type != ir.BlockImage || !req.Messages[0].Content[1].Image.IsURL() {
+					t.Fatalf("expected remaining image to be URL, got %+v", req.Messages[0].Content[1])
+				}
+			},
+		},
+		{
+			name: "images inside tool_result dropped when images capability is none",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_1", []ir.Block{
+							ir.NewTextBlock("result text"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+						}, false)),
+					},
+				}
+			},
+			caps:        noCapabilities(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				tr := req.Messages[0].Content[0].ToolResult
+				if len(tr.Content) != 1 || tr.Content[0].Type != ir.BlockText {
+					t.Fatalf("expected only text block remaining in tool result, got %+v", tr.Content)
+				}
+			},
+		},
+		{
+			name: "image exceeding max image bytes returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")), // 5 bytes decoded
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.MaxImageBytes = 3 // limit to 3 bytes
+				return c
+			}(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "image with invalid media type returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("application/pdf", "aGVsbG8=")),
+					},
+				}
+			},
+			caps:       allCapabilities(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "image with allowed media types override permits matching type",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.AllowedMediaTypes = []string{"image/png"}
+				return c
+			}(),
+			mode: policy.ModeLenient,
+		},
+		{
+			name: "image with allowed media types override rejects unlisted type",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/jpeg", "aGVsbG8=")),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.AllowedMediaTypes = []string{"image/png"}
+				return c
+			}(),
+			mode:       policy.ModeLenient,
 			wantErr:    true,
 			wantStatus: http.StatusBadRequest,
 			wantKind:   gwerr.KindInvalidRequest,
@@ -722,6 +897,80 @@ func TestCapabilityOverridesAndConfig(t *testing.T) {
 	}
 	if resolved := policy.ResolveMode("", ""); resolved != policy.ModeLenient {
 		t.Errorf("ResolveMode = %v, want lenient", resolved)
+	}
+}
+
+func TestAllowedMediaTypesOverride(t *testing.T) {
+	base := adapter.Capabilities{
+		Streaming: true,
+		Images:    adapter.ImageCapabilityBoth,
+	}
+
+	// 1. Verify ApplyOverrides copies AllowedMediaTypes and does not alias the slice
+	types := []string{"image/png", "image/jpeg"}
+	overrides := &policy.CapabilityOverrides{
+		AllowedMediaTypes: types,
+	}
+	merged := policy.ApplyOverrides(base, overrides)
+	if !slices.Equal(merged.AllowedMediaTypes, types) {
+		t.Fatalf("ApplyOverrides AllowedMediaTypes = %v, want %v", merged.AllowedMediaTypes, types)
+	}
+	// Mutation check
+	types[0] = "mutated"
+	if merged.AllowedMediaTypes[0] == "mutated" {
+		t.Fatal("expected ApplyOverrides to clone AllowedMediaTypes slice")
+	}
+
+	// 2. Verify Config.CapabilitiesForProvider propagates cfg.AllowedMediaTypes into caps
+	cfg := &policy.Config{
+		AllowedMediaTypes: []string{"image/png"},
+		ProviderOverrides: map[string]policy.CapabilityOverrides{
+			"custom-provider": {
+				AllowedMediaTypes: []string{"image/webp"},
+			},
+		},
+	}
+
+	// Provider without specific override inherits cfg.AllowedMediaTypes
+	defaultCaps := cfg.CapabilitiesForProvider("default-provider", base)
+	if want := []string{"image/png"}; !slices.Equal(defaultCaps.AllowedMediaTypes, want) {
+		t.Errorf("defaultCaps.AllowedMediaTypes = %v, want %v", defaultCaps.AllowedMediaTypes, want)
+	}
+
+	// Provider with specific override gets its own AllowedMediaTypes
+	customCaps := cfg.CapabilitiesForProvider("custom-provider", base)
+	if want := []string{"image/webp"}; !slices.Equal(customCaps.AllowedMediaTypes, want) {
+		t.Errorf("customCaps.AllowedMediaTypes = %v, want %v", customCaps.AllowedMediaTypes, want)
+	}
+
+	// Base already defining AllowedMediaTypes is preserved when cfg.AllowedMediaTypes is set
+	baseWithTypes := base
+	baseWithTypes.AllowedMediaTypes = []string{"image/gif"}
+	preservedCaps := cfg.CapabilitiesForProvider("default-provider", baseWithTypes)
+	if want := []string{"image/gif"}; !slices.Equal(preservedCaps.AllowedMediaTypes, want) {
+		t.Errorf("preservedCaps.AllowedMediaTypes = %v, want %v", preservedCaps.AllowedMediaTypes, want)
+	}
+
+	// 3. Verify Validate enforces the effective AllowedMediaTypes
+	req := &ir.Request{
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")),
+		},
+	}
+
+	// Should succeed when image/png is allowed
+	if _, err := policy.Validate(req, defaultCaps, policy.ModeLenient); err != nil {
+		t.Fatalf("Validate failed unexpectedly for allowed type: %v", err)
+	}
+
+	// Should fail with 400 when image/png is not in AllowedMediaTypes (customCaps only allows image/webp)
+	_, err := policy.Validate(req, customCaps, policy.ModeLenient)
+	if err == nil {
+		t.Fatal("expected Validate to reject image/png when only image/webp is allowed")
+	}
+	var gwErr *gwerr.Error
+	if !errors.As(err, &gwErr) || gwErr.Status != http.StatusBadRequest {
+		t.Fatalf("expected 400 gwerr.Error, got %v", err)
 	}
 }
 
