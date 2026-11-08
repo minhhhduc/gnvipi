@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -255,5 +256,185 @@ func TestStreamFunctionCallArgumentsDoneWithoutDeltas(t *testing.T) {
 
 	if len(deltas) != 1 || deltas[0] != `{"query":"golang"}` {
 		t.Fatalf("expected 1 delta with arguments, got: %+v", deltas)
+	}
+}
+
+func TestStreamOutputItemDoneToolArgumentsFallback(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_fallback\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_fallback\",\"name\":\"search\"}}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_fallback\",\"name\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"golang\\\"}\"}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback\",\"status\":\"completed\"}}\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+	stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatalf("ParseStream error: %v", err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next error: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d: %+v", len(events), events)
+	}
+
+	if events[0].Type != ir.EventMessageStart {
+		t.Errorf("events[0] want message_start, got %s", events[0].Type)
+	}
+	if events[1].Type != ir.EventBlockStart || events[1].Index != 0 || events[1].Block.ToolUse == nil || events[1].Block.ToolUse.ID != "call_fallback" {
+		t.Errorf("events[1] want block_start for call_fallback, got %+v", events[1])
+	}
+	if events[2].Type != ir.EventBlockDelta || events[2].Index != 0 || events[2].Delta.Type != ir.DeltaToolArguments || events[2].Delta.PartialJSON != `{"query":"golang"}` {
+		t.Errorf("events[2] want tool argument delta, got %+v", events[2])
+	}
+	if events[3].Type != ir.EventBlockStop || events[3].Index != 0 {
+		t.Errorf("events[3] want block_stop at index 0, got %+v", events[3])
+	}
+	if events[4].Type != ir.EventMessageStop || events[4].StopReason != ir.StopToolUse {
+		t.Errorf("events[4] want message_stop with tool_use, got %+v", events[4])
+	}
+}
+
+func TestStreamOutputItemDoneDoesNotDuplicateArgumentsWhenDeltasReceived(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_no_dup\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_dup\",\"name\":\"search\"}}\n\n" +
+		"event: response.function_call_arguments.delta\n" +
+		"data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"query\\\":\\\"golang\\\"}\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_dup\",\"name\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"golang\\\"}\"}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_no_dup\",\"status\":\"completed\"}}\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+	stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatalf("ParseStream error: %v", err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var deltas []string
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next error: %v", err)
+		}
+		if ev.Type == ir.EventBlockDelta && ev.Delta.Type == ir.DeltaToolArguments {
+			deltas = append(deltas, ev.Delta.PartialJSON)
+		}
+	}
+
+	if len(deltas) != 1 || deltas[0] != `{"query":"golang"}` {
+		t.Fatalf("expected exactly 1 argument delta, got: %+v", deltas)
+	}
+}
+
+func TestStreamDeterministicBlockStopOnCompletion(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_multi\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"msg_2\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_0\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_multi\",\"status\":\"completed\"}}\n\n"
+
+	for iter := 0; iter < 20; iter++ {
+		resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+		stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+		if err != nil {
+			t.Fatalf("ParseStream error: %v", err)
+		}
+
+		var stoppedIndices []int
+		for {
+			ev, err := stream.Next(t.Context())
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("stream.Next error: %v", err)
+			}
+			if ev.Type == ir.EventBlockStop {
+				stoppedIndices = append(stoppedIndices, ev.Index)
+			}
+		}
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+
+		wantIndices := []int{0, 1, 2}
+		if !slices.Equal(stoppedIndices, wantIndices) {
+			t.Fatalf("iter %d: stoppedIndices = %+v, want %+v", iter, stoppedIndices, wantIndices)
+		}
+	}
+}
+
+func TestStreamDeterministicBlockStopOnEOF(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_eof\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":3,\"item\":{\"id\":\"msg_3\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_0\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"id\":\"msg_2\",\"type\":\"message\",\"role\":\"assistant\"}}\n\n"
+
+	for iter := 0; iter < 20; iter++ {
+		resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+		stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+		if err != nil {
+			t.Fatalf("ParseStream error: %v", err)
+		}
+
+		var stoppedIndices []int
+		for {
+			ev, err := stream.Next(t.Context())
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("stream.Next error: %v", err)
+			}
+			if ev.Type == ir.EventBlockStop {
+				stoppedIndices = append(stoppedIndices, ev.Index)
+			}
+		}
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+
+		wantIndices := []int{0, 2, 3}
+		if !slices.Equal(stoppedIndices, wantIndices) {
+			t.Fatalf("iter %d: stoppedIndices = %+v, want %+v", iter, stoppedIndices, wantIndices)
+		}
 	}
 }
