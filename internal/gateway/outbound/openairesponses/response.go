@@ -200,18 +200,26 @@ func decodeReasoningItem(raw json.RawMessage, itemIndex int) (ir.Block, error) {
 
 func decodeFunctionCall(raw json.RawMessage, itemIndex int) (ir.Block, error) {
 	var item struct {
+		ID        string  `json:"id"`
 		CallID    string  `json:"call_id"`
 		Name      string  `json:"name"`
 		Arguments *string `json:"arguments"`
 	}
-	if err := json.Unmarshal(raw, &item); err != nil || item.CallID == "" || item.Name == "" || item.Arguments == nil {
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return ir.Block{}, fmt.Errorf("openairesponses: output[%d] function_call fields are invalid: %w", itemIndex, err)
+	}
+	callID := item.CallID
+	if callID == "" {
+		callID = item.ID
+	}
+	if callID == "" || item.Name == "" || item.Arguments == nil {
 		return ir.Block{}, fmt.Errorf("openairesponses: output[%d] function_call requires call_id, name and arguments", itemIndex)
 	}
 	arguments := json.RawMessage(*item.Arguments)
 	if !gatewayoutbound.JSONObject(arguments) {
 		return ir.Block{}, fmt.Errorf("openairesponses: output[%d] function_call arguments must encode a JSON object", itemIndex)
 	}
-	return ir.NewToolUseBlock(item.CallID, item.Name, arguments), nil
+	return ir.NewToolUseBlock(callID, item.Name, arguments), nil
 }
 
 func absentJSON(raw json.RawMessage) bool {

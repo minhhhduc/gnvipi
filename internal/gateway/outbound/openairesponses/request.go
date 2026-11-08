@@ -1,7 +1,9 @@
 package openairesponses
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,9 +24,6 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if len(request.Tools) != 0 || request.ToolChoice != nil {
-		return nil, unsupported("Responses tools require the tool-calling adapter")
 	}
 	if request.Sampling.TopK != nil || request.Sampling.Seed != nil {
 		return nil, unsupported("top_k and seed are not supported by the Responses API")
@@ -50,6 +49,27 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	fields["input"] = input
 	if instructions != nil {
 		fields["instructions"] = *instructions
+	}
+	if len(request.Tools) != 0 {
+		tools, err := encodeTools(request.Tools)
+		if err != nil {
+			return nil, err
+		}
+		fields["tools"] = tools
+	}
+	if request.ToolChoice != nil {
+		choice, err := encodeToolChoice(request.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
+		if choice != nil {
+			fields["tool_choice"] = choice
+		}
+	}
+	if request.ParallelToolCalls != nil {
+		fields["parallel_tool_calls"] = *request.ParallelToolCalls
+	} else if request.ToolChoice != nil && request.ToolChoice.DisableParallelToolUse != nil {
+		fields["parallel_tool_calls"] = !*request.ToolChoice.DisableParallelToolUse
 	}
 	if value := request.Sampling.MaxOutputTokens; value != nil {
 		if *value < 0 {
@@ -151,10 +171,7 @@ func encodeInstructions(instructions []ir.Instruction) (instruction *string, ite
 }
 
 func encodeMessageItems(message *ir.Message) ([]any, error) {
-	if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant {
-		if message.Role == ir.RoleTool {
-			return nil, unsupported("function call outputs require the tool-calling adapter")
-		}
+	if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant && message.Role != ir.RoleTool {
 		return nil, invalid(fmt.Sprintf("unsupported role %q", message.Role))
 	}
 	if len(message.Content) == 0 {
@@ -162,9 +179,20 @@ func encodeMessageItems(message *ir.Message) ([]any, error) {
 	}
 	var items []any
 	content := make([]any, 0, len(message.Content))
+
+	flushContent := func() {
+		if len(content) > 0 {
+			items = append(items, map[string]any{"role": message.Role, "content": content})
+			content = make([]any, 0, len(message.Content))
+		}
+	}
+
 	for index, block := range message.Content {
 		switch block.Type {
 		case ir.BlockText:
+			if message.Role == ir.RoleTool {
+				return nil, invalid(fmt.Sprintf("content[%d] text block invalid for role tool", index))
+			}
 			kind := "input_text"
 			if message.Role == ir.RoleAssistant {
 				kind = "output_text"
@@ -180,6 +208,7 @@ func encodeMessageItems(message *ir.Message) ([]any, error) {
 			}
 			content = append(content, image)
 		case ir.BlockReasoning:
+			flushContent()
 			contentStr := ""
 			if block.Reasoning != nil {
 				contentStr = block.Reasoning.Content
@@ -190,16 +219,157 @@ func encodeMessageItems(message *ir.Message) ([]any, error) {
 					{"type": "summary_text", "text": contentStr},
 				},
 			})
-		case ir.BlockToolUse, ir.BlockToolResult:
-			return nil, unsupported("function call history requires the tool-calling adapter")
+		case ir.BlockToolUse:
+			if message.Role != ir.RoleAssistant {
+				return nil, invalid(fmt.Sprintf("content[%d] tool_use requires assistant role", index))
+			}
+			flushContent()
+			fc, err := encodeToolUse(&block)
+			if err != nil {
+				return nil, fmt.Errorf("content[%d]: %w", index, err)
+			}
+			items = append(items, fc)
+		case ir.BlockToolResult:
+			flushContent()
+			fco, err := encodeToolResult(&block)
+			if err != nil {
+				return nil, fmt.Errorf("content[%d]: %w", index, err)
+			}
+			items = append(items, fco)
 		default:
 			return nil, invalid(fmt.Sprintf("content[%d] has unsupported block type %q", index, block.Type))
 		}
 	}
-	if len(content) > 0 {
-		items = append(items, map[string]any{"role": message.Role, "content": content})
-	}
+	flushContent()
 	return items, nil
+}
+
+func encodeToolUse(block *ir.Block) (map[string]any, error) {
+	if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
+		return nil, invalid("function_call requires call_id and name")
+	}
+	arguments := "{}"
+	if len(block.ToolUse.Input) > 0 {
+		trimmed := bytes.TrimSpace(block.ToolUse.Input)
+		if len(trimmed) > 0 {
+			if !json.Valid(trimmed) {
+				return nil, invalid("function_call arguments contain invalid JSON")
+			}
+			if trimmed[0] == '"' {
+				if err := json.Unmarshal(trimmed, &arguments); err != nil {
+					return nil, invalid("function_call arguments string is invalid")
+				}
+			} else {
+				arguments = string(trimmed)
+			}
+		}
+	}
+	return map[string]any{
+		"type":      "function_call",
+		"call_id":   block.ToolUse.ID,
+		"name":      block.ToolUse.Name,
+		"arguments": arguments,
+	}, nil
+}
+
+func encodeToolResult(block *ir.Block) (map[string]any, error) {
+	if block.ToolResult == nil || block.ToolResult.ToolUseID == "" {
+		return nil, invalid("function_call_output requires call_id")
+	}
+	allText := true
+	for _, b := range block.ToolResult.Content {
+		if b.Type != ir.BlockText {
+			allText = false
+			break
+		}
+	}
+	if allText {
+		var sb strings.Builder
+		for _, b := range block.ToolResult.Content {
+			sb.WriteString(b.Text)
+		}
+		return map[string]any{
+			"type":    "function_call_output",
+			"call_id": block.ToolResult.ToolUseID,
+			"output":  sb.String(),
+		}, nil
+	}
+	parts := make([]any, 0, len(block.ToolResult.Content))
+	for index, b := range block.ToolResult.Content {
+		switch b.Type {
+		case ir.BlockText:
+			parts = append(parts, map[string]any{"type": "input_text", "text": b.Text})
+		case ir.BlockImage:
+			img, err := encodeImage(b.Image)
+			if err != nil {
+				return nil, fmt.Errorf("tool_result.content[%d]: %w", index, err)
+			}
+			parts = append(parts, img)
+		default:
+			return nil, invalid(fmt.Sprintf("tool_result.content[%d] has unsupported block type %q", index, b.Type))
+		}
+	}
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": block.ToolResult.ToolUseID,
+		"output":  parts,
+	}, nil
+}
+
+func encodeTools(tools []ir.Tool) ([]any, error) {
+	result := make([]any, 0, len(tools))
+	for index, tool := range tools {
+		if tool.Name == "" {
+			return nil, invalid(fmt.Sprintf("tools[%d] requires a name", index))
+		}
+		item := map[string]any{
+			"type": "function",
+			"name": tool.Name,
+		}
+		if tool.Description != "" {
+			item["description"] = tool.Description
+		}
+		if len(tool.Schema) > 0 {
+			if !gatewayoutbound.JSONObject(tool.Schema) {
+				return nil, invalid(fmt.Sprintf("tools[%d] schema must be a JSON object", index))
+			}
+			item["parameters"] = tool.Schema
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func encodeToolChoice(choice *ir.ToolChoice) (any, error) {
+	if choice == nil {
+		return nil, nil
+	}
+	switch choice.Mode {
+	case ir.ToolChoiceAuto:
+		return "auto", nil
+	case ir.ToolChoiceNone:
+		return "none", nil
+	case ir.ToolChoiceAny:
+		return "required", nil
+	case ir.ToolChoiceTool:
+		if choice.Name == "" {
+			return nil, invalid("named tool_choice requires a tool name")
+		}
+		return map[string]any{
+			"type": "function",
+			"name": choice.Name,
+		}, nil
+	case "":
+		if choice.Name != "" {
+			return map[string]any{
+				"type": "function",
+				"name": choice.Name,
+			}, nil
+		}
+		return nil, nil
+	default:
+		return nil, invalid(fmt.Sprintf("unsupported tool_choice mode %q", choice.Mode))
+	}
 }
 
 func encodeImage(image *ir.Image) (map[string]any, error) {

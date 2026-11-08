@@ -44,6 +44,7 @@ type responsesRequest struct {
 	} `json:"text"`
 	Tools              []json.RawMessage `json:"tools"`
 	ToolChoice         json.RawMessage   `json:"tool_choice"`
+	ParallelToolCalls  *bool             `json:"parallel_tool_calls"`
 	PreviousResponseID json.RawMessage   `json:"previous_response_id"`
 	Conversation       json.RawMessage   `json:"conversation"`
 	Store              *bool             `json:"store"`
@@ -153,6 +154,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 			Name        string          `json:"name"`
 			Description string          `json:"description"`
 			Parameters  json.RawMessage `json:"parameters"`
+			Strict      *bool           `json:"strict"`
 		}
 		if err := json.Unmarshal(rawTool, &tool); err != nil || tool.Name == "" || !absentResponsesJSON(tool.Parameters) && !responsesJSONObject(tool.Parameters) {
 			return nil, invalidResponses("function tools require a name and object parameters")
@@ -165,6 +167,16 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 			return nil, err
 		}
 		result.ToolChoice = choice
+	}
+	if wire.ParallelToolCalls != nil {
+		result.ParallelToolCalls = wire.ParallelToolCalls
+		if result.ToolChoice == nil && absentResponsesJSON(wire.ToolChoice) {
+			result.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+		}
+		if result.ToolChoice != nil {
+			disabled := !*wire.ParallelToolCalls
+			result.ToolChoice.DisableParallelToolUse = &disabled
+		}
 	}
 	if err := request.Context().Err(); err != nil {
 		return nil, err
@@ -215,18 +227,26 @@ func decodeResponsesInput(result *ir.Request, raw json.RawMessage) error {
 			}
 		case "function_call":
 			var call struct {
+				ID        string          `json:"id"`
 				CallID    string          `json:"call_id"`
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
-			if err := json.Unmarshal(item, &call); err != nil || call.CallID == "" || call.Name == "" {
+			if err := json.Unmarshal(item, &call); err != nil {
+				return invalidResponses("function_call fields have invalid types")
+			}
+			callID := call.CallID
+			if callID == "" {
+				callID = call.ID
+			}
+			if callID == "" || call.Name == "" {
 				return invalidResponses("function_call requires call_id and name")
 			}
 			var arguments string
 			if absentResponsesJSON(call.Arguments) || json.Unmarshal(call.Arguments, &arguments) != nil {
 				return invalidResponses("function_call arguments must be a JSON string")
 			}
-			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock(call.CallID, call.Name, call.Arguments)))
+			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock(callID, call.Name, call.Arguments)))
 		case "function_call_output":
 			var output struct {
 				CallID string          `json:"call_id"`
