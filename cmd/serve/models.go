@@ -8,6 +8,7 @@ import (
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gatewayoutbound "github.com/minhhhduc/gnvipi/internal/gateway/outbound"
 	"github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/models"
@@ -69,25 +70,38 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 	var caps adapter.Capabilities
 	if registry != nil {
 		if outbound, ok := registry.Outbound(p.Protocol); ok {
-			caps = outbound.Capabilities()
+			configured, err := gatewayoutbound.Configure(outbound, p)
+			if err != nil {
+				if configurator, ok := outbound.(interface {
+					WithProvider(*gatewayprovider.Provider) adapter.Outbound
+				}); ok {
+					configured = configurator.WithProvider(p)
+				} else {
+					configured = outbound
+				}
+			}
+			caps = configured.Capabilities()
 		}
 	}
-	if caps == (adapter.Capabilities{}) {
+	if caps.IsZero() {
 		switch p.Protocol {
 		case ir.ProtocolAnthropicMessages:
 			caps = adapter.Capabilities{
 				Streaming:         true,
 				Tools:             true,
 				ParallelToolCalls: true,
-				Images:            true,
+				Images:            adapter.ImageCapabilityBoth,
 				Reasoning:         true,
 				TopK:              true,
 				CountTokens:       true,
 			}
+			if p != nil && hasStructuredOutputExtension(p.Extensions) {
+				caps.StructuredOutput = true
+			}
 		case ir.ProtocolOpenAIChat:
 			caps = adapter.Capabilities{
 				Streaming:        true,
-				Images:           true,
+				Images:           adapter.ImageCapabilityBoth,
 				Reasoning:        true,
 				StructuredOutput: true,
 				TopK:             true,
@@ -95,7 +109,7 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 		case ir.ProtocolOpenAIResponses:
 			caps = adapter.Capabilities{
 				Streaming:        true,
-				Images:           true,
+				Images:           adapter.ImageCapabilityBoth,
 				Reasoning:        true,
 				StructuredOutput: true,
 			}
@@ -112,6 +126,41 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 	return caps
 }
 
+func hasStructuredOutputExtension(ext map[string]json.RawMessage) bool {
+	if len(ext) == 0 {
+		return false
+	}
+	if raw, ok := ext["tool_emulation"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(raw, &enabled); err == nil && enabled {
+			return true
+		}
+	}
+	if raw, ok := ext["anthropic"]; ok {
+		var opts struct {
+			ToolEmulation  bool `json:"tool_emulation"`
+			JSONModePrompt bool `json:"json_mode_prompt"`
+		}
+		if err := json.Unmarshal(raw, &opts); err == nil && (opts.ToolEmulation || opts.JSONModePrompt) {
+			return true
+		}
+	}
+	if raw, ok := ext["structured_output"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(raw, &enabled); err == nil && enabled {
+			return true
+		}
+		var mode string
+		if err := json.Unmarshal(raw, &mode); err == nil {
+			switch mode {
+			case "tool", "emulation", "tool_emulation", "prompt":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // resolveNvidiaCapabilities derives capabilities for build.nvidia.com playground models.
 func resolveNvidiaCapabilities(modelID string) adapter.Capabilities {
 	caps := adapter.Capabilities{
@@ -120,7 +169,11 @@ func resolveNvidiaCapabilities(modelID string) adapter.Capabilities {
 	if info, err := models.Lookup(modelID); err == nil && info.Capability != nil {
 		caps.Tools = info.Capability.ToolCalling
 		caps.StructuredOutput = info.Capability.StructuredOutput
-		caps.Images = info.Capability.Vision
+		if info.Capability.Vision {
+			caps.Images = adapter.ImageCapabilityBoth
+		} else {
+			caps.Images = adapter.ImageCapabilityNone
+		}
 		caps.Reasoning = info.Capability.Reasoning
 	}
 	return caps

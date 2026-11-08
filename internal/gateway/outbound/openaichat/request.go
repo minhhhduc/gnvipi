@@ -256,15 +256,19 @@ func encodeVisibleContent(blocks []ir.Block, allowImages bool) (any, error) {
 			if !allowImages {
 				return nil, fmt.Errorf("image content is not valid for this role")
 			}
-			if block.Image == nil || (block.Image.URL == "") == (block.Image.Base64 == "") {
+			if block.Image == nil {
+				return nil, fmt.Errorf("image requires exactly one URL or base64 payload")
+			}
+			base64Data := block.Image.Base64Data()
+			if (block.Image.URL == "") == (base64Data == "") {
 				return nil, fmt.Errorf("image requires exactly one URL or base64 payload")
 			}
 			url := block.Image.URL
-			if block.Image.Base64 != "" {
+			if base64Data != "" {
 				if block.Image.MediaType == "" {
 					return nil, fmt.Errorf("base64 image requires a media type")
 				}
-				url = "data:" + block.Image.MediaType + ";base64," + block.Image.Base64
+				url = "data:" + block.Image.MediaType + ";base64," + base64Data
 			}
 			parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}})
 		default:

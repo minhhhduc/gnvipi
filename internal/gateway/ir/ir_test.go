@@ -3,6 +3,7 @@ package ir
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -413,5 +414,61 @@ func TestReasoningMappingAndFields(t *testing.T) {
 	})
 	if EffortToBudget(ReasoningEffortLow) != 2000 {
 		t.Errorf("EffortToBudget(low) after SetReasoningMapping = %d, want 2000", EffortToBudget(ReasoningEffortLow))
+	}
+}
+
+func TestImageHelpersAndJSON(t *testing.T) {
+	// Base64 block constructor sets Data, Base64, and MediaType.
+	b := NewImageBlockBase64("image/png", "aGVsbG8=")
+	if b.Image.Base64Data() != "aGVsbG8=" {
+		t.Errorf("Base64Data() = %q, want aGVsbG8=", b.Image.Base64Data())
+	}
+	if b.Image.Data != "aGVsbG8=" || b.Image.Base64 != "aGVsbG8=" {
+		t.Errorf("expected both Data and Base64 set: %+v", b.Image)
+	}
+	if !b.Image.IsBase64() || b.Image.IsURL() {
+		t.Errorf("expected IsBase64=true, IsURL=false: %+v", b.Image)
+	}
+	if got := b.Image.DataURL(); got != "data:image/png;base64,aGVsbG8=" {
+		t.Errorf("DataURL() = %q, want data:image/png;base64,aGVsbG8=", got)
+	}
+
+	// URL constructor parses data URLs into inline base64 block.
+	bDataURL := NewImageBlockURL("data:image/jpeg;base64,dGVzdA==")
+	if !bDataURL.Image.IsBase64() || bDataURL.Image.MediaType != "image/jpeg" || bDataURL.Image.Base64Data() != "dGVzdA==" {
+		t.Errorf("NewImageBlockURL did not parse data URL correctly: %+v", bDataURL.Image)
+	}
+
+	// URL constructor with HTTP URL.
+	bURL := NewImageBlockURL("https://example.com/test.png")
+	if !bURL.Image.IsURL() || bURL.Image.IsBase64() {
+		t.Errorf("expected IsURL=true, IsBase64=false: %+v", bURL.Image)
+	}
+
+	// Unmarshal JSON with "data" field instead of "base64".
+	var imgData Image
+	if err := json.Unmarshal([]byte(`{"data":"Zm9v","media_type":"image/png"}`), &imgData); err != nil {
+		t.Fatalf("unmarshal with data: %v", err)
+	}
+	if imgData.Base64Data() != "Zm9v" || imgData.Base64 != "Zm9v" || imgData.Data != "Zm9v" {
+		t.Errorf("expected data populated to both Base64 and Data: %+v", imgData)
+	}
+
+	// Unmarshal JSON with "base64" field.
+	var imgB64 Image
+	if err := json.Unmarshal([]byte(`{"base64":"YmFy","media_type":"image/png"}`), &imgB64); err != nil {
+		t.Fatalf("unmarshal with base64: %v", err)
+	}
+	if imgB64.Base64Data() != "YmFy" || imgB64.Data != "YmFy" || imgB64.Base64 != "YmFy" {
+		t.Errorf("expected base64 populated to both Base64 and Data: %+v", imgB64)
+	}
+
+	// Marshal JSON produces "base64" (canonical wire format in IR).
+	marshaled, err := json.Marshal(imgData)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(marshaled), `"base64":"Zm9v"`) {
+		t.Errorf("marshaled JSON missing base64 field: %s", string(marshaled))
 	}
 }

@@ -1,6 +1,9 @@
 package ir
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Role is the author role of a conversation message.
 type Role string
@@ -54,9 +57,115 @@ type Image struct {
 	// Base64 is the raw base64 payload (no data: prefix). Empty when URL
 	// is used.
 	Base64 string `json:"base64,omitempty"`
+	// Data is an alias for Base64 (supporting Anthropic source.data naming).
+	Data string `json:"data,omitempty"`
 	// MediaType is the image MIME type, for example "image/png". Required
 	// with Base64; some providers require it with URL as well.
 	MediaType string `json:"media_type,omitempty"`
+}
+
+// Base64Data returns the base64-encoded image data, preferring Data if set, then Base64.
+func (img *Image) Base64Data() string {
+	if img == nil {
+		return ""
+	}
+	if img.Data != "" {
+		return img.Data
+	}
+	return img.Base64
+}
+
+// IsURL reports whether the image is referenced by an HTTP or HTTPS URL.
+func (img *Image) IsURL() bool {
+	if img == nil {
+		return false
+	}
+	return img.URL != "" && !strings.HasPrefix(img.URL, "data:")
+}
+
+// IsBase64 reports whether the image contains inline base64 payload.
+func (img *Image) IsBase64() bool {
+	if img == nil {
+		return false
+	}
+	return img.Base64 != "" || img.Data != "" || strings.HasPrefix(img.URL, "data:")
+}
+
+// DataURL returns the data URL representation ("data:<mediaType>;base64,<data>").
+func (img *Image) DataURL() string {
+	if img == nil {
+		return ""
+	}
+	if strings.HasPrefix(img.URL, "data:") {
+		return img.URL
+	}
+	data := img.Base64Data()
+	if data == "" {
+		return ""
+	}
+	mediaType := img.MediaType
+	if mediaType == "" {
+		mediaType = "image/jpeg"
+	}
+	return "data:" + mediaType + ";base64," + data
+}
+
+// ParseDataURL extracts the media type and base64 data from a data URL.
+// Expected format: data:<mediaType>;base64,<data>
+func ParseDataURL(raw string) (mediaType, data string, ok bool) {
+	if !strings.HasPrefix(raw, "data:") {
+		return "", "", false
+	}
+	raw = strings.TrimPrefix(raw, "data:")
+	parts := strings.SplitN(raw, ";base64,", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	mediaType = strings.TrimSpace(parts[0])
+	if idx := strings.Index(mediaType, ";"); idx != -1 {
+		mediaType = strings.TrimSpace(mediaType[:idx])
+	}
+	return mediaType, parts[1], true
+}
+
+func (img *Image) UnmarshalJSON(b []byte) error {
+	type rawImage struct {
+		URL       string `json:"url,omitempty"`
+		Base64    string `json:"base64,omitempty"`
+		Data      string `json:"data,omitempty"`
+		MediaType string `json:"media_type,omitempty"`
+	}
+	var raw rawImage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	img.URL = raw.URL
+	img.Base64 = raw.Base64
+	img.Data = raw.Data
+	img.MediaType = raw.MediaType
+	if img.Data != "" && img.Base64 == "" {
+		img.Base64 = img.Data
+	} else if img.Base64 != "" && img.Data == "" {
+		img.Data = img.Base64
+	}
+	return nil
+}
+
+func (img Image) MarshalJSON() ([]byte, error) {
+	type wireImage struct {
+		URL       string `json:"url,omitempty"`
+		Base64    string `json:"base64,omitempty"`
+		MediaType string `json:"media_type,omitempty"`
+	}
+	base64Val := img.Base64
+	if base64Val == "" {
+		base64Val = img.Data
+	}
+	return json.Marshal(wireImage{
+		URL:       img.URL,
+		Base64:    base64Val,
+		MediaType: img.MediaType,
+	})
 }
 
 // ToolUse is a model request to invoke a tool. ID and Input are preserved
@@ -124,14 +233,20 @@ func NewTextBlock(text string) Block {
 	return Block{Type: BlockText, Text: text}
 }
 
-// NewImageBlockURL builds an image block referenced by URL.
+// NewImageBlockURL builds an image block referenced by URL. If url is a data URL,
+// it parses it into an inline base64 block.
 func NewImageBlockURL(url string) Block {
+	if strings.HasPrefix(url, "data:") {
+		if mediaType, data, ok := ParseDataURL(url); ok {
+			return NewImageBlockBase64(mediaType, data)
+		}
+	}
 	return Block{Type: BlockImage, Image: &Image{URL: url}}
 }
 
 // NewImageBlockBase64 builds an inline image block.
 func NewImageBlockBase64(mediaType, base64 string) Block {
-	return Block{Type: BlockImage, Image: &Image{Base64: base64, MediaType: mediaType}}
+	return Block{Type: BlockImage, Image: &Image{Base64: base64, Data: base64, MediaType: mediaType}}
 }
 
 // NewToolUseBlock builds a tool_use block.
@@ -255,6 +370,30 @@ type JSONSchema struct {
 type ResponseFormat struct {
 	Type       ResponseFormatType `json:"type"`
 	JSONSchema *JSONSchema        `json:"json_schema,omitempty"`
+}
+
+// Schema returns the underlying schema bytes if present.
+func (f *ResponseFormat) Schema() *json.RawMessage {
+	if f != nil && f.JSONSchema != nil && len(f.JSONSchema.Schema) > 0 {
+		return &f.JSONSchema.Schema
+	}
+	return nil
+}
+
+// Name returns the schema name if present.
+func (f *ResponseFormat) Name() string {
+	if f != nil && f.JSONSchema != nil {
+		return f.JSONSchema.Name
+	}
+	return ""
+}
+
+// Strict returns the schema strict setting if present.
+func (f *ResponseFormat) Strict() bool {
+	if f != nil && f.JSONSchema != nil {
+		return f.JSONSchema.Strict
+	}
+	return false
 }
 
 // ReasoningEffort is the thinking budget level a protocol may request.

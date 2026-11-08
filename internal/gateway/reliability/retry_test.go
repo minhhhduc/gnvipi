@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -929,6 +930,84 @@ func TestOnRetryCallbackAndMetrics(t *testing.T) {
 func TestForProviderOverrides(t *testing.T) {
 	basePolicy := reliability.DefaultPolicy()
 
+	if !basePolicy.LogRetries {
+		t.Fatal("DefaultPolicy().LogRetries = false; want true")
+	}
+
+	t.Run("default ForProvider has LogRetries true", func(t *testing.T) {
+		prov := &provider.Provider{ID: "logging-prov"}
+		p := basePolicy.ForProvider(prov)
+		if !p.LogRetries {
+			t.Errorf("p.LogRetries = false; want true")
+		}
+
+		tr := reliability.ForProvider(prov, nil)
+		if !tr.Policy.LogRetries {
+			t.Errorf("ForProvider transport Policy.LogRetries = false; want true")
+		}
+	})
+
+	t.Run("override via Extensions retry", func(t *testing.T) {
+		prov := &provider.Provider{
+			ID: "ext-retry-prov",
+			Extensions: map[string]json.RawMessage{
+				"retry": json.RawMessage(`{"max_attempts":4,"initial_backoff":"25ms","max_backoff":"500ms","max_retry_after":"2s","disable_jitter":true}`),
+			},
+		}
+
+		p := basePolicy.ForProvider(prov)
+		if p.MaxAttempts != 4 {
+			t.Errorf("MaxAttempts = %d; want 4", p.MaxAttempts)
+		}
+		if p.InitialBackoff != 25*time.Millisecond {
+			t.Errorf("InitialBackoff = %v; want 25ms", p.InitialBackoff)
+		}
+		if p.MaxBackoff != 500*time.Millisecond {
+			t.Errorf("MaxBackoff = %v; want 500ms", p.MaxBackoff)
+		}
+		if p.MaxRetryAfter != 2*time.Second {
+			t.Errorf("MaxRetryAfter = %v; want 2s", p.MaxRetryAfter)
+		}
+		if !p.DisableJitter {
+			t.Error("DisableJitter = false; want true")
+		}
+		if !p.LogRetries {
+			t.Error("LogRetries = false; want true (default preserved)")
+		}
+	})
+
+	t.Run("override log_retries via Extensions retry", func(t *testing.T) {
+		prov := &provider.Provider{
+			ID: "disable-log-prov",
+			Extensions: map[string]json.RawMessage{
+				"retry": json.RawMessage(`{"log_retries":false}`),
+			},
+		}
+
+		p := basePolicy.ForProvider(prov)
+		if p.LogRetries {
+			t.Errorf("LogRetries = true; want false")
+		}
+	})
+
+	t.Run("Extensions retry takes precedence over ExtraBody", func(t *testing.T) {
+		prov := &provider.Provider{
+			ID:        "precedence-prov",
+			ExtraBody: json.RawMessage(`{"retry":{"max_attempts":3,"initial_backoff":"10ms"}}`),
+			Extensions: map[string]json.RawMessage{
+				"retry": json.RawMessage(`{"max_attempts":5,"initial_backoff":"30ms"}`),
+			},
+		}
+
+		p := basePolicy.ForProvider(prov)
+		if p.MaxAttempts != 5 {
+			t.Errorf("MaxAttempts = %d; want 5", p.MaxAttempts)
+		}
+		if p.InitialBackoff != 30*time.Millisecond {
+			t.Errorf("InitialBackoff = %v; want 30ms", p.InitialBackoff)
+		}
+	})
+
 	t.Run("override via ExtraBody", func(t *testing.T) {
 		prov := &provider.Provider{
 			ID:        "extra-body-prov",
@@ -983,6 +1062,57 @@ func TestForProviderOverrides(t *testing.T) {
 			t.Errorf("MaxRetryAfter = %v; want 1s", p.MaxRetryAfter)
 		}
 	})
+}
+
+func TestForProviderRetryLogging(t *testing.T) {
+	u := gatewaytest.New(t)
+	u.Script(gatewaytest.RouteChat,
+		gatewaytest.Step{Status: http.StatusBadGateway, Body: `{"error":"502"}`},
+		gatewaytest.Step{Status: http.StatusOK, Body: `{"ok":true}`},
+	)
+
+	var logBuf bytes.Buffer
+	origWriter := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&logBuf)
+	defer func() {
+		log.SetOutput(origWriter)
+		log.SetFlags(origFlags)
+	}()
+
+	prov := &provider.Provider{
+		ID: "logged-prov",
+		Extensions: map[string]json.RawMessage{
+			"retry": json.RawMessage(`{"initial_backoff":"1ms","max_backoff":"5ms","disable_jitter":true}`),
+		},
+	}
+
+	tr := reliability.ForProvider(prov, http.DefaultTransport)
+	if !tr.Policy.LogRetries {
+		t.Fatalf("tr.Policy.LogRetries = false; want true")
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("roundtrip: %v", err)
+	}
+	defer closeBody(t, resp)
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "gateway retry:") {
+		t.Errorf("expected 'gateway retry:' in log output, got: %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "provider=logged-prov") {
+		t.Errorf("expected 'provider=logged-prov' in log output, got: %q", logOutput)
+	}
+	if !strings.Contains(logOutput, "cause=HTTP 502") {
+		t.Errorf("expected 'cause=HTTP 502' in log output, got: %q", logOutput)
+	}
 }
 
 func TestTransportRoundTripContract(t *testing.T) {

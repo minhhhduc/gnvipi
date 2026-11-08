@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -26,8 +27,61 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if len(request.Tools) > 0 || request.ToolChoice != nil {
 		return nil, unsupported("Anthropic tool requests require the tool adapter")
 	}
+	var emulatedTools []any
+	var emulatedToolChoice any
 	if request.ResponseFormat != nil {
-		return nil, unsupported("Anthropic structured output is not supported by this adapter")
+		switch request.ResponseFormat.Type {
+		case ir.ResponseFormatText:
+			// Plain text requires no emulation.
+		case ir.ResponseFormatJSONSchema:
+			if request.ResponseFormat.JSONSchema == nil {
+				return nil, invalidRequest("JSON schema format requires a schema")
+			}
+			schema := request.ResponseFormat.JSONSchema.Schema
+			if len(bytes.TrimSpace(schema)) == 0 || !gatewayoutbound.JSONObject(schema) {
+				return nil, invalidRequest("JSON schema format requires an object schema")
+			}
+			if a.ToolEmulation {
+				toolName := request.ResponseFormat.JSONSchema.Name
+				if toolName == "" {
+					toolName = "structured_output"
+				}
+				tool := map[string]any{
+					"name":         toolName,
+					"input_schema": schema,
+				}
+				emulatedTools = []any{tool}
+				emulatedToolChoice = map[string]any{
+					"type": "tool",
+					"name": toolName,
+				}
+			} else if !a.JSONModePrompt {
+				return nil, unsupported("Anthropic structured output is not supported by this adapter")
+			}
+		case ir.ResponseFormatJSONObject:
+			switch {
+			case a.ToolEmulation:
+				toolName := "json_output"
+				tool := map[string]any{
+					"name":        toolName,
+					"description": "Output valid JSON object",
+					"input_schema": map[string]any{
+						"type": "object",
+					},
+				}
+				emulatedTools = []any{tool}
+				emulatedToolChoice = map[string]any{
+					"type": "tool",
+					"name": toolName,
+				}
+			case a.JSONModePrompt:
+				// Inject system prompt for JSON mode
+			default:
+				return nil, unsupported("Anthropic structured output is not supported by this adapter")
+			}
+		default:
+			return nil, invalidRequest(fmt.Sprintf("unsupported response format %q", request.ResponseFormat.Type))
+		}
 	}
 	if request.Sampling.Seed != nil {
 		return nil, unsupported("Anthropic Messages does not support the seed sampling option")
@@ -36,6 +90,15 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	system, err := encodeSystem(request.Instructions)
 	if err != nil {
 		return nil, err
+	}
+	if request.ResponseFormat != nil && a.JSONModePrompt && !a.ToolEmulation {
+		switch request.ResponseFormat.Type {
+		case ir.ResponseFormatJSONObject:
+			system = append(system, wireTextBlock{Type: "text", Text: "Respond with valid JSON only."})
+		case ir.ResponseFormatJSONSchema:
+			prompt := fmt.Sprintf("Respond with valid JSON matching the following schema:\n%s", string(request.ResponseFormat.JSONSchema.Schema))
+			system = append(system, wireTextBlock{Type: "text", Text: prompt})
+		}
 	}
 	messages, err := encodeMessages(request.Messages)
 	if err != nil {
@@ -88,6 +151,10 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	}
 	if thinking != nil {
 		fields["thinking"] = thinking
+	}
+	if len(emulatedTools) > 0 {
+		fields["tools"] = emulatedTools
+		fields["tool_choice"] = emulatedToolChoice
 	}
 	if request.Stream {
 		fields["stream"] = true
@@ -219,24 +286,40 @@ func encodeContentBlock(block ir.Block) (any, error) {
 }
 
 func encodeImage(image *ir.Image) (any, error) {
+	if image == nil {
+		return nil, invalidRequest("image block has no image payload")
+	}
+	base64Data := image.Base64Data()
+	if strings.HasPrefix(image.URL, "data:") {
+		mediaType, data, ok := ir.ParseDataURL(image.URL)
+		if !ok || !strings.HasPrefix(mediaType, "image/") || data == "" {
+			return nil, invalidRequest("inline image has invalid data URL format")
+		}
+		if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))); err != nil {
+			return nil, invalidRequest("image data must be valid base64")
+		}
+		return wireImageBlock{Type: "image", Source: wireImageSource{
+			Type: "base64", MediaType: mediaType, Data: data,
+		}}, nil
+	}
 	if image.URL != "" {
-		if image.Base64 != "" {
+		if base64Data != "" {
 			return nil, invalidRequest("image block cannot contain both URL and base64 data")
 		}
 		parsed, err := url.Parse(image.URL)
-		if err != nil || parsed.Hostname() == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return nil, invalidRequest("image URL must be an absolute HTTP or HTTPS URL")
 		}
 		return wireImageBlock{Type: "image", Source: wireImageSource{Type: "url", URL: image.URL}}, nil
 	}
-	if image.Base64 == "" || !strings.HasPrefix(image.MediaType, "image/") {
+	if base64Data == "" || !strings.HasPrefix(image.MediaType, "image/") {
 		return nil, invalidRequest("base64 image requires data and an image media type")
 	}
-	if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(image.Base64))); err != nil {
+	if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(base64Data))); err != nil {
 		return nil, invalidRequest("image data must be valid base64")
 	}
 	return wireImageBlock{Type: "image", Source: wireImageSource{
-		Type: "base64", MediaType: image.MediaType, Data: image.Base64,
+		Type: "base64", MediaType: image.MediaType, Data: base64Data,
 	}}, nil
 }
 
