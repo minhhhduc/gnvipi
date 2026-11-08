@@ -74,6 +74,7 @@ func run() (err error) {
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
 	gatewayV2 := flag.Bool("gateway-v2", false, "route same-protocol custom providers through the gateway core")
+	autoModeChatResponses := flag.Bool("automode-chat-responses", false, "allow automode virtual model on /v1/chat/completions and /v1/responses (default false: Anthropic /v1/messages only)")
 	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
 	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	statsOptions := nvidia.DefaultStatsLogOptions()
@@ -96,6 +97,18 @@ func run() (err error) {
 	flag.Visit(func(f *flag.Flag) { gatewayKeySet = gatewayKeySet || f.Name == "gateway-key" })
 	if !gatewayKeySet {
 		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
+	}
+	autoModeChatResponsesSet := false
+	flag.Visit(func(f *flag.Flag) {
+		autoModeChatResponsesSet = autoModeChatResponsesSet || f.Name == "automode-chat-responses"
+	})
+	if !autoModeChatResponsesSet {
+		if v := os.Getenv("GNVIPI_AUTOMODE_CHAT_RESPONSES"); v == "1" || strings.EqualFold(v, "true") {
+			*autoModeChatResponses = true
+		}
+	}
+	if *autoModeChatResponses {
+		prefs.autoModelChatResponses = true
 	}
 	configureSecretRedaction(*adminToken, *gatewayKey, *captchaFlag)
 	if *maxBodyBytes <= 0 || *maxAdminBodyBytes <= 0 {

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,11 @@ const (
 	Fallthrough Kind = "fallthrough"
 )
 
+const (
+	VirtualAutoMode = "automode"
+	VirtualCycle    = "cycle"
+)
+
 // Route is one routing decision. Provider belongs to the immutable published
 // snapshot; consumers must not modify it or its maps/slices.
 type Route struct {
@@ -29,10 +35,22 @@ type Route struct {
 	UpstreamModel    string
 	UpstreamProtocol ir.Protocol
 	Kind             Kind
+	Candidates       []Route
 }
 
 type Resolver interface {
 	Resolve(context.Context, string, ir.Protocol) (Route, error)
+	ResolveCandidates(context.Context, string, ir.Protocol) ([]Route, error)
+	AdvanceCycle(failed string)
+}
+
+// VirtualOptions configures virtual aliases (automode, cycle) in the resolver.
+type VirtualOptions struct {
+	AutoModel              string
+	AutoModelChatResponses bool
+	CycleModels            []string
+	CycleIndex             func() int
+	AdvanceCycle           func(failed string)
 }
 
 var (
@@ -47,16 +65,18 @@ type resolvedRoute struct {
 }
 
 type snapshot struct {
-	routes map[string]resolvedRoute
-	hidden map[string]bool
+	routes  map[string]resolvedRoute
+	hidden  map[string]bool
+	virtual VirtualOptions
 }
 
 // LegacyResolver preserves legacy flat-list precedence even when FromLegacy
 // groups several nonadjacent entries into one provider. Only publication copies
 // configuration; Resolve performs a single immutable snapshot lookup.
 type LegacyResolver struct {
-	mu      sync.Mutex
-	current atomic.Pointer[snapshot]
+	mu                 sync.Mutex
+	current            atomic.Pointer[snapshot]
+	internalCycleIndex atomic.Int64
 }
 
 func NewLegacyResolver(list []provider.LegacyProvider, hidden []string) (*LegacyResolver, error) {
@@ -85,7 +105,15 @@ func (r *LegacyResolver) Update(list []provider.LegacyProvider, hidden []string)
 		p := &converted[i]
 		byProvider[identity{p.Name, p.BaseURL, p.Auth.Key, p.Protocol}] = p
 	}
-	next := &snapshot{routes: make(map[string]resolvedRoute, 2*len(list)), hidden: make(map[string]bool, len(hidden))}
+	var prevVirtual VirtualOptions
+	if cur := r.current.Load(); cur != nil {
+		prevVirtual = cur.virtual
+	}
+	next := &snapshot{
+		routes:  make(map[string]resolvedRoute, 2*len(list)),
+		hidden:  make(map[string]bool, len(hidden)),
+		virtual: prevVirtual,
+	}
 	for _, id := range hidden {
 		next.hidden[id] = true
 	}
@@ -140,7 +168,15 @@ func (r *LegacyResolver) UpdateProviders(list []provider.Provider, hidden []stri
 		}
 		return cmp.Compare(first, second)
 	})
-	next := &snapshot{routes: make(map[string]resolvedRoute, 2*len(rows)), hidden: make(map[string]bool, len(hidden))}
+	var prevVirtual VirtualOptions
+	if cur := r.current.Load(); cur != nil {
+		prevVirtual = cur.virtual
+	}
+	next := &snapshot{
+		routes:  make(map[string]resolvedRoute, 2*len(rows)),
+		hidden:  make(map[string]bool, len(hidden)),
+		virtual: prevVirtual,
+	}
 	for _, id := range hidden {
 		next.hidden[id] = true
 	}
@@ -157,7 +193,100 @@ func (r *LegacyResolver) UpdateProviders(list []provider.Provider, hidden []stri
 	return nil
 }
 
-func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, _ ir.Protocol) (Route, error) {
+// UpdateVirtual updates the virtual alias configuration (automode, cycle).
+// When cycle models change, the sticky cycle index is reset to 0.
+func (r *LegacyResolver) UpdateVirtual(opts VirtualOptions) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current := r.current.Load()
+	if current == nil {
+		current = &snapshot{routes: make(map[string]resolvedRoute), hidden: make(map[string]bool)}
+	}
+	if !slices.Equal(current.virtual.CycleModels, opts.CycleModels) {
+		r.internalCycleIndex.Store(0)
+	}
+	next := *current
+	next.virtual = opts
+	r.current.Store(&next)
+}
+
+// AdvanceCycle advances the sticky cycle index past the failed candidate model.
+func (r *LegacyResolver) AdvanceCycle(failed string) {
+	current := r.current.Load()
+	if current == nil {
+		return
+	}
+	if current.virtual.AdvanceCycle != nil {
+		current.virtual.AdvanceCycle(failed)
+		return
+	}
+	cycleModels := current.virtual.CycleModels
+	if len(cycleModels) == 0 {
+		return
+	}
+	idx := int(r.internalCycleIndex.Load()) % len(cycleModels)
+	if idx < 0 {
+		idx = 0
+	}
+	if cycleModels[idx] == failed {
+		r.internalCycleIndex.Add(1)
+	}
+}
+
+func (r *LegacyResolver) resolveConcrete(_ context.Context, current *snapshot, clientModel string, _ ir.Protocol) (Route, error) {
+	if current.hidden[clientModel] {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+	}
+	entry, found := current.routes[clientModel]
+	if !found {
+		return Route{Kind: Fallthrough, UpstreamModel: clientModel}, nil
+	}
+	if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+	}
+	return entry.route, nil
+}
+
+func (r *LegacyResolver) resolveCycle(ctx context.Context, current *snapshot, protocol ir.Protocol) (Route, error) {
+	cycleModels := current.virtual.CycleModels
+	if len(cycleModels) == 0 {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindOverloaded, Status: http.StatusServiceUnavailable, Message: "no available cycle models; configure cycle in the gateway"}
+	}
+	start := 0
+	if current.virtual.CycleIndex != nil {
+		start = current.virtual.CycleIndex()
+	} else {
+		start = int(r.internalCycleIndex.Load())
+	}
+	n := len(cycleModels)
+	if start < 0 || start >= n {
+		start = 0
+	}
+	var candidates []Route
+	for offset := 0; offset < n; offset++ {
+		id := cycleModels[(start+offset)%n]
+		if id == VirtualCycle || id == VirtualAutoMode {
+			continue
+		}
+		if current.hidden[id] {
+			continue
+		}
+		route, err := r.resolveConcrete(ctx, current, id, protocol)
+		if err != nil {
+			continue
+		}
+		route.Candidates = []Route{route}
+		candidates = append(candidates, route)
+	}
+	if len(candidates) == 0 {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindOverloaded, Status: http.StatusServiceUnavailable, Message: "no available cycle models; configure cycle in the gateway"}
+	}
+	first := candidates[0]
+	first.Candidates = candidates
+	return first, nil
+}
+
+func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, protocol ir.Protocol) (Route, error) {
 	if err := ctx.Err(); err != nil {
 		return Route{}, err
 	}
@@ -166,16 +295,65 @@ func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, _ ir.P
 	}
 	current := r.current.Load()
 	if current == nil {
-		return Route{Kind: Fallthrough}, nil
+		route := Route{Kind: Fallthrough, UpstreamModel: clientModel}
+		route.Candidates = []Route{route}
+		return route, nil
 	}
-	entry, found := current.routes[clientModel]
-	if !found {
-		return Route{Kind: Fallthrough}, nil
+	if clientModel == VirtualAutoMode {
+		isAllowed := protocol == ir.ProtocolAnthropicMessages ||
+			(current.virtual.AutoModelChatResponses &&
+				(protocol == ir.ProtocolOpenAIChat || protocol == ir.ProtocolOpenAIResponses))
+		if !isAllowed {
+			route := Route{Kind: Fallthrough, UpstreamModel: VirtualAutoMode}
+			route.Candidates = []Route{route}
+			return route, nil
+		}
+		target := current.virtual.AutoModel
+		if target == "" {
+			target = models.DefaultModel
+		}
+		if current.hidden[target] {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}
+		}
+		if entry, ok := current.routes[target]; ok && (entry.hidden || current.hidden[entry.alias]) {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}
+		}
+		if target == VirtualAutoMode {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "invalid automode target"}
+		}
+		if target == VirtualCycle {
+			return r.resolveCycle(ctx, current, protocol)
+		}
+		route, err := r.resolveConcrete(ctx, current, target, protocol)
+		if err != nil {
+			return Route{}, err
+		}
+		route.Candidates = []Route{route}
+		return route, nil
 	}
-	if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
-		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+	if clientModel == VirtualCycle {
+		return r.resolveCycle(ctx, current, protocol)
 	}
-	return entry.route, nil
+	route, err := r.resolveConcrete(ctx, current, clientModel, protocol)
+	if err != nil {
+		return Route{}, err
+	}
+	route.Candidates = []Route{route}
+	return route, nil
+}
+
+func (r *LegacyResolver) ResolveCandidates(ctx context.Context, clientModel string, protocol ir.Protocol) ([]Route, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	route, err := r.Resolve(ctx, clientModel, protocol)
+	if err != nil {
+		return nil, err
+	}
+	if len(route.Candidates) > 0 {
+		return route.Candidates, nil
+	}
+	return []Route{route}, nil
 }
 
 // ----------------------------------------------------------------------------
@@ -201,6 +379,7 @@ type registrySnapshot struct {
 	allowNvidiaShadow bool
 	isProtected       func(string) bool
 	warnings          []string
+	virtual           VirtualOptions
 }
 
 // RegistryOptions configures RegistryResolver behavior.
@@ -209,9 +388,16 @@ type RegistryOptions struct {
 	AllowNvidiaShadow bool
 	IsProtectedModel  func(string) bool
 	OnWarning         func(string)
+	Virtual           VirtualOptions
 }
 
 type ResolverOption func(*RegistryOptions)
+
+func WithVirtualOptions(opts VirtualOptions) ResolverOption {
+	return func(o *RegistryOptions) {
+		o.Virtual = opts
+	}
+}
 
 func WithDisableBareModels(disable bool) ResolverOption {
 	return func(o *RegistryOptions) {
@@ -349,9 +535,10 @@ func CheckCollisions(list []provider.Provider, opts ...ResolverOption) error {
 // RegistryResolver implements the registry-backed model resolver built on the v2
 // provider store, supporting exact aliases, wildcard mappings, and collision precedence.
 type RegistryResolver struct {
-	mu      sync.Mutex
-	current atomic.Pointer[registrySnapshot]
-	opts    RegistryOptions
+	mu                 sync.Mutex
+	current            atomic.Pointer[registrySnapshot]
+	opts               RegistryOptions
+	internalCycleIndex atomic.Int64
 }
 
 // NewRegistryResolver creates a new RegistryResolver from a list of providers and hidden IDs.
@@ -533,6 +720,13 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 		hiddenMap[id] = true
 	}
 
+	var prevVirtual VirtualOptions
+	if cur := r.current.Load(); cur != nil {
+		prevVirtual = cur.virtual
+	} else {
+		prevVirtual = r.opts.Virtual
+	}
+
 	next := &registrySnapshot{
 		exactRoutes:       exactRoutes,
 		wildcards:         wildcards,
@@ -542,26 +736,58 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 		allowNvidiaShadow: r.opts.AllowNvidiaShadow,
 		isProtected:       isProtected,
 		warnings:          warnings,
+		virtual:           prevVirtual,
 	}
 
 	r.current.Store(next)
 	return nil
 }
 
-// Resolve maps a requested model to its route using strict precedence:
-// Exact alias match > Wildcard prefix match > Bare upstream-name match > Fallthrough.
-func (r *RegistryResolver) Resolve(ctx context.Context, clientModel string, _ ir.Protocol) (Route, error) {
-	if err := ctx.Err(); err != nil {
-		return Route{}, err
-	}
-	if strings.TrimSpace(clientModel) == "" {
-		return Route{}, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "model must not be empty"}
-	}
+// UpdateVirtual updates the virtual alias configuration (automode, cycle).
+// When cycle models change, the sticky cycle index is reset to 0.
+func (r *RegistryResolver) UpdateVirtual(opts VirtualOptions) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	current := r.current.Load()
 	if current == nil {
-		return Route{Kind: Fallthrough}, nil
+		current = &registrySnapshot{
+			exactRoutes: make(map[string]resolvedRoute),
+			bareRoutes:  make(map[string]resolvedRoute),
+			hidden:      make(map[string]bool),
+		}
 	}
+	if !slices.Equal(current.virtual.CycleModels, opts.CycleModels) {
+		r.internalCycleIndex.Store(0)
+	}
+	next := *current
+	next.virtual = opts
+	r.current.Store(&next)
+}
 
+// AdvanceCycle advances the sticky cycle index past the failed candidate model.
+func (r *RegistryResolver) AdvanceCycle(failed string) {
+	current := r.current.Load()
+	if current == nil {
+		return
+	}
+	if current.virtual.AdvanceCycle != nil {
+		current.virtual.AdvanceCycle(failed)
+		return
+	}
+	cycleModels := current.virtual.CycleModels
+	if len(cycleModels) == 0 {
+		return
+	}
+	idx := int(r.internalCycleIndex.Load()) % len(cycleModels)
+	if idx < 0 {
+		idx = 0
+	}
+	if cycleModels[idx] == failed {
+		r.internalCycleIndex.Add(1)
+	}
+}
+
+func (r *RegistryResolver) resolveConcrete(_ context.Context, current *registrySnapshot, clientModel string, _ ir.Protocol) (Route, error) {
 	if current.hidden[clientModel] {
 		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 	}
@@ -614,5 +840,124 @@ func (r *RegistryResolver) Resolve(ctx context.Context, clientModel string, _ ir
 	}
 
 	// 4. Fallthrough
-	return Route{Kind: Fallthrough}, nil
+	return Route{Kind: Fallthrough, UpstreamModel: clientModel}, nil
+}
+
+func (r *RegistryResolver) resolveCycle(ctx context.Context, current *registrySnapshot, protocol ir.Protocol) (Route, error) {
+	cycleModels := current.virtual.CycleModels
+	if len(cycleModels) == 0 {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindOverloaded, Status: http.StatusServiceUnavailable, Message: "no available cycle models; configure cycle in the gateway"}
+	}
+	start := 0
+	if current.virtual.CycleIndex != nil {
+		start = current.virtual.CycleIndex()
+	} else {
+		start = int(r.internalCycleIndex.Load())
+	}
+	n := len(cycleModels)
+	if start < 0 || start >= n {
+		start = 0
+	}
+	var candidates []Route
+	for offset := 0; offset < n; offset++ {
+		id := cycleModels[(start+offset)%n]
+		if id == VirtualCycle || id == VirtualAutoMode {
+			continue
+		}
+		if current.hidden[id] {
+			continue
+		}
+		route, err := r.resolveConcrete(ctx, current, id, protocol)
+		if err != nil {
+			continue
+		}
+		route.Candidates = []Route{route}
+		candidates = append(candidates, route)
+	}
+	if len(candidates) == 0 {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindOverloaded, Status: http.StatusServiceUnavailable, Message: "no available cycle models; configure cycle in the gateway"}
+	}
+	first := candidates[0]
+	first.Candidates = candidates
+	return first, nil
+}
+
+// Resolve maps a requested model to its route using strict precedence:
+// Exact alias match > Wildcard prefix match > Bare upstream-name match > Fallthrough.
+// Virtual models (automode, cycle) are resolved to their target or active candidate.
+func (r *RegistryResolver) Resolve(ctx context.Context, clientModel string, protocol ir.Protocol) (Route, error) {
+	if err := ctx.Err(); err != nil {
+		return Route{}, err
+	}
+	if strings.TrimSpace(clientModel) == "" {
+		return Route{}, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "model must not be empty"}
+	}
+	current := r.current.Load()
+	if current == nil {
+		route := Route{Kind: Fallthrough, UpstreamModel: clientModel}
+		route.Candidates = []Route{route}
+		return route, nil
+	}
+
+	if clientModel == VirtualAutoMode {
+		// Decision recorded: By default, automode only routes on Anthropic Messages protocol (/v1/messages).
+		// Chat/Responses protocols fall through to preserve default OpenAI behavior unless AutoModelChatResponses is configured.
+		isAllowed := protocol == ir.ProtocolAnthropicMessages ||
+			(current.virtual.AutoModelChatResponses &&
+				(protocol == ir.ProtocolOpenAIChat || protocol == ir.ProtocolOpenAIResponses))
+		if !isAllowed {
+			route := Route{Kind: Fallthrough, UpstreamModel: VirtualAutoMode}
+			route.Candidates = []Route{route}
+			return route, nil
+		}
+		target := current.virtual.AutoModel
+		if target == "" {
+			target = models.DefaultModel
+		}
+		if current.hidden[target] {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}
+		}
+		if entry, ok := current.exactRoutes[target]; ok && (entry.hidden || current.hidden[entry.alias]) {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}
+		}
+		if target == VirtualAutoMode {
+			return Route{}, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Message: "invalid automode target"}
+		}
+		if target == VirtualCycle {
+			return r.resolveCycle(ctx, current, protocol)
+		}
+		route, err := r.resolveConcrete(ctx, current, target, protocol)
+		if err != nil {
+			return Route{}, err
+		}
+		route.Candidates = []Route{route}
+		return route, nil
+	}
+
+	if clientModel == VirtualCycle {
+		return r.resolveCycle(ctx, current, protocol)
+	}
+
+	route, err := r.resolveConcrete(ctx, current, clientModel, protocol)
+	if err != nil {
+		return Route{}, err
+	}
+	route.Candidates = []Route{route}
+	return route, nil
+}
+
+// ResolveCandidates returns an ordered list of candidate routes for virtual models (e.g. cycle)
+// or a single-element slice containing the resolved route for non-virtual targets.
+func (r *RegistryResolver) ResolveCandidates(ctx context.Context, clientModel string, protocol ir.Protocol) ([]Route, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	route, err := r.Resolve(ctx, clientModel, protocol)
+	if err != nil {
+		return nil, err
+	}
+	if len(route.Candidates) > 0 {
+		return route.Candidates, nil
+	}
+	return []Route{route}, nil
 }

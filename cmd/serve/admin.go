@@ -5,6 +5,8 @@ package main
 // gateway restart.
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
@@ -35,34 +38,36 @@ var adminStatsCache struct {
 var prefs = &modelPrefs{}
 
 type modelPrefs struct {
-	mu            sync.RWMutex
-	changeMu      sync.Mutex // serializes mutations, persistence, and reload callbacks
-	path          string
-	hidden        map[string]struct{}
-	deleted       map[string]struct{}
-	providers     []customProvider
-	providerStore *gatewayprovider.Store
-	loadErr       error // refuses mutation after an unreadable or unsupported models file
-	autoModel     string
-	searchURL     string
-	cycle         *cycleConfig
-	cycleIndex    int
-	onChange      func([]customProvider) // rewrites config.yaml so cliproxy reloads
-	onMaskChange  func()                 // triggers re-registration of models in cliproxy
-	resolver      *routing.RegistryResolver
+	mu                     sync.RWMutex
+	changeMu               sync.Mutex // serializes mutations, persistence, and reload callbacks
+	path                   string
+	hidden                 map[string]struct{}
+	deleted                map[string]struct{}
+	providers              []customProvider
+	providerStore          *gatewayprovider.Store
+	loadErr                error // refuses mutation after an unreadable or unsupported models file
+	autoModel              string
+	autoModelChatResponses bool
+	searchURL              string
+	cycle                  *cycleConfig
+	cycleIndex             int
+	onChange               func([]customProvider) // rewrites config.yaml so cliproxy reloads
+	onMaskChange           func()                 // triggers re-registration of models in cliproxy
+	resolver               *routing.RegistryResolver
 }
 
 type prefsFile struct {
-	Meta          map[string]any             `json:"_meta,omitempty"`
-	Groups        []ModelGroup               `json:"groups"`
-	MasksID       []string                   `json:"masks_id"`
-	DeletedID     []string                   `json:"deleted_id"`
-	Providers     []customProvider           `json:"providers,omitempty"` // kept for admin UI custom providers
-	ProvidersV2   []gatewayprovider.Provider `json:"providers_v2"`
-	SchemaVersion int                        `json:"schema_version"`
-	AutoModel     string                     `json:"auto_model,omitempty"`
-	SearchURL     string                     `json:"search_url,omitempty"`
-	Cycle         *cycleConfig               `json:"cycle,omitempty"`
+	Meta                   map[string]any             `json:"_meta,omitempty"`
+	Groups                 []ModelGroup               `json:"groups"`
+	MasksID                []string                   `json:"masks_id"`
+	DeletedID              []string                   `json:"deleted_id"`
+	Providers              []customProvider           `json:"providers,omitempty"` // kept for admin UI custom providers
+	ProvidersV2            []gatewayprovider.Provider `json:"providers_v2"`
+	SchemaVersion          int                        `json:"schema_version"`
+	AutoModel              string                     `json:"auto_model,omitempty"`
+	AutoModelChatResponses bool                       `json:"auto_model_chat_responses,omitempty"`
+	SearchURL              string                     `json:"search_url,omitempty"`
+	Cycle                  *cycleConfig               `json:"cycle,omitempty"`
 }
 
 type ModelGroup struct {
@@ -176,6 +181,51 @@ func (p *modelPrefs) isHidden(id string) bool {
 	return ok
 }
 
+// isModelUnavailable reports whether a model is deleted, hidden, or provided
+// by a v2 provider where the provider is disabled or the model mapping is hidden.
+func (p *modelPrefs) isModelUnavailable(id string) bool {
+	if p.isHidden(id) {
+		return true
+	}
+	p.mu.RLock()
+	store := p.providerStore
+	res := p.resolver
+	p.mu.RUnlock()
+
+	if store != nil {
+		foundInStore := false
+		storeList := store.List()
+		for i := range storeList {
+			prov := &storeList[i]
+			for _, m := range prov.Models {
+				matched := m.Alias == id || m.UpstreamModel == id
+				if !matched && strings.HasSuffix(m.Alias, "/*") {
+					matched = strings.HasPrefix(id, strings.TrimSuffix(m.Alias, "*"))
+				}
+				if matched {
+					foundInStore = true
+					if prov.Enabled && !m.Hidden {
+						return false
+					}
+				}
+			}
+		}
+		if foundInStore {
+			return true
+		}
+	}
+
+	if res != nil && id != routing.VirtualAutoMode && id != routing.VirtualCycle {
+		if _, err := res.Resolve(context.Background(), id, ""); err != nil {
+			var gwErr *gwerr.Error
+			if errors.As(err, &gwErr) && gwErr.Kind == gwerr.KindNotFound {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *modelPrefs) isDeleted(id string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -243,19 +293,39 @@ func (p *modelPrefs) listProviders() []customProvider {
 	return append([]customProvider(nil), p.providers...)
 }
 
-func (p *modelPrefs) autoModelID() string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+func (p *modelPrefs) autoModelIDLocked() string {
 	if p.autoModel != "" {
 		return p.autoModel
 	}
 	return models.DefaultModel
 }
 
-func (p *modelPrefs) setAutoModel(id string) error {
+func (p *modelPrefs) autoModelID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoModelIDLocked()
+}
+
+func (p *modelPrefs) autoModelChatResponsesEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoModelChatResponses
+}
+
+func (p *modelPrefs) setAutoModelConfig(id string, chatResponses *bool) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error { file.AutoModel = id; return nil }, false)
+	return p.commitPrefs(func(file *prefsFile) error {
+		file.AutoModel = id
+		if chatResponses != nil {
+			file.AutoModelChatResponses = *chatResponses
+		}
+		return nil
+	}, false)
+}
+
+func (p *modelPrefs) setAutoModel(id string) error {
+	return p.setAutoModelConfig(id, nil)
 }
 
 func (p *modelPrefs) searchTemplate() string {

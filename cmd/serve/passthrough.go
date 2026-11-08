@@ -302,11 +302,19 @@ func copyProxyResponse(c *gin.Context, resp *http.Response, model string, start 
 }
 
 // claudeAutoModelAlias replaces only the virtual automode model with its target.
-// ponytail: rewrites only /v1/messages; add /v1/chat/completions if helpers ever hit it too.
+// By default, rewrites only /v1/messages; chat/responses routes are enabled via AutoModelChatResponses.
 func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method != http.MethodPost ||
-			!strings.HasPrefix(c.Request.URL.Path, "/v1/messages") {
+		path := c.Request.URL.Path
+		if c.Request.Method != http.MethodPost {
+			c.Next()
+			return
+		}
+		allowed := strings.HasPrefix(path, "/v1/messages")
+		if !allowed && p != nil && p.autoModelChatResponsesEnabled() && (path == "/v1/chat/completions" || path == "/v1/responses") {
+			allowed = true
+		}
+		if !allowed {
 			c.Next()
 			return
 		}
@@ -321,7 +329,7 @@ func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 		}
 		if json.Unmarshal(body, &payload) == nil && payload.Model == "automode" {
 			target := p.autoModelID()
-			if p.isHidden(target) {
+			if p.isModelUnavailable(target) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "automode target is hidden"})
 				c.Abort()
 				return

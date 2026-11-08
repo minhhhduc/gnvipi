@@ -67,7 +67,7 @@ func (h *translation) resolvePolicy() (adapter.Capabilities, gwpolicy.Mode) {
 	return caps, mode
 }
 
-func (d *Dispatcher) translator(model string, route routing.Route, base adapter.Outbound) (*translation, error) {
+func (d *Dispatcher) translator(model string, route *routing.Route, base adapter.Outbound) (*translation, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if cached, found := d.translations[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
@@ -81,7 +81,7 @@ func (d *Dispatcher) translator(model string, route routing.Route, base adapter.
 	return handler, nil
 }
 
-func (d *Dispatcher) failTranslation(c *gin.Context, protocol ir.Protocol, route routing.Route, request *core.RequestContext, stream bool, err error) {
+func (d *Dispatcher) failTranslation(c *gin.Context, protocol ir.Protocol, route *routing.Route, request *core.RequestContext, stream bool, err error) {
 	request.ResolvedProvider = route.Provider.ID
 	request.UpstreamModel = route.UpstreamModel
 	request.UpstreamProtocol = route.UpstreamProtocol

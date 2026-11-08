@@ -48,6 +48,16 @@ func (s staticResolver) Resolve(_ context.Context, model string, _ ir.Protocol) 
 	return routing.Route{Kind: routing.Fallthrough}, nil
 }
 
+func (s staticResolver) ResolveCandidates(ctx context.Context, model string, p ir.Protocol) ([]routing.Route, error) {
+	r, err := s.Resolve(ctx, model, p)
+	if err != nil {
+		return nil, err
+	}
+	return []routing.Route{r}, nil
+}
+
+func (s staticResolver) AdvanceCycle(string) {}
+
 func setupMatrixRegistry() *adapter.Registry {
 	r := adapter.NewRegistry()
 	r.RegisterInbound(inboundanthropic.New())

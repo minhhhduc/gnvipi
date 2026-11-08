@@ -35,6 +35,17 @@ func (p *modelPrefs) refreshRoutingLocked() error {
 	if err != nil {
 		return err
 	}
+	var cycleModels []string
+	if p.cycle != nil {
+		cycleModels = p.cycle.Models
+	}
+	resolver.UpdateVirtual(routing.VirtualOptions{
+		AutoModel:              p.autoModelIDLocked(),
+		AutoModelChatResponses: p.autoModelChatResponses,
+		CycleModels:            cycleModels,
+		CycleIndex:             func() int { p.mu.RLock(); defer p.mu.RUnlock(); return p.cycleIndex },
+		AdvanceCycle:           func(failed string) { p.advanceCycle("cycle", failed) },
+	})
 	p.resolver = resolver
 	return nil
 }

@@ -137,7 +137,7 @@ func (d *Dispatcher) featurePolicyConfig() gwpolicy.Config {
 	return cfg
 }
 
-func (d *Dispatcher) isLocalCountTokens(route routing.Route, protocol ir.Protocol) bool {
+func (d *Dispatcher) isLocalCountTokens(route *routing.Route, protocol ir.Protocol) bool {
 	if route.UpstreamProtocol != protocol {
 		return true
 	}
@@ -158,7 +158,7 @@ func (d *Dispatcher) isLocalCountTokens(route routing.Route, protocol ir.Protoco
 	return !caps.CountTokens
 }
 
-func (d *Dispatcher) handler(model string, route routing.Route) (*relay.Relay, error) {
+func (d *Dispatcher) handler(model string, route *routing.Route) (*relay.Relay, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if cached, found := d.handlers[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
@@ -232,7 +232,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, err)
 		return
 	}
-	if route.Kind == routing.Fallthrough {
+	if route.Kind == routing.Fallthrough || payload.Model == routing.VirtualAutoMode || payload.Model == routing.VirtualCycle {
 		restoreAndContinue(c, body)
 		return
 	}
@@ -240,8 +240,8 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, &gwerr.Error{Kind: gwerr.KindInternal, Message: "resolver returned an invalid route"})
 		return
 	}
-	if c.Request.URL.Path == "/v1/messages/count_tokens" && d.isLocalCountTokens(route, protocol) {
-		d.serveCountTokensEstimate(c, body, route, rc)
+	if c.Request.URL.Path == "/v1/messages/count_tokens" && d.isLocalCountTokens(&route, protocol) {
+		d.serveCountTokensEstimate(c, body, &route, rc)
 		return
 	}
 	if d.Limiter != nil {
@@ -253,7 +253,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		defer release()
 	}
 	if route.UpstreamProtocol == protocol {
-		handler, err := d.handler(payload.Model, route)
+		handler, err := d.handler(payload.Model, &route)
 		if err != nil {
 			writeDispatchError(c, protocol, err)
 			return
@@ -277,9 +277,9 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		restoreAndContinue(c, body)
 		return
 	}
-	handler, err := d.translator(payload.Model, route, base)
+	handler, err := d.translator(payload.Model, &route, base)
 	if err != nil {
-		d.failTranslation(c, protocol, route, rc, isStream, err)
+		d.failTranslation(c, protocol, &route, rc, isStream, err)
 		return
 	}
 	if isStream {
@@ -289,7 +289,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 	handler.Serve(c, body, inbound, rc)
 }
 
-func (d *Dispatcher) serveCountTokensEstimate(c *gin.Context, body []byte, route routing.Route, rc *core.RequestContext) {
+func (d *Dispatcher) serveCountTokensEstimate(c *gin.Context, body []byte, route *routing.Route, rc *core.RequestContext) {
 	c.Abort()
 	protocol := rc.InboundProtocol
 	rc.ResolvedProvider = route.Provider.ID
