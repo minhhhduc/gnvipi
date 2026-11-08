@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -75,6 +77,109 @@ type Policy struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 }
 
+// ProviderRetryConfig specifies per-provider overrides for retry policies.
+type ProviderRetryConfig struct {
+	MaxAttempts    *int           `json:"max_attempts,omitempty"`
+	InitialBackoff *time.Duration `json:"initial_backoff,omitempty"`
+	MaxBackoff     *time.Duration `json:"max_backoff,omitempty"`
+	MaxRetryAfter  *time.Duration `json:"max_retry_after,omitempty"`
+	DisableJitter  *bool          `json:"disable_jitter,omitempty"`
+}
+
+var (
+	providerOverridesMu sync.RWMutex
+	providerOverrides   = make(map[string]ProviderRetryConfig)
+)
+
+// RegisterProviderRetry registers per-provider retry policy overrides.
+func RegisterProviderRetry(providerID string, cfg ProviderRetryConfig) {
+	providerOverridesMu.Lock()
+	defer providerOverridesMu.Unlock()
+	providerOverrides[providerID] = cfg
+}
+
+// ClearProviderRetries removes all registered per-provider retry policy overrides.
+func ClearProviderRetries() {
+	providerOverridesMu.Lock()
+	defer providerOverridesMu.Unlock()
+	providerOverrides = make(map[string]ProviderRetryConfig)
+}
+
+func getProviderOverride(providerID string) (ProviderRetryConfig, bool) {
+	providerOverridesMu.RLock()
+	defer providerOverridesMu.RUnlock()
+	cfg, ok := providerOverrides[providerID]
+	return cfg, ok
+}
+
+func (p *Policy) applyOverride(cfg ProviderRetryConfig) {
+	if cfg.MaxAttempts != nil && *cfg.MaxAttempts > 0 {
+		p.MaxAttempts = *cfg.MaxAttempts
+	}
+	if cfg.InitialBackoff != nil && *cfg.InitialBackoff > 0 {
+		p.InitialBackoff = *cfg.InitialBackoff
+	}
+	if cfg.MaxBackoff != nil && *cfg.MaxBackoff > 0 {
+		p.MaxBackoff = *cfg.MaxBackoff
+	}
+	if cfg.MaxRetryAfter != nil && *cfg.MaxRetryAfter > 0 {
+		p.MaxRetryAfter = *cfg.MaxRetryAfter
+	}
+	if cfg.DisableJitter != nil {
+		p.DisableJitter = *cfg.DisableJitter
+	}
+}
+
+func parseExtraBodyRetry(raw json.RawMessage) (ProviderRetryConfig, bool) {
+	if len(raw) == 0 {
+		return ProviderRetryConfig{}, false
+	}
+	var wrapper struct {
+		Retry *json.RawMessage `json:"retry"`
+	}
+	target := raw
+	if err := json.Unmarshal(raw, &wrapper); err == nil && wrapper.Retry != nil && len(*wrapper.Retry) > 0 {
+		target = *wrapper.Retry
+	}
+
+	var parsed struct {
+		MaxAttempts    *int        `json:"max_attempts"`
+		InitialBackoff interface{} `json:"initial_backoff"`
+		MaxBackoff     interface{} `json:"max_backoff"`
+		MaxRetryAfter  interface{} `json:"max_retry_after"`
+		DisableJitter  *bool       `json:"disable_jitter"`
+	}
+	if err := json.Unmarshal(target, &parsed); err != nil {
+		return ProviderRetryConfig{}, false
+	}
+
+	var cfg ProviderRetryConfig
+	cfg.MaxAttempts = parsed.MaxAttempts
+	cfg.DisableJitter = parsed.DisableJitter
+
+	parseDuration := func(v interface{}) *time.Duration {
+		if v == nil {
+			return nil
+		}
+		switch val := v.(type) {
+		case string:
+			if d, err := time.ParseDuration(val); err == nil {
+				return &d
+			}
+		case float64:
+			d := time.Duration(val * float64(time.Millisecond))
+			return &d
+		}
+		return nil
+	}
+
+	cfg.InitialBackoff = parseDuration(parsed.InitialBackoff)
+	cfg.MaxBackoff = parseDuration(parsed.MaxBackoff)
+	cfg.MaxRetryAfter = parseDuration(parsed.MaxRetryAfter)
+
+	return cfg, true
+}
+
 // DefaultPolicy returns a Policy with standard gateway defaults:
 // 2 max attempts (1 initial + 1 retry), 100ms initial backoff, 3s max backoff,
 // 5s max Retry-After cap, factor 2.0, and 25% jitter.
@@ -130,12 +235,25 @@ func defaultSleep(ctx context.Context, d time.Duration) error {
 }
 
 // ForProvider returns a copy of p customized for the given provider.
+// It checks for per-provider overrides registered via RegisterProviderRetry
+// and embedded in prov.ExtraBody under the "retry" key.
 // When LogRetries is enabled, it ensures provider ID is included in logs and callbacks.
 func (p Policy) ForProvider(prov *provider.Provider) Policy {
 	out := p
 	if prov == nil {
 		return out
 	}
+
+	if override, ok := getProviderOverride(prov.ID); ok {
+		out.applyOverride(override)
+	}
+
+	if len(prov.ExtraBody) > 0 {
+		if override, ok := parseExtraBodyRetry(prov.ExtraBody); ok {
+			out.applyOverride(override)
+		}
+	}
+
 	prevOnRetry := out.OnRetry
 	out.OnRetry = func(ctx context.Context, attempt int, delay time.Duration, resp *http.Response, err error) {
 		if out.LogRetries {
@@ -306,10 +424,77 @@ func isRetryableSyscallErrno(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED)
 }
 
-// IsRetryable reports whether a call outcome is safe to retry.
-// It returns false if response streaming has started (first byte written to client),
-// if the error is non-retryable, or if the HTTP status is not retryable.
+const peekLimit = 8192
+
+// isPermanentRateLimit checks if a 429 response body indicates a permanent quota exhaustion
+// ("insufficient_quota") that should not be retried. It peeks and restores resp.Body so downstream
+// readers can still consume the response intact.
+func isPermanentRateLimit(resp *http.Response) bool {
+	if resp == nil || resp.Body == nil || resp.Body == http.NoBody {
+		return false
+	}
+
+	peekBuf := make([]byte, peekLimit)
+	n, readErr := io.ReadFull(resp.Body, peekBuf)
+	if n == 0 {
+		return false
+	}
+	peekData := peekBuf[:n]
+
+	// Restore resp.Body so downstream can read the full body intact.
+	if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+		if closeErr := resp.Body.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			log.Printf("gateway retry: peek close body: %v", closeErr)
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(peekData))
+	} else {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: io.MultiReader(bytes.NewReader(peekData), resp.Body),
+			Closer: resp.Body,
+		}
+	}
+
+	return containsInsufficientQuota(peekData)
+}
+
+func containsInsufficientQuota(data []byte) bool {
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+		Code string `json:"code"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &env); err == nil {
+		if strings.EqualFold(env.Error.Code, "insufficient_quota") ||
+			strings.EqualFold(env.Error.Type, "insufficient_quota") ||
+			strings.EqualFold(env.Code, "insufficient_quota") ||
+			strings.EqualFold(env.Type, "insufficient_quota") {
+			return true
+		}
+	}
+	lower := bytes.ToLower(data)
+	return bytes.Contains(lower, []byte(`"insufficient_quota"`))
+}
+
+// IsRetryable reports whether a call outcome is safe to retry using default bounds.
+// It returns false if:
+//   - response streaming has started (first byte written to client),
+//   - the error is non-retryable,
+//   - the HTTP status is not retryable,
+//   - 429 or 503 specifies Retry-After exceeding DefaultMaxRetryAfter,
+//   - 429 error code/type indicates permanent "insufficient_quota".
 func IsRetryable(resp *http.Response, err error, streamStarted bool) bool {
+	return DefaultPolicy().IsRetryable(resp, err, streamStarted)
+}
+
+// IsRetryable reports whether a call outcome is safe to retry under policy p.
+func (p Policy) IsRetryable(resp *http.Response, err error, streamStarted bool) bool {
+	policy := p.withDefaults()
 	if streamStarted {
 		return false
 	}
@@ -317,7 +502,20 @@ func IsRetryable(resp *http.Response, err error, streamStarted bool) bool {
 		return IsRetryableNetworkError(err)
 	}
 	if resp != nil {
-		return IsRetryableStatus(resp.StatusCode)
+		if !IsRetryableStatus(resp.StatusCode) {
+			return false
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			if raw := resp.Header.Get("Retry-After"); raw != "" {
+				if d, ok := ParseRetryAfter(raw); ok && d > policy.MaxRetryAfter {
+					return false
+				}
+			}
+		}
+		if resp.StatusCode == http.StatusTooManyRequests && isPermanentRateLimit(resp) {
+			return false
+		}
+		return true
 	}
 	return false
 }
@@ -352,12 +550,12 @@ func ParseRetryAfter(raw string) (time.Duration, bool) {
 }
 
 // ComputeDelay calculates the backoff wait duration for the next retry attempt.
-// For HTTP 429 with a Retry-After header, the parsed duration is honored up to MaxRetryAfter.
+// For HTTP 429 or 503 with a Retry-After header, the parsed duration is honored up to MaxRetryAfter.
 // Otherwise, exponential backoff with jitter is applied up to MaxBackoff.
 func (p Policy) ComputeDelay(attempt int, resp *http.Response) time.Duration {
 	policy := p.withDefaults()
 
-	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+	if resp != nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable) {
 		if d, ok := ParseRetryAfter(resp.Header.Get("Retry-After")); ok {
 			if d > policy.MaxRetryAfter {
 				return policy.MaxRetryAfter
@@ -485,8 +683,8 @@ func (p Policy) Execute(ctx context.Context, fn AttemptFunc) (*http.Response, er
 			return resp, err
 		}
 
-		// Check if the outcome is retryable.
-		if !IsRetryable(resp, err, streamStarted) {
+		// Check if the outcome is retryable under this policy.
+		if !policy.IsRetryable(resp, err, streamStarted) {
 			return resp, err
 		}
 
@@ -524,6 +722,8 @@ func (p Policy) Execute(ctx context.Context, fn AttemptFunc) (*http.Response, er
 }
 
 // Do executes an HTTP request using client and applying safe retries according to policy.
+// It clones req per attempt and ensures req.Body is replayable across retries without
+// mutating the caller's *http.Request.
 func (p Policy) Do(client *http.Client, req *http.Request) (*http.Response, error) {
 	if client == nil {
 		client = http.DefaultClient
@@ -532,22 +732,49 @@ func (p Policy) Do(client *http.Client, req *http.Request) (*http.Response, erro
 		return nil, errors.New("reliability: nil http.Request")
 	}
 
-	if err := MakeReplayable(req); err != nil {
-		return nil, err
-	}
-
-	return p.Execute(req.Context(), func(attempt int) (*http.Response, bool, error) {
-		if attempt > 0 {
-			if err := RewindRequestBody(req); err != nil {
-				return nil, false, err
+	ctx := req.Context()
+	var bodyBytes []byte
+	hasBody := false
+	if req.Body != nil && req.Body != http.NoBody {
+		hasBody = true
+		if req.GetBody == nil {
+			var err error
+			bodyBytes, err = io.ReadAll(req.Body)
+			if closeErr := req.Body.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				return nil, fmt.Errorf("reliability: read request body: %w", err)
 			}
 		}
-		resp, err := client.Do(req)
+	}
+
+	return p.Execute(ctx, func(attempt int) (*http.Response, bool, error) {
+		reqClone := req.Clone(ctx)
+		if hasBody {
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, false, fmt.Errorf("reliability: get body for attempt %d: %w", attempt, err)
+				}
+				reqClone.Body = body
+			} else {
+				reqClone.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				reqClone.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+		}
+		resp, err := client.Do(reqClone)
 		return resp, false, err
 	})
 }
 
 // Transport wraps an underlying http.RoundTripper with safe retry logic.
+// In accordance with the http.RoundTripper contract:
+//   - It does NOT follow redirects (does not use http.Client, calls Base.RoundTrip directly).
+//   - It does NOT mutate the caller's *http.Request.
+//   - It clones the request and restores a fresh body for each attempt.
 type Transport struct {
 	Base   http.RoundTripper
 	Policy Policy
@@ -555,10 +782,48 @@ type Transport struct {
 
 // RoundTrip executes the request using Base and Policy.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("reliability: nil http.Request")
+	}
 	base := t.Base
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	client := &http.Client{Transport: base}
-	return t.Policy.Do(client, req)
+
+	ctx := req.Context()
+	var bodyBytes []byte
+	hasBody := false
+	if req.Body != nil && req.Body != http.NoBody {
+		hasBody = true
+		if req.GetBody == nil {
+			var err error
+			bodyBytes, err = io.ReadAll(req.Body)
+			if closeErr := req.Body.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				return nil, fmt.Errorf("reliability: read request body: %w", err)
+			}
+		}
+	}
+
+	return t.Policy.Execute(ctx, func(attempt int) (*http.Response, bool, error) {
+		reqClone := req.Clone(ctx)
+		if hasBody {
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, false, fmt.Errorf("reliability: get body for attempt %d: %w", attempt, err)
+				}
+				reqClone.Body = body
+			} else {
+				reqClone.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				reqClone.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+		}
+		resp, err := base.RoundTrip(reqClone)
+		return resp, false, err
+	})
 }

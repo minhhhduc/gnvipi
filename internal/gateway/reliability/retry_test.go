@@ -1,8 +1,10 @@
 package reliability_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -327,6 +329,16 @@ func TestComputeDelay(t *testing.T) {
 		t.Errorf("429 Retry-After 3s = %v; want 3s", d429)
 	}
 
+	// 503 with Retry-After header <= MaxRetryAfter
+	resp503 := &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Retry-After": []string{"2"}},
+	}
+	d503 := p.ComputeDelay(0, resp503)
+	if d503 != 2*time.Second {
+		t.Errorf("503 Retry-After 2s = %v; want 2s", d503)
+	}
+
 	// 429 with Retry-After exceeding MaxRetryAfter (capped at 5s)
 	resp429Large := &http.Response{
 		StatusCode: http.StatusTooManyRequests,
@@ -596,6 +608,143 @@ func TestHarnessNonRetryableStatusesWithFakeUpstream(t *testing.T) {
 	}
 }
 
+func TestRetryAfterExceedingMaxDelayNotRetried(t *testing.T) {
+	t.Run("429 with Retry-After > MaxRetryAfter returns immediately", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusTooManyRequests, RetryAfter: "10", Body: `{"error":"rate limited"}`},
+			gatewaytest.Step{Status: http.StatusOK, Body: `{"ok":true}`},
+		)
+
+		p := fastTestPolicy()
+		p.MaxRetryAfter = 2 * time.Second
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+
+		resp, err := p.Do(http.DefaultClient, req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer closeBody(t, resp)
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("status = %d; want 429 returned immediately", resp.StatusCode)
+		}
+		if len(u.Requests()) != 1 {
+			t.Errorf("requests = %d; want 1 (must not retry when Retry-After > MaxRetryAfter)", len(u.Requests()))
+		}
+	})
+
+	t.Run("503 with Retry-After > MaxRetryAfter returns immediately", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusServiceUnavailable, RetryAfter: "10", Body: `{"error":"service unavailable"}`},
+			gatewaytest.Step{Status: http.StatusOK, Body: `{"ok":true}`},
+		)
+
+		p := fastTestPolicy()
+		p.MaxRetryAfter = 2 * time.Second
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+
+		resp, err := p.Do(http.DefaultClient, req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer closeBody(t, resp)
+
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Errorf("status = %d; want 503 returned immediately", resp.StatusCode)
+		}
+		if len(u.Requests()) != 1 {
+			t.Errorf("requests = %d; want 1 (must not retry when Retry-After > MaxRetryAfter)", len(u.Requests()))
+		}
+	})
+
+	t.Run("503 with Retry-After <= MaxRetryAfter is honored for delay", func(t *testing.T) {
+		u := gatewaytest.New(t)
+		u.Script(gatewaytest.RouteChat,
+			gatewaytest.Step{Status: http.StatusServiceUnavailable, RetryAfter: "1", Body: `{"error":"service unavailable"}`},
+			gatewaytest.Step{Status: http.StatusOK, Body: `{"ok":true}`},
+		)
+
+		var capturedDelay time.Duration
+		p := fastTestPolicy()
+		p.MaxRetryAfter = 5 * time.Second
+		p.Sleep = func(ctx context.Context, d time.Duration) error {
+			return nil
+		}
+		p.OnRetry = func(ctx context.Context, attempt int, delay time.Duration, resp *http.Response, err error) {
+			capturedDelay = delay
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+
+		resp, err := p.Do(http.DefaultClient, req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer closeBody(t, resp)
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d; want 200 after retry", resp.StatusCode)
+		}
+		if len(u.Requests()) != 2 {
+			t.Errorf("requests = %d; want 2 (retried)", len(u.Requests()))
+		}
+		if capturedDelay != 1*time.Second {
+			t.Errorf("captured delay = %v; want 1s", capturedDelay)
+		}
+	})
+}
+
+func TestPermanentRateLimitNotRetried(t *testing.T) {
+	quotaErrorBody := `{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`
+
+	u := gatewaytest.New(t)
+	u.Script(gatewaytest.RouteChat,
+		gatewaytest.Step{Status: http.StatusTooManyRequests, Body: quotaErrorBody},
+		gatewaytest.Step{Status: http.StatusOK, Body: `{"should":"not be called"}`},
+	)
+
+	p := fastTestPolicy()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	resp, err := p.Do(http.DefaultClient, req)
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	defer closeBody(t, resp)
+
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status = %d; want 429", resp.StatusCode)
+	}
+	if len(u.Requests()) != 1 {
+		t.Errorf("requests = %d; want 1 (insufficient_quota must not be retried)", len(u.Requests()))
+	}
+
+	// Verify that the caller can read the full response body intact
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read body: %v", readErr)
+	}
+	if string(bodyBytes) != quotaErrorBody {
+		t.Errorf("body = %q; want %q", string(bodyBytes), quotaErrorBody)
+	}
+}
+
 func TestConfigurableMaxAttempts(t *testing.T) {
 	t.Run("default max attempts = 2 exhausts after 2 tries", func(t *testing.T) {
 		u := gatewaytest.New(t)
@@ -777,35 +926,144 @@ func TestOnRetryCallbackAndMetrics(t *testing.T) {
 	}
 }
 
-func TestTransportRoundTrip(t *testing.T) {
-	u := gatewaytest.New(t)
-	u.Script(gatewaytest.RouteChat,
-		gatewaytest.Step{Status: http.StatusServiceUnavailable, Body: `{"error":"503"}`},
-		gatewaytest.Step{Status: http.StatusOK, Body: `{"ok":true}`},
-	)
+func TestForProviderOverrides(t *testing.T) {
+	basePolicy := reliability.DefaultPolicy()
 
-	tr := &reliability.Transport{
-		Policy: fastTestPolicy(),
-	}
-	client := &http.Client{Transport: tr}
+	t.Run("override via ExtraBody", func(t *testing.T) {
+		prov := &provider.Provider{
+			ID:        "extra-body-prov",
+			ExtraBody: json.RawMessage(`{"retry":{"max_attempts":4,"initial_backoff":"25ms","max_backoff":"500ms","max_retry_after":"2s","disable_jitter":true}}`),
+		}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+gatewaytest.RouteChat, strings.NewReader(`{}`))
-	if err != nil {
-		t.Fatalf("create request: %v", err)
-	}
+		p := basePolicy.ForProvider(prov)
+		if p.MaxAttempts != 4 {
+			t.Errorf("MaxAttempts = %d; want 4", p.MaxAttempts)
+		}
+		if p.InitialBackoff != 25*time.Millisecond {
+			t.Errorf("InitialBackoff = %v; want 25ms", p.InitialBackoff)
+		}
+		if p.MaxBackoff != 500*time.Millisecond {
+			t.Errorf("MaxBackoff = %v; want 500ms", p.MaxBackoff)
+		}
+		if p.MaxRetryAfter != 2*time.Second {
+			t.Errorf("MaxRetryAfter = %v; want 2s", p.MaxRetryAfter)
+		}
+		if !p.DisableJitter {
+			t.Error("DisableJitter = false; want true")
+		}
+	})
 
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("client.Do failed: %v", err)
-	}
-	defer closeBody(t, resp)
+	t.Run("override via RegisterProviderRetry", func(t *testing.T) {
+		maxAttempts := 5
+		initialBackoff := 50 * time.Millisecond
+		maxBackoff := 2 * time.Second
+		maxRetryAfter := 1 * time.Second
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d; want 200", resp.StatusCode)
-	}
-	if len(u.Requests()) != 2 {
-		t.Errorf("requests = %d; want 2", len(u.Requests()))
-	}
+		reliability.RegisterProviderRetry("reg-prov", reliability.ProviderRetryConfig{
+			MaxAttempts:    &maxAttempts,
+			InitialBackoff: &initialBackoff,
+			MaxBackoff:     &maxBackoff,
+			MaxRetryAfter:  &maxRetryAfter,
+		})
+		defer reliability.ClearProviderRetries()
+
+		prov := &provider.Provider{ID: "reg-prov"}
+		p := basePolicy.ForProvider(prov)
+
+		if p.MaxAttempts != 5 {
+			t.Errorf("MaxAttempts = %d; want 5", p.MaxAttempts)
+		}
+		if p.InitialBackoff != 50*time.Millisecond {
+			t.Errorf("InitialBackoff = %v; want 50ms", p.InitialBackoff)
+		}
+		if p.MaxBackoff != 2*time.Second {
+			t.Errorf("MaxBackoff = %v; want 2s", p.MaxBackoff)
+		}
+		if p.MaxRetryAfter != 1*time.Second {
+			t.Errorf("MaxRetryAfter = %v; want 1s", p.MaxRetryAfter)
+		}
+	})
+}
+
+func TestTransportRoundTripContract(t *testing.T) {
+	t.Run("retries transient failure without following redirects", func(t *testing.T) {
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/destination")
+			w.WriteHeader(http.StatusFound) // 302
+		}))
+		defer redirectServer.Close()
+
+		tr := &reliability.Transport{
+			Policy: fastTestPolicy(),
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, redirectServer.URL, http.NoBody)
+		if err != nil {
+			t.Fatalf("create request: %v", err)
+		}
+
+		resp, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip failed: %v", err)
+		}
+		defer closeBody(t, resp)
+
+		// Must return the 302 Found response directly without following the redirect
+		if resp.StatusCode != http.StatusFound {
+			t.Errorf("status = %d; want 302 (must not follow redirects)", resp.StatusCode)
+		}
+	})
+
+	t.Run("does not mutate caller request and preserves body replayability", func(t *testing.T) {
+		var receivedBodies []string
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			receivedBodies = append(receivedBodies, string(bodyBytes))
+			if len(receivedBodies) == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		payload := `{"test":"immutable"}`
+		originalBody := io.NopCloser(bytes.NewReader([]byte(payload)))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, originalBody)
+		if err != nil {
+			t.Fatalf("create request: %v", err)
+		}
+
+		tr := &reliability.Transport{
+			Policy: fastTestPolicy(),
+		}
+
+		resp, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip failed: %v", err)
+		}
+		defer closeBody(t, resp)
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d; want 200", resp.StatusCode)
+		}
+		if len(receivedBodies) != 2 {
+			t.Fatalf("received %d requests; want 2", len(receivedBodies))
+		}
+		if receivedBodies[0] != payload || receivedBodies[1] != payload {
+			t.Errorf("received bodies mismatch: %v", receivedBodies)
+		}
+
+		// Verify caller's req was not mutated to a different URL or context
+		if req.URL.String() != srv.URL {
+			t.Errorf("req.URL mutated: %s", req.URL.String())
+		}
+	})
 }
 
 func TestConnectionRefusedRetries(t *testing.T) {
