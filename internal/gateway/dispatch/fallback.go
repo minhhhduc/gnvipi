@@ -21,13 +21,18 @@ type fallbackAttemptWriter struct {
 	buffer    bytes.Buffer
 	committed bool
 	firstByte bool
+	isTrigger func(int) bool
 	onCommit  func(http.Header)
 }
 
-func newFallbackAttemptWriter(dest gin.ResponseWriter, onCommit func(http.Header)) *fallbackAttemptWriter {
+func newFallbackAttemptWriter(dest gin.ResponseWriter, isTrigger func(int) bool, onCommit func(http.Header)) *fallbackAttemptWriter {
+	if isTrigger == nil {
+		isTrigger = func(s int) bool { return isFallbackTriggerStatus(s) }
+	}
 	return &fallbackAttemptWriter{
 		ResponseWriter: dest,
 		header:         make(http.Header),
+		isTrigger:      isTrigger,
 		onCommit:       onCommit,
 	}
 }
@@ -41,7 +46,7 @@ func (w *fallbackAttemptWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.status = statusCode
-	if !isFallbackTriggerStatus(statusCode) {
+	if !w.isTrigger(statusCode) {
 		w.commit()
 	}
 }
@@ -134,11 +139,43 @@ func (w *fallbackAttemptWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-func isFallbackTriggerStatus(status int) bool {
-	return status == http.StatusBadGateway ||
-		status == http.StatusServiceUnavailable ||
-		status == http.StatusGatewayTimeout ||
-		status == http.StatusTooManyRequests
+func resolveFallbackStatuses(cand *routing.Route) []int {
+	if cand == nil {
+		return nil
+	}
+	if len(cand.FallbackStatuses) > 0 {
+		return cand.FallbackStatuses
+	}
+	if cand.Provider != nil && len(cand.Provider.Extensions) > 0 {
+		if raw, ok := cand.Provider.Extensions["fallback_statuses"]; ok && len(raw) > 0 {
+			var statuses []int
+			if err := json.Unmarshal(raw, &statuses); err == nil && len(statuses) > 0 {
+				return statuses
+			}
+		}
+	}
+	return nil
+}
+
+func isFallbackTriggerStatus(status int, configured ...[]int) bool {
+	var list []int
+	for _, c := range configured {
+		if len(c) > 0 {
+			list = c
+			break
+		}
+	}
+	if len(list) > 0 {
+		for _, s := range list {
+			if s == status {
+				return true
+			}
+		}
+		return false
+	}
+	return status == http.StatusRequestTimeout ||
+		status == http.StatusTooManyRequests ||
+		(status >= 500 && status <= 599)
 }
 
 type attemptRecorder struct {
@@ -155,7 +192,7 @@ func (r *attemptRecorder) Record(c *core.Completion) {
 	close(r.done)
 }
 
-func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestContext) {
+func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestContext, fallbackAlias string, isFallback bool) {
 	if recorder == nil {
 		return
 	}
@@ -163,6 +200,10 @@ func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestCo
 	case <-recorder.done:
 		if recorder.completion != nil && recorder.completion.Request != nil {
 			finished := recorder.completion.Request
+			if isFallback && fallbackAlias != "" {
+				finished.ClientModel = fallbackAlias
+				rc.ClientModel = fallbackAlias
+			}
 			rc.ResolvedProvider = finished.ResolvedProvider
 			rc.UpstreamModel = finished.UpstreamModel
 			rc.UpstreamProtocol = finished.UpstreamProtocol
@@ -243,6 +284,11 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 		}
 		isLast := (i == len(candidates)-1)
 
+		candTriggerStatuses := resolveFallbackStatuses(cand)
+		isTrigger := func(s int) bool {
+			return isFallbackTriggerStatus(s, candTriggerStatuses)
+		}
+
 		if d.Limiter != nil {
 			rel, acquireErr := d.Limiter.Acquire(c.Request.Context(), cand.Provider)
 			if acquireErr != nil {
@@ -251,7 +297,7 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 				if errors.As(acquireErr, &gwErr) && gwErr.Status != 0 {
 					status = gwErr.Status
 				}
-				if isFallbackTriggerStatus(status) && !isLast {
+				if isTrigger(status) && !isLast {
 					continue
 				}
 				writeDispatchError(c, protocol, acquireErr)
@@ -262,14 +308,18 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 
 		attemptRecorder := newAttemptRecorder()
 		attemptRC := core.NewRequestContext(rc.ID)
-		attemptRC.ClientModel = rc.ClientModel
+		if isFallback {
+			attemptRC.ClientModel = fallbackAlias
+		} else {
+			attemptRC.ClientModel = rc.ClientModel
+		}
 		attemptRC.InboundProtocol = protocol
 		attemptCtx := core.WithRequestContext(core.WithRecorder(c.Request.Context(), attemptRecorder), attemptRC)
 
 		attemptReq := c.Request.Clone(attemptCtx)
 		c.Request = attemptReq
 
-		attemptWriter := newFallbackAttemptWriter(origWriter, func(h http.Header) {
+		attemptWriter := newFallbackAttemptWriter(origWriter, isTrigger, func(h http.Header) {
 			if isFallback {
 				h.Set("X-Gateway-Fallback", fallbackAlias)
 			}
@@ -291,16 +341,16 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 
 		if c.Request.Context().Err() != nil {
 			attemptWriter.commit()
-			d.finishAttempt(attemptRecorder, rc)
+			d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
 			return
 		}
 
 		if attemptWriter.committed || attemptWriter.firstByte {
-			d.finishAttempt(attemptRecorder, rc)
+			d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
 			return
 		}
 
-		if isFallbackTriggerStatus(attemptWriter.status) && !isLast {
+		if isTrigger(attemptWriter.status) && !isLast {
 			if activeRelease != nil {
 				activeRelease()
 				activeRelease = nil
@@ -309,7 +359,7 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 		}
 
 		attemptWriter.commit()
-		d.finishAttempt(attemptRecorder, rc)
+		d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
 		return
 	}
 }

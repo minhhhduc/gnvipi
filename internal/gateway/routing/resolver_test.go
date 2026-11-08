@@ -975,3 +975,54 @@ func TestResolverFallbacksResolution(t *testing.T) {
 		t.Errorf("unexpected fallback 1: %+v", route.Fallbacks[1])
 	}
 }
+
+func TestResolverMultiHopFallbacksResolution(t *testing.T) {
+	// A -> B -> C -> D with cycle back to A
+	p1 := makeTestProvider("prov-1", "prov-1", "https://p1.example.com/v1", []provider.ModelMapping{
+		{
+			Alias:            "model-a",
+			UpstreamModel:    "ma",
+			Fallbacks:        []string{"model-b"},
+			FallbackStatuses: []int{502, 503},
+		},
+		{
+			Alias:         "model-b",
+			UpstreamModel: "mb",
+			Fallbacks:     []string{"model-c"},
+		},
+		{
+			Alias:         "model-c",
+			UpstreamModel: "mc",
+			Fallbacks:     []string{"model-d", "model-a"}, // includes cycle to A
+		},
+		{
+			Alias:         "model-d",
+			UpstreamModel: "md",
+		},
+	})
+
+	r, err := NewRegistryResolver([]provider.Provider{p1}, nil)
+	if err != nil {
+		t.Fatalf("NewRegistryResolver failed: %v", err)
+	}
+
+	route, err := r.Resolve(t.Context(), "model-a", ir.ProtocolOpenAIChat)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if route.Alias != "model-a" || route.UpstreamModel != "ma" {
+		t.Fatalf("unexpected route: %+v", route)
+	}
+	if len(route.FallbackStatuses) != 2 || route.FallbackStatuses[0] != 502 || route.FallbackStatuses[1] != 503 {
+		t.Errorf("expected FallbackStatuses [502 503], got %v", route.FallbackStatuses)
+	}
+	if len(route.Fallbacks) != 3 {
+		t.Fatalf("expected 3 fallbacks (model-b, model-c, model-d), got %d: %+v", len(route.Fallbacks), route.Fallbacks)
+	}
+	expectedAliases := []string{"model-b", "model-c", "model-d"}
+	for i, want := range expectedAliases {
+		if route.Fallbacks[i].Alias != want {
+			t.Errorf("fallback %d alias = %q, want %q", i, route.Fallbacks[i].Alias, want)
+		}
+	}
+}

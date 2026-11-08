@@ -37,6 +37,7 @@ type Route struct {
 	Kind             Kind
 	Candidates       []Route
 	Fallbacks        []Route
+	FallbackStatuses []int
 	Alias            string
 }
 
@@ -61,10 +62,11 @@ var (
 )
 
 type resolvedRoute struct {
-	route     Route
-	alias     string
-	hidden    bool
-	fallbacks []string
+	route            Route
+	alias            string
+	hidden           bool
+	fallbacks        []string
+	fallbackStatuses []int
 }
 
 type snapshot struct {
@@ -186,10 +188,18 @@ func (r *LegacyResolver) UpdateProviders(list []provider.Provider, hidden []stri
 	for _, current := range rows {
 		mapping, p := current.mapping, current.provider
 		entry := resolvedRoute{
-			route:     Route{Provider: p, UpstreamModel: mapping.UpstreamModel, UpstreamProtocol: p.Protocol, Kind: Custom, Alias: mapping.Alias},
-			alias:     mapping.Alias,
-			hidden:    mapping.Hidden,
-			fallbacks: slices.Clone(mapping.Fallbacks),
+			route: Route{
+				Provider:         p,
+				UpstreamModel:    mapping.UpstreamModel,
+				UpstreamProtocol: p.Protocol,
+				Kind:             Custom,
+				Alias:            mapping.Alias,
+				FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
+			},
+			alias:            mapping.Alias,
+			hidden:           mapping.Hidden,
+			fallbacks:        slices.Clone(mapping.Fallbacks),
+			fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 		}
 		for _, model := range []string{mapping.Alias, mapping.UpstreamModel} {
 			if _, exists := next.routes[model]; !exists {
@@ -275,29 +285,24 @@ func (r *LegacyResolver) resolveWithFallbacks(ctx context.Context, current *snap
 		seen[route.Alias] = true
 	}
 	var fallbacks []Route
-	for _, fbAlias := range fallbacksList {
-		fbAlias = strings.TrimSpace(fbAlias)
-		if fbAlias == "" || seen[fbAlias] {
-			continue
+	var resolveHop func(alias string)
+	resolveHop = func(alias string) {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || seen[alias] {
+			return
 		}
-		seen[fbAlias] = true
-		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, fbAlias)
+		seen[alias] = true
+		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, alias)
 		if fbErr == nil && fbRoute.Kind == Custom && fbRoute.Provider != nil {
-			fbRoute.Alias = fbAlias
+			fbRoute.Alias = alias
 			fallbacks = append(fallbacks, fbRoute)
-			for _, nested := range nestedFbs {
-				nested = strings.TrimSpace(nested)
-				if nested == "" || seen[nested] {
-					continue
-				}
-				seen[nested] = true
-				nestedRoute, _, nestedErr := r.resolveEntry(current, nested)
-				if nestedErr == nil && nestedRoute.Kind == Custom && nestedRoute.Provider != nil {
-					nestedRoute.Alias = nested
-					fallbacks = append(fallbacks, nestedRoute)
-				}
+			for _, nextAlias := range nestedFbs {
+				resolveHop(nextAlias)
 			}
 		}
+	}
+	for _, fbAlias := range fallbacksList {
+		resolveHop(fbAlias)
 	}
 	route.Fallbacks = fallbacks
 	return route, nil
@@ -417,14 +422,15 @@ func (r *LegacyResolver) ResolveCandidates(ctx context.Context, clientModel stri
 // ----------------------------------------------------------------------------
 
 type wildcardEntry struct {
-	prefix        string
-	alias         string
-	upstreamModel string
-	provider      *provider.Provider
-	protocol      ir.Protocol
-	hidden        bool
-	allowShadow   bool
-	fallbacks     []string
+	prefix           string
+	alias            string
+	upstreamModel    string
+	provider         *provider.Provider
+	protocol         ir.Protocol
+	hidden           bool
+	allowShadow      bool
+	fallbacks        []string
+	fallbackStatuses []int
 }
 
 type registrySnapshot struct {
@@ -718,14 +724,15 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 			}
 
 			wildcards = append(wildcards, wildcardEntry{
-				prefix:        prefix,
-				alias:         alias,
-				upstreamModel: mapping.UpstreamModel,
-				provider:      p,
-				protocol:      p.Protocol,
-				hidden:        mapping.Hidden,
-				allowShadow:   allowShadow,
-				fallbacks:     slices.Clone(mapping.Fallbacks),
+				prefix:           prefix,
+				alias:            alias,
+				upstreamModel:    mapping.UpstreamModel,
+				provider:         p,
+				protocol:         p.Protocol,
+				hidden:           mapping.Hidden,
+				allowShadow:      allowShadow,
+				fallbacks:        slices.Clone(mapping.Fallbacks),
+				fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 			})
 		} else {
 			if !allowShadow && isProtected(alias) {
@@ -742,10 +749,12 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 							UpstreamProtocol: p.Protocol,
 							Kind:             Custom,
 							Alias:            alias,
+							FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 						},
-						alias:     alias,
-						hidden:    mapping.Hidden,
-						fallbacks: slices.Clone(mapping.Fallbacks),
+						alias:            alias,
+						hidden:           mapping.Hidden,
+						fallbacks:        slices.Clone(mapping.Fallbacks),
+						fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 					}
 				}
 			}
@@ -763,10 +772,12 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 						UpstreamProtocol: p.Protocol,
 						Kind:             Custom,
 						Alias:            alias,
+						FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 					},
-					alias:     alias,
-					hidden:    mapping.Hidden,
-					fallbacks: slices.Clone(mapping.Fallbacks),
+					alias:            alias,
+					hidden:           mapping.Hidden,
+					fallbacks:        slices.Clone(mapping.Fallbacks),
+					fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 				}
 			}
 		}
@@ -863,7 +874,8 @@ func (r *RegistryResolver) resolveEntry(current *registrySnapshot, clientModel s
 	}
 
 	// 2. Wildcard prefix match (O(prefixes))
-	for _, wc := range current.wildcards {
+	for i := range current.wildcards {
+		wc := &current.wildcards[i]
 		if !strings.HasPrefix(clientModel, wc.prefix) || len(clientModel) <= len(wc.prefix) {
 			continue
 		}
@@ -889,6 +901,7 @@ func (r *RegistryResolver) resolveEntry(current *registrySnapshot, clientModel s
 			UpstreamProtocol: wc.protocol,
 			Kind:             Custom,
 			Alias:            clientModel,
+			FallbackStatuses: slices.Clone(wc.fallbackStatuses),
 		}, wc.fallbacks, nil
 	}
 
@@ -926,29 +939,24 @@ func (r *RegistryResolver) resolveWithFallbacks(ctx context.Context, current *re
 		seen[route.Alias] = true
 	}
 	var fallbacks []Route
-	for _, fbAlias := range fallbackAliases {
-		fbAlias = strings.TrimSpace(fbAlias)
-		if fbAlias == "" || seen[fbAlias] {
-			continue
+	var resolveHop func(alias string)
+	resolveHop = func(alias string) {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || seen[alias] {
+			return
 		}
-		seen[fbAlias] = true
-		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, fbAlias)
+		seen[alias] = true
+		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, alias)
 		if fbErr == nil && fbRoute.Kind == Custom && fbRoute.Provider != nil {
-			fbRoute.Alias = fbAlias
+			fbRoute.Alias = alias
 			fallbacks = append(fallbacks, fbRoute)
-			for _, nested := range nestedFbs {
-				nested = strings.TrimSpace(nested)
-				if nested == "" || seen[nested] {
-					continue
-				}
-				seen[nested] = true
-				nestedRoute, _, nestedErr := r.resolveEntry(current, nested)
-				if nestedErr == nil && nestedRoute.Kind == Custom && nestedRoute.Provider != nil {
-					nestedRoute.Alias = nested
-					fallbacks = append(fallbacks, nestedRoute)
-				}
+			for _, nextAlias := range nestedFbs {
+				resolveHop(nextAlias)
 			}
 		}
+	}
+	for _, fbAlias := range fallbackAliases {
+		resolveHop(fbAlias)
 	}
 	route.Fallbacks = fallbacks
 	return route, nil

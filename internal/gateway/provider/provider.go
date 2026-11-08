@@ -53,10 +53,11 @@ type Auth struct {
 // the model identifier the upstream expects. Alias may end in "/*" to map a
 // whole family (for example "vendor/*").
 type ModelMapping struct {
-	Alias         string   `json:"alias"`
-	UpstreamModel string   `json:"upstream_model"`
-	Hidden        bool     `json:"hidden,omitempty"`
-	Fallbacks     []string `json:"fallbacks,omitempty"`
+	Alias            string   `json:"alias"`
+	UpstreamModel    string   `json:"upstream_model"`
+	Hidden           bool     `json:"hidden,omitempty"`
+	Fallbacks        []string `json:"fallbacks,omitempty"`
+	FallbackStatuses []int    `json:"fallback_statuses,omitempty"`
 	// LegacyPosition preserves flat legacy routing precedence; zero uses v2 list order.
 	LegacyPosition int  `json:"legacy_position,omitempty"`
 	AllowShadow    bool `json:"allow_shadow,omitempty"`

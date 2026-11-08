@@ -15,6 +15,7 @@ func Clone(p *Provider) Provider {
 		for i, m := range p.Models {
 			out.Models[i] = m
 			out.Models[i].Fallbacks = slices.Clone(m.Fallbacks)
+			out.Models[i].FallbackStatuses = slices.Clone(m.FallbackStatuses)
 		}
 	}
 	out.ForwardHeaders = slices.Clone(p.ForwardHeaders)
