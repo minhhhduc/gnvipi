@@ -20,6 +20,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
+	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
 
 func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.Inbound, request *core.RequestContext) {
@@ -64,6 +65,7 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		normalized.StreamIncludeUsage = true
 	}
 	ctx = adapter.WithStreamOptions(ctx, adapter.StreamOptions{IncludeUsage: normalized.StreamIncludeUsage})
+	ctx = upstream.WithStream(ctx)
 
 	effCaps, mode := h.resolvePolicy()
 	policyRes, err := policy.Validate(normalized, effCaps, mode)
