@@ -249,6 +249,27 @@ func run() (err error) {
 		log.Print("warning: non-loopback listener has no gateway key; /v1 and /mcp are unauthenticated (set -gateway-key or GNVIPI_GATEWAY_KEY)")
 	}
 
+	nvidiaModels := nvidia.RegistryModels()
+	// getNvidiaModels is the catalog bound to the NVIDIA client ONLY. It must
+	// never include other providers' models: a model owned by two clients makes
+	// routing pick between them at random (intermittent 400s).
+	getNvidiaModels := func() []*cliproxy.ModelInfo {
+		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels))
+		for _, m := range nvidiaModels {
+			if prefs.isHidden(m.ID) {
+				continue
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+
+	// getModels is the advertised catalog (/v1/models + Claude cache): NVIDIA
+	// models + v2 provider aliases + virtual models.
+	getModels := func() []gatewayModel {
+		return buildCatalog(prefs, getNvidiaModels)
+	}
+
 	// Register /admin custom endpoints (e.g. OpenRouter) as OpenAI-compat
 	// providers so CLIProxyAPI routes their aliases.
 	providerConfigs, err := prefs.listProvidersV2()
@@ -269,6 +290,7 @@ func run() (err error) {
 		if err := rewriteConfigYAML(cfgPath, cfg.OpenAICompatibility); err != nil {
 			log.Printf("warning: could not rewrite config for providers: %v", err)
 		}
+		writeClaudeModelCache(*addr, getModels())
 	}
 
 	gatewayMiddleware, err := gatewayV2Middleware(prefs, *gatewayV2, proxyURL)
@@ -279,44 +301,6 @@ func run() (err error) {
 	tokenStore := sdkAuth.GetTokenStore()
 	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
-	}
-
-	nvidiaModels := nvidia.RegistryModels()
-	// getNvidiaModels is the catalog bound to the NVIDIA client ONLY. It must
-	// never include other providers' models: a model owned by two clients makes
-	// routing pick between them at random (intermittent 400s).
-	getNvidiaModels := func() []*cliproxy.ModelInfo {
-		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels))
-		for _, m := range nvidiaModels {
-			if prefs.isHidden(m.ID) {
-				continue
-			}
-			out = append(out, m)
-		}
-		return out
-	}
-
-	// getModels is the advertised catalog (/v1/models + Claude cache): NVIDIA
-	// models plus custom endpoints.
-	getModels := func() []*cliproxy.ModelInfo {
-		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels)+4)
-		out = append(out,
-			&cliproxy.ModelInfo{ID: "automode", Object: "model", OwnedBy: "gateway", Type: "virtual"},
-			&cliproxy.ModelInfo{ID: "cycle", Object: "model", OwnedBy: "gateway", Type: "virtual"})
-		out = append(out, getNvidiaModels()...)
-		for _, p := range prefs.listProviders() {
-			id := p.modelID()
-			if prefs.isHidden(id) {
-				continue
-			}
-			out = append(out, &cliproxy.ModelInfo{
-				ID:      id,
-				Object:  "model",
-				OwnedBy: p.Name,
-				Type:    "openai-compat",
-			})
-		}
-		return out
 	}
 
 	authHook := &nvidiaAuthHook{exec: exec, getModels: getNvidiaModels}

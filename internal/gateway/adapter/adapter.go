@@ -105,15 +105,15 @@ type Outbound interface {
 // are false are not necessarily errors: the dispatcher decides per request
 // whether to drop the feature, reject it, or fall back to another provider.
 type Capabilities struct {
-	Streaming         bool // server-sent events
-	Tools             bool // tool / function definitions and calls
-	ParallelToolCalls bool // more than one tool call per turn
-	Images            bool // image inputs
-	Reasoning         bool // extended thinking / reasoning tokens
-	StructuredOutput  bool // JSON mode and JSON schema
-	TopK              bool // top-k sampling
-	StatefulResponses bool // server-side conversation state
-	CountTokens       bool // an exact token-count endpoint
+	Streaming         bool `json:"streaming"`           // server-sent events
+	Tools             bool `json:"tools"`               // tool / function definitions and calls
+	ParallelToolCalls bool `json:"parallel_tool_calls"` // more than one tool call per turn
+	Images            bool `json:"images"`              // image inputs
+	Reasoning         bool `json:"reasoning"`           // extended thinking / reasoning tokens
+	StructuredOutput  bool `json:"structured_output"`   // JSON mode and JSON schema
+	TopK              bool `json:"top_k"`               // top-k sampling
+	StatefulResponses bool `json:"stateful_responses"`  // server-side conversation state
+	CountTokens       bool `json:"count_tokens"`        // an exact token-count endpoint
 }
 
 // Target is the resolved upstream endpoint for one request.

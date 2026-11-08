@@ -31,17 +31,6 @@ var adminStatsCache struct {
 	data gin.H
 }
 
-type gatewayModel struct {
-	Type        string `json:"type"`
-	Object      string `json:"object"`
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
-	Created     int64  `json:"created"`
-	OwnedBy     string `json:"owned_by"`
-}
-
 // prefs is the process-wide model mask, loaded from -models-file at startup.
 var prefs = &modelPrefs{}
 
