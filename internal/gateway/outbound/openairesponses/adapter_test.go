@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
+	inboundopenairesponses "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound/openairesponses"
 )
@@ -61,7 +63,7 @@ func TestAdapterContract(t *testing.T) {
 	if out == nil || out.Protocol() != ir.ProtocolOpenAIResponses {
 		t.Fatalf("New/Protocol = %#v/%q", out, out.Protocol())
 	}
-	want := adapter.Capabilities{Streaming: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, StructuredOutput: true}
+	want := adapter.Capabilities{Streaming: true, Tools: true, ParallelToolCalls: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, StructuredOutput: true}
 	if got := out.Capabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, want)
 	}
@@ -156,7 +158,7 @@ func TestBuildRequestRejectsMalformedOrUnsupportedIR(t *testing.T) {
 		{"unsupported role", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.Role("system"), ir.NewTextBlock("hello"))}}},
 		{"invalid image", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, invalidImage)}}},
 		{"invalid response format", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, ResponseFormat: &badSchema}},
-		{"tools deferred", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, Tools: []ir.Tool{{Name: "lookup"}}}},
+		{"tool without name", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, Tools: []ir.Tool{{Name: ""}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request, err := openairesponses.New().BuildRequest(t.Context(), tc.request, validTarget)
@@ -302,4 +304,297 @@ func newTrackedBody(body []byte) *trackedBody {
 func (b *trackedBody) Close() error {
 	b.closed = true
 	return nil
+}
+
+func TestBuildRequestToolsAndChoices(t *testing.T) {
+	target := adapter.Target{BaseURL: "https://provider.invalid", Model: "gpt-4o"}
+	trueVal := true
+	falseVal := false
+	req := &ir.Request{
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))},
+		Tools: []ir.Tool{
+			{Name: "search", Description: "search web", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "calc"},
+		},
+		ToolChoice:        &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "search"},
+		ParallelToolCalls: &falseVal,
+	}
+
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire struct {
+		Tools             []map[string]any `json:"tools"`
+		ToolChoice        any              `json:"tool_choice"`
+		ParallelToolCalls *bool            `json:"parallel_tool_calls"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if len(wire.Tools) != 2 {
+		t.Fatalf("tools count = %d, want 2", len(wire.Tools))
+	}
+	if wire.Tools[0]["name"] != "search" || wire.Tools[0]["type"] != "function" || wire.Tools[0]["description"] != "search web" {
+		t.Errorf("tool 0 = %+v", wire.Tools[0])
+	}
+	if wire.Tools[1]["name"] != "calc" || wire.Tools[1]["type"] != "function" {
+		t.Errorf("tool 1 = %+v", wire.Tools[1])
+	}
+	choiceMap, ok := wire.ToolChoice.(map[string]any)
+	if !ok || choiceMap["type"] != "function" || choiceMap["name"] != "search" {
+		t.Errorf("tool_choice = %+v", wire.ToolChoice)
+	}
+	if wire.ParallelToolCalls == nil || *wire.ParallelToolCalls {
+		t.Errorf("parallel_tool_calls want false, got %+v", wire.ParallelToolCalls)
+	}
+
+	// Test ToolChoice Any -> "required"
+	req.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAny}
+	req.ParallelToolCalls = &trueVal
+	httpReq2, err := openairesponses.New().BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq2.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	bodyBytes2, err := io.ReadAll(httpReq2.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire2 struct {
+		ToolChoice        string `json:"tool_choice"`
+		ParallelToolCalls *bool  `json:"parallel_tool_calls"`
+	}
+	if err := json.Unmarshal(bodyBytes2, &wire2); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if wire2.ToolChoice != "required" {
+		t.Errorf("tool_choice = %q, want required", wire2.ToolChoice)
+	}
+	if wire2.ParallelToolCalls == nil || !*wire2.ParallelToolCalls {
+		t.Errorf("parallel_tool_calls want true, got %+v", wire2.ParallelToolCalls)
+	}
+}
+
+func TestBuildRequestFunctionCallAndOutputItems(t *testing.T) {
+	target := adapter.Target{BaseURL: "https://provider.invalid", Model: "gpt-4o"}
+	req := &ir.Request{
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("get info")),
+			ir.NewMessage(ir.RoleAssistant,
+				ir.NewTextBlock("Calling tools"),
+				ir.NewToolUseBlock("call_1", "get_weather", json.RawMessage(`{"city":"Tokyo"}`)),
+				ir.NewToolUseBlock("call_2", "get_time", json.RawMessage(`{"tz":"JST"}`)),
+			),
+			ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_1", []ir.Block{ir.NewTextBlock("Sunny")}, false)),
+			ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_2", []ir.Block{ir.NewTextBlock("15:00")}, false)),
+		},
+	}
+
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	// Expected items in input:
+	// 0: message (user: "get info")
+	// 1: message (assistant: "Calling tools")
+	// 2: function_call ("call_1", "get_weather")
+	// 3: function_call ("call_2", "get_time")
+	// 4: function_call_output ("call_1", "Sunny")
+	// 5: function_call_output ("call_2", "15:00")
+	if len(wire.Input) != 6 {
+		t.Fatalf("input length = %d, want 6: %+v", len(wire.Input), wire.Input)
+	}
+
+	if wire.Input[0]["role"] != "user" {
+		t.Errorf("input[0] = %+v", wire.Input[0])
+	}
+	if wire.Input[1]["role"] != "assistant" {
+		t.Errorf("input[1] = %+v", wire.Input[1])
+	}
+	if wire.Input[2]["type"] != "function_call" || wire.Input[2]["call_id"] != "call_1" || wire.Input[2]["name"] != "get_weather" || wire.Input[2]["arguments"] != `{"city":"Tokyo"}` {
+		t.Errorf("input[2] = %+v", wire.Input[2])
+	}
+	if wire.Input[3]["type"] != "function_call" || wire.Input[3]["call_id"] != "call_2" || wire.Input[3]["name"] != "get_time" || wire.Input[3]["arguments"] != `{"tz":"JST"}` {
+		t.Errorf("input[3] = %+v", wire.Input[3])
+	}
+	if wire.Input[4]["type"] != "function_call_output" || wire.Input[4]["call_id"] != "call_1" || wire.Input[4]["output"] != "Sunny" {
+		t.Errorf("input[4] = %+v", wire.Input[4])
+	}
+	if wire.Input[5]["type"] != "function_call_output" || wire.Input[5]["call_id"] != "call_2" || wire.Input[5]["output"] != "15:00" {
+		t.Errorf("input[5] = %+v", wire.Input[5])
+	}
+}
+
+func TestParseResponseParallelFunctionCalls(t *testing.T) {
+	raw := `{
+		"id": "resp_parallel_test",
+		"object": "response",
+		"model": "gpt-4o",
+		"status": "completed",
+		"output": [
+			{
+				"id": "fc_0",
+				"type": "function_call",
+				"call_id": "call_weather",
+				"name": "get_weather",
+				"arguments": "{\"city\":\"Paris\"}"
+			},
+			{
+				"id": "fc_1",
+				"type": "function_call",
+				"call_id": "call_time",
+				"name": "get_time",
+				"arguments": "{\"tz\":\"CET\"}"
+			}
+		],
+		"usage": {
+			"input_tokens": 15,
+			"output_tokens": 10
+		}
+	}`
+
+	body := newTrackedBody([]byte(raw))
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}
+	got, err := openairesponses.New().ParseResponse(resp)
+	if err != nil {
+		t.Fatalf("ParseResponse error: %v", err)
+	}
+
+	if got.StopReason != ir.StopToolUse {
+		t.Errorf("stop_reason = %s, want %s", got.StopReason, ir.StopToolUse)
+	}
+	if len(got.Content) != 2 {
+		t.Fatalf("content length = %d, want 2", len(got.Content))
+	}
+
+	tu0 := got.Content[0].ToolUse
+	if tu0 == nil || tu0.ID != "call_weather" || tu0.Name != "get_weather" || string(tu0.Input) != `{"city":"Paris"}` {
+		t.Errorf("content[0] = %+v", tu0)
+	}
+
+	tu1 := got.Content[1].ToolUse
+	if tu1 == nil || tu1.ID != "call_time" || tu1.Name != "get_time" || string(tu1.Input) != `{"tz":"CET"}` {
+		t.Errorf("content[1] = %+v", tu1)
+	}
+}
+
+func TestRoundTripFunctionCallOutput(t *testing.T) {
+	origReq := &ir.Request{
+		Model: "gpt-4o",
+		Tools: []ir.Tool{
+			{Name: "lookup", Description: "find data", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		ToolChoice: &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: "lookup"},
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("query")),
+			ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock("call_xyz", "lookup", json.RawMessage(`{"key":"abc"}`))),
+			ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_xyz", []ir.Block{ir.NewTextBlock("result_123")}, false)),
+		},
+	}
+
+	target := adapter.Target{BaseURL: "https://provider.invalid", Model: "gpt-4o"}
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), origReq, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	inboundReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", httpReq.Body)
+	decoded, err := inboundopenairesponses.New().DecodeRequest(inboundReq)
+	if err != nil {
+		t.Fatalf("DecodeRequest error: %v", err)
+	}
+
+	if len(decoded.Tools) != 1 || decoded.Tools[0].Name != "lookup" {
+		t.Fatalf("round-trip tools: %+v", decoded.Tools)
+	}
+	if decoded.ToolChoice == nil || decoded.ToolChoice.Name != "lookup" {
+		t.Fatalf("round-trip tool_choice: %+v", decoded.ToolChoice)
+	}
+	if len(decoded.Messages) != 3 {
+		t.Fatalf("round-trip messages length = %d, want 3", len(decoded.Messages))
+	}
+
+	// Assistant tool call
+	tu := decoded.Messages[1].Content[0].ToolUse
+	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `"{\"key\":\"abc\"}"` {
+		t.Errorf("round-trip tool use: %+v", tu)
+	}
+
+	// Tool result
+	tr := decoded.Messages[2].Content[0].ToolResult
+	if tr == nil || tr.ToolUseID != "call_xyz" || len(tr.Content) != 1 || tr.Content[0].Text != "result_123" {
+		t.Errorf("round-trip tool result: %+v", tr)
+	}
+}
+
+func TestEncodeToolResultEmptyContent(t *testing.T) {
+	req := &ir.Request{
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_empty", nil, false)),
+		},
+	}
+	target := adapter.Target{BaseURL: "https://provider.invalid", Model: "gpt-4o"}
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(wire.Input) != 1 {
+		t.Fatalf("input length = %d, want 1", len(wire.Input))
+	}
+	if wire.Input[0]["type"] != "function_call_output" || wire.Input[0]["call_id"] != "call_empty" || wire.Input[0]["output"] != "" {
+		t.Errorf("input[0] = %+v, want empty output string", wire.Input[0])
+	}
 }

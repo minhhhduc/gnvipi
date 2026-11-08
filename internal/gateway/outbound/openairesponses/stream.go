@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -43,10 +44,11 @@ func parseStream(_ context.Context, resp *http.Response) (adapter.Stream, error)
 }
 
 type streamBlock struct {
-	index    int
-	kind     ir.BlockType
-	toolID   string
-	toolName string
+	index             int
+	kind              ir.BlockType
+	toolID            string
+	toolName          string
+	argumentsReceived bool
 }
 
 type responsesStream struct {
@@ -99,15 +101,27 @@ func (s *responsesStream) Next(ctx context.Context) (ir.StreamEvent, error) {
 	return ev, nil
 }
 
+func (s *responsesStream) closeOpenBlocks() {
+	if len(s.openBlocks) == 0 {
+		return
+	}
+	openIndices := make([]int, 0, len(s.openBlocks))
+	for idx := range s.openBlocks {
+		openIndices = append(openIndices, idx)
+	}
+	slices.Sort(openIndices)
+	for _, idx := range openIndices {
+		s.pending = append(s.pending, ir.NewBlockStop(idx))
+	}
+	s.openBlocks = make(map[int]bool)
+}
+
 func (s *responsesStream) handleEOF() {
 	if s.terminated {
 		return
 	}
 	if s.started {
-		for idx := range s.openBlocks {
-			s.pending = append(s.pending, ir.NewBlockStop(idx))
-		}
-		s.openBlocks = make(map[int]bool)
+		s.closeOpenBlocks()
 		if s.savedUsage != nil && !s.usageEmitted {
 			s.pending = append(s.pending, ir.NewUsageUpdate(*s.savedUsage))
 			s.usageEmitted = true
@@ -148,13 +162,15 @@ func (s *responsesStream) handleSSEEvent(event sse.Event) error {
 		Type        string `json:"type"`
 		OutputIndex *int   `json:"output_index"`
 		Delta       string `json:"delta"`
+		Arguments   string `json:"arguments"`
 		Item        *struct {
-			ID      string  `json:"id"`
-			Type    string  `json:"type"`
-			Role    string  `json:"role"`
-			CallID  string  `json:"call_id"`
-			Name    *string `json:"name"`
-			Content *[]struct {
+			ID        string  `json:"id"`
+			Type      string  `json:"type"`
+			Role      string  `json:"role"`
+			CallID    string  `json:"call_id"`
+			Name      *string `json:"name"`
+			Arguments *string `json:"arguments"`
+			Content   *[]struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
@@ -220,7 +236,11 @@ func (s *responsesStream) handleSSEEvent(event sse.Event) error {
 			case "function_call":
 				sb.kind = ir.BlockToolUse
 				s.hasToolCalls = true
-				sb.toolID = frame.Item.CallID
+				callID := frame.Item.CallID
+				if callID == "" {
+					callID = frame.Item.ID
+				}
+				sb.toolID = callID
 				name := ""
 				if frame.Item.Name != nil {
 					name = *frame.Item.Name
@@ -228,7 +248,7 @@ func (s *responsesStream) handleSSEEvent(event sse.Event) error {
 				sb.toolName = name
 				prototype.Type = ir.BlockToolUse
 				prototype.ToolUse = &ir.ToolUse{
-					ID:   frame.Item.CallID,
+					ID:   callID,
 					Name: name,
 				}
 			default:
@@ -274,16 +294,63 @@ func (s *responsesStream) handleSSEEvent(event sse.Event) error {
 		if frame.OutputIndex != nil {
 			idx = *frame.OutputIndex
 		}
+		if !s.openBlocks[idx] {
+			sb := &streamBlock{index: idx, kind: ir.BlockToolUse}
+			s.blocks[idx] = sb
+			s.openBlocks[idx] = true
+			s.hasToolCalls = true
+			s.pending = append(s.pending, ir.NewBlockStart(idx, ir.Block{Type: ir.BlockToolUse, Index: idx, ToolUse: &ir.ToolUse{}}))
+		}
+		sb := s.blocks[idx]
+		callID := ""
+		if sb != nil {
+			callID = sb.toolID
+			sb.argumentsReceived = true
+		}
+		s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, callID, frame.Delta))
+
+	case "response.function_call_arguments.done":
+		s.ensureStarted("", "")
+		idx := 0
+		if frame.OutputIndex != nil {
+			idx = *frame.OutputIndex
+		}
 		sb := s.blocks[idx]
 		callID := ""
 		if sb != nil {
 			callID = sb.toolID
 		}
-		s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, callID, frame.Delta))
+		if sb == nil || !sb.argumentsReceived {
+			payload := frame.Arguments
+			if payload == "" {
+				payload = frame.Delta
+			}
+			if payload != "" {
+				if !s.openBlocks[idx] {
+					if sb == nil {
+						sb = &streamBlock{index: idx, kind: ir.BlockToolUse}
+						s.blocks[idx] = sb
+					}
+					s.openBlocks[idx] = true
+					s.hasToolCalls = true
+					s.pending = append(s.pending, ir.NewBlockStart(idx, ir.Block{Type: ir.BlockToolUse, Index: idx, ToolUse: &ir.ToolUse{ID: callID}}))
+				}
+				s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, callID, payload))
+				if sb != nil {
+					sb.argumentsReceived = true
+				}
+			}
+		}
 
 	case "response.output_item.done":
 		if frame.OutputIndex != nil {
 			idx := *frame.OutputIndex
+			sb := s.blocks[idx]
+			if sb != nil && sb.kind == ir.BlockToolUse && !sb.argumentsReceived &&
+				frame.Item != nil && frame.Item.Arguments != nil && *frame.Item.Arguments != "" {
+				s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, sb.toolID, *frame.Item.Arguments))
+				sb.argumentsReceived = true
+			}
 			if s.openBlocks[idx] {
 				s.pending = append(s.pending, ir.NewBlockStop(idx))
 				delete(s.openBlocks, idx)
@@ -296,10 +363,7 @@ func (s *responsesStream) handleSSEEvent(event sse.Event) error {
 		} else {
 			s.ensureStarted("", "")
 		}
-		for idx := range s.openBlocks {
-			s.pending = append(s.pending, ir.NewBlockStop(idx))
-		}
-		s.openBlocks = make(map[int]bool)
+		s.closeOpenBlocks()
 
 		if frame.Response != nil && frame.Response.Usage != nil {
 			u := ir.Usage{
