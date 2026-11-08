@@ -24,6 +24,15 @@
         }
       },
       "golden": "request-thinking.golden.json"
+    },
+    {
+      "name": "tools",
+      "ir": "request-tools.ir.json",
+      "target": {
+        "BaseURL": "https://upstream.invalid/prefix/v1/messages",
+        "Model": "claude-tool-resolved"
+      },
+      "golden": "request-tools.golden.json"
     }
   ],
   "responses": [
@@ -35,6 +44,15 @@
         "body": "response-text.json"
       },
       "ir": "response-text.ir.json"
+    },
+    {
+      "name": "tool",
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": ["application/json"]},
+        "body": "response-tool.json"
+      },
+      "ir": "response-tool.ir.json"
     },
     {
       "name": "thinking",

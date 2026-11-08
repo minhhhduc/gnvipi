@@ -254,30 +254,58 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		}
 	}
 	if len(input.ToolChoice) > 0 {
-		choice, err := codecObject(input.ToolChoice, "tool_choice")
-		if err != nil {
-			return nil, err
-		}
-		typ, err := codecString(choice, "type", "tool_choice", true)
-		if err != nil {
-			return nil, err
-		}
-		switch ir.ToolChoiceMode(typ) {
-		case ir.ToolChoiceAuto, ir.ToolChoiceAny, ir.ToolChoiceNone, ir.ToolChoiceTool:
-			out.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceMode(typ)}
-			out.ToolChoice.Name, err = codecString(choice, "name", "tool_choice", typ == string(ir.ToolChoiceTool))
+		trimmed := bytes.TrimSpace(input.ToolChoice)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			var choiceStr string
+			if err := json.Unmarshal(trimmed, &choiceStr); err != nil {
+				return nil, codecInvalid("tool_choice must be a string or object")
+			}
+			switch ir.ToolChoiceMode(choiceStr) {
+			case ir.ToolChoiceAuto, ir.ToolChoiceAny, ir.ToolChoiceNone:
+				out.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceMode(choiceStr)}
+				delete(fields, "tool_choice")
+			default:
+				return nil, codecInvalid(fmt.Sprintf("tool_choice string %q is not supported", choiceStr))
+			}
+		} else {
+			choice, err := codecObject(input.ToolChoice, "tool_choice")
 			if err != nil {
 				return nil, err
 			}
-			if raw, exists := choice["disable_parallel_tool_use"]; exists {
-				if json.Unmarshal(raw, &out.ToolChoice.DisableParallelToolUse) != nil || out.ToolChoice.DisableParallelToolUse == nil {
-					return nil, codecInvalid("tool_choice.disable_parallel_tool_use must be a boolean")
-				}
+			typ, err := codecString(choice, "type", "tool_choice", true)
+			if err != nil {
+				return nil, err
 			}
-			if !codecHasUnknown(choice, "type", "name", "disable_parallel_tool_use") {
-				delete(fields, "tool_choice")
+			switch ir.ToolChoiceMode(typ) {
+			case ir.ToolChoiceAuto, ir.ToolChoiceAny, ir.ToolChoiceNone, ir.ToolChoiceTool:
+				out.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceMode(typ)}
+				out.ToolChoice.Name, err = codecString(choice, "name", "tool_choice", typ == string(ir.ToolChoiceTool))
+				if err != nil {
+					return nil, err
+				}
+				if raw, exists := choice["disable_parallel_tool_use"]; exists {
+					if json.Unmarshal(raw, &out.ToolChoice.DisableParallelToolUse) != nil || out.ToolChoice.DisableParallelToolUse == nil {
+						return nil, codecInvalid("tool_choice.disable_parallel_tool_use must be a boolean")
+					}
+				}
+				if !codecHasUnknown(choice, "type", "name", "disable_parallel_tool_use") {
+					delete(fields, "tool_choice")
+				}
+			default:
+				return nil, codecInvalid(fmt.Sprintf("tool_choice.type %q is not supported", typ))
 			}
 		}
+	}
+	if raw, exists := fields["disable_parallel_tool_use"]; exists {
+		var val *bool
+		if json.Unmarshal(raw, &val) != nil || val == nil {
+			return nil, codecInvalid("disable_parallel_tool_use must be a boolean")
+		}
+		if out.ToolChoice == nil {
+			out.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
+		}
+		out.ToolChoice.DisableParallelToolUse = val
+		delete(fields, "disable_parallel_tool_use")
 	}
 	// Block/turn IR has no extension slot. Only unrepresented nested data
 	// retains its enclosing raw field at the original wire key. Outbound

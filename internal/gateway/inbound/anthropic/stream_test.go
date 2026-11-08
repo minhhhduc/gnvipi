@@ -678,3 +678,90 @@ func (w *streamTestSink) Write(data []byte) (int, error) {
 }
 
 var _ http.ResponseWriter = (*streamTestSink)(nil)
+
+func TestStreamParallelToolCalling(t *testing.T) {
+	source := &streamTestSource{events: []ir.StreamEvent{
+		ir.NewMessageStart("msg_parallel", ir.RoleAssistant, "model", ir.Usage{InputTokens: 10}),
+		ir.NewBlockStart(0, ir.NewToolUseBlock("call-1", "lookup", nil)),
+		ir.NewBlockStart(1, ir.NewToolUseBlock("call-2", "weather", nil)),
+		ir.NewToolArgumentsDelta(0, "call-1", `{"id":123}`),
+		ir.NewToolArgumentsDelta(1, "call-2", `{"city":"H`),
+		ir.NewToolArgumentsDelta(1, "call-2", `anoi"}`),
+		ir.NewBlockStop(0),
+		ir.NewBlockStop(1),
+		ir.NewMessageStop(ir.StopToolUse),
+	}}
+	recorder := httptest.NewRecorder()
+	writer, err := sse.NewWriter(recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (StreamEncoder{}).EncodeStream(context.Background(), source, writer); err != nil {
+		t.Fatal(err)
+	}
+	frames := streamTestFrames(t, recorder.Body.String())
+	var types []string
+	for _, f := range frames {
+		types = append(types, f.Type)
+	}
+	wantTypes := []string{
+		"message_start",
+		"content_block_start",
+		"content_block_start",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_delta",
+		"content_block_stop",
+		"content_block_stop",
+		"message_delta",
+		"message_stop",
+	}
+	if !reflect.DeepEqual(types, wantTypes) {
+		t.Fatalf("frame types = %v, want %v", types, wantTypes)
+	}
+
+	// Verify block start 0
+	var b0 struct {
+		Index        int `json:"index"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+	}
+	if err := json.Unmarshal([]byte(frames[1].Data), &b0); err != nil {
+		t.Fatal(err)
+	}
+	if b0.Index != 0 || b0.ContentBlock.Type != "tool_use" || b0.ContentBlock.ID != "call-1" || b0.ContentBlock.Name != "lookup" {
+		t.Errorf("block 0 = %+v", b0)
+	}
+
+	// Verify block start 1
+	var b1 struct {
+		Index        int `json:"index"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content_block"`
+	}
+	if err := json.Unmarshal([]byte(frames[2].Data), &b1); err != nil {
+		t.Fatal(err)
+	}
+	if b1.Index != 1 || b1.ContentBlock.Type != "tool_use" || b1.ContentBlock.ID != "call-2" || b1.ContentBlock.Name != "weather" {
+		t.Errorf("block 1 = %+v", b1)
+	}
+
+	// Verify message_delta has stop_reason: tool_use
+	var msgDelta struct {
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal([]byte(frames[8].Data), &msgDelta); err != nil {
+		t.Fatal(err)
+	}
+	if msgDelta.Delta.StopReason != "tool_use" {
+		t.Errorf("stop_reason = %q, want tool_use", msgDelta.Delta.StopReason)
+	}
+}

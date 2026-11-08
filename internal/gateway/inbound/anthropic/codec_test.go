@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -563,4 +564,184 @@ func TestThinkingTagsNotParsedInNonAssistantMessages(t *testing.T) {
 			tc.validate(t, decoded)
 		})
 	}
+}
+
+func TestInboundToolCalling(t *testing.T) {
+	t.Run("decode tool choice string variants", func(t *testing.T) {
+		for _, mode := range []string{"auto", "any", "none"} {
+			body := fmt.Sprintf(`{"model":"claude-3","max_tokens":100,"tool_choice":%q,"messages":[{"role":"user","content":"hi"}]}`, mode)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+			decoded, err := New().DecodeRequest(req)
+			if err != nil {
+				t.Fatalf("mode %s: DecodeRequest error: %v", mode, err)
+			}
+			if decoded.ToolChoice == nil || decoded.ToolChoice.Mode != ir.ToolChoiceMode(mode) {
+				t.Fatalf("mode %s: got %+v", mode, decoded.ToolChoice)
+			}
+		}
+	})
+
+	t.Run("decode tool choice object with disable_parallel_tool_use", func(t *testing.T) {
+		body := `{"model":"claude-3","max_tokens":100,"tool_choice":{"type":"tool","name":"get_weather","disable_parallel_tool_use":true},"messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+		decoded, err := New().DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest error: %v", err)
+		}
+		if decoded.ToolChoice == nil || decoded.ToolChoice.Mode != ir.ToolChoiceTool || decoded.ToolChoice.Name != "get_weather" {
+			t.Fatalf("ToolChoice = %+v", decoded.ToolChoice)
+		}
+		if decoded.ToolChoice.DisableParallelToolUse == nil || !*decoded.ToolChoice.DisableParallelToolUse {
+			t.Fatalf("DisableParallelToolUse = %v, want true", decoded.ToolChoice.DisableParallelToolUse)
+		}
+	})
+
+	t.Run("decode top-level disable_parallel_tool_use", func(t *testing.T) {
+		body := `{"model":"claude-3","max_tokens":100,"disable_parallel_tool_use":true,"messages":[{"role":"user","content":"hi"}]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+		decoded, err := New().DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest error: %v", err)
+		}
+		if decoded.ToolChoice == nil || decoded.ToolChoice.DisableParallelToolUse == nil || !*decoded.ToolChoice.DisableParallelToolUse {
+			t.Fatalf("expected ToolChoice with DisableParallelToolUse=true, got %+v", decoded.ToolChoice)
+		}
+	})
+
+	t.Run("decode single and parallel tool_use in assistant message", func(t *testing.T) {
+		body := `{
+			"model": "claude-3",
+			"max_tokens": 100,
+			"messages": [
+				{"role": "user", "content": "run tools"},
+				{
+					"role": "assistant",
+					"content": [
+						{"type": "tool_use", "id": "call_1", "name": "fn1", "input": {"a": 1}},
+						{"type": "tool_use", "id": "call_2", "name": "fn2", "input": {"b": "two"}}
+					]
+				}
+			]
+		}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+		decoded, err := New().DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest error: %v", err)
+		}
+		if len(decoded.Messages) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(decoded.Messages))
+		}
+		assistantMsg := decoded.Messages[1]
+		if assistantMsg.Role != ir.RoleAssistant || len(assistantMsg.Content) != 2 {
+			t.Fatalf("assistant message = %+v", assistantMsg)
+		}
+		b1, b2 := assistantMsg.Content[0], assistantMsg.Content[1]
+		if b1.Type != ir.BlockToolUse || b1.ToolUse.ID != "call_1" || b1.ToolUse.Name != "fn1" {
+			t.Errorf("block 0 = %+v", b1)
+		}
+		if b2.Type != ir.BlockToolUse || b2.ToolUse.ID != "call_2" || b2.ToolUse.Name != "fn2" {
+			t.Errorf("block 1 = %+v", b2)
+		}
+	})
+
+	t.Run("decode tool_result with string, image, and error in user turn", func(t *testing.T) {
+		body := `{
+			"model": "claude-3",
+			"max_tokens": 100,
+			"messages": [
+				{
+					"role": "user",
+					"content": [
+						{
+							"type": "tool_result",
+							"tool_use_id": "call_1",
+							"content": "output text"
+						},
+						{
+							"type": "tool_result",
+							"tool_use_id": "call_2",
+							"content": [
+								{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}
+							]
+						},
+						{
+							"type": "tool_result",
+							"tool_use_id": "call_3",
+							"content": "failed execution",
+							"is_error": true
+						}
+					]
+				}
+			]
+		}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+		decoded, err := New().DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("DecodeRequest error: %v", err)
+		}
+		if len(decoded.Messages) != 1 {
+			t.Fatalf("expected 1 RoleTool message, got %d", len(decoded.Messages))
+		}
+		if decoded.Messages[0].Role != ir.RoleTool {
+			t.Errorf("msg role = %v, want RoleTool", decoded.Messages[0].Role)
+		}
+		if len(decoded.Messages[0].Content) != 3 {
+			t.Fatalf("expected 3 blocks in message, got %d", len(decoded.Messages[0].Content))
+		}
+		r1 := decoded.Messages[0].Content[0].ToolResult
+		if r1.ToolUseID != "call_1" || len(r1.Content) != 1 || r1.Content[0].Text != "output text" || r1.IsError {
+			t.Errorf("r1 = %+v", r1)
+		}
+		r2 := decoded.Messages[0].Content[1].ToolResult
+		if r2.ToolUseID != "call_2" || len(r2.Content) != 1 || r2.Content[0].Image == nil || r2.Content[0].Image.Base64 != "AA==" {
+			t.Errorf("r2 = %+v", r2)
+		}
+		r3 := decoded.Messages[0].Content[2].ToolResult
+		if r3.ToolUseID != "call_3" || !r3.IsError || r3.Content[0].Text != "failed execution" {
+			t.Errorf("r3 = %+v", r3)
+		}
+	})
+
+	t.Run("encode response with single and parallel tool_use", func(t *testing.T) {
+		adapter := New()
+		resp := &ir.Response{
+			ID:    "msg_123",
+			Model: "claude-3",
+			Content: []ir.Block{
+				ir.NewTextBlock("Calling tools"),
+				ir.NewToolUseBlock("c1", "fn1", json.RawMessage(`{"x":1}`)),
+				ir.NewToolUseBlock("c2", "fn2", json.RawMessage(`{"y":2}`)),
+			},
+			StopReason: ir.StopToolUse,
+		}
+		encoded, err := adapter.EncodeResponse(resp)
+		if err != nil {
+			t.Fatalf("EncodeResponse error: %v", err)
+		}
+		var parsed struct {
+			StopReason string `json:"stop_reason"`
+			Content    []struct {
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+				Text  string          `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(encoded, &parsed); err != nil {
+			t.Fatalf("json unmarshal error: %v", err)
+		}
+		if parsed.StopReason != "tool_use" {
+			t.Errorf("stop_reason = %q, want tool_use", parsed.StopReason)
+		}
+		if len(parsed.Content) != 3 {
+			t.Fatalf("expected 3 content blocks, got %d", len(parsed.Content))
+		}
+		if parsed.Content[1].Type != "tool_use" || parsed.Content[1].ID != "c1" || parsed.Content[1].Name != "fn1" {
+			t.Errorf("content[1] = %+v", parsed.Content[1])
+		}
+		if parsed.Content[2].Type != "tool_use" || parsed.Content[2].ID != "c2" || parsed.Content[2].Name != "fn2" {
+			t.Errorf("content[2] = %+v", parsed.Content[2])
+		}
+	})
 }
