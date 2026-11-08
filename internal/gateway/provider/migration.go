@@ -42,7 +42,8 @@ func legacyRows(list []Provider) []legacyRow {
 		for _, m := range p.Models {
 			if !m.Hidden {
 				rows = append(rows, legacyRow{entry: LegacyProvider{Name: p.Name, BaseURL: p.BaseURL, APIKey: key,
-					Model: m.UpstreamModel, Alias: m.Alias,
+					KeyEnv: p.Auth.KeyEnv,
+					Model:  m.UpstreamModel, Alias: m.Alias,
 					MessagesOnly:  p.Protocol == ir.ProtocolAnthropicMessages,
 					ResponsesOnly: p.Protocol == ir.ProtocolOpenAIResponses}, owner: i, position: m.LegacyPosition})
 			}
@@ -240,12 +241,20 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 			next := &converted[i]
 			retained := Clone(old)
 			retained.Name, retained.BaseURL = next.Name, next.BaseURL
-			if legacyKey(old) != next.Auth.Key {
+			keyChanged := legacyKey(old) != next.Auth.Key
+			envChanged := old.Auth.KeyEnv != next.Auth.KeyEnv && (next.Auth.KeyEnv != "" || next.Auth.Key != legacyKey(old) || next.Auth.Key == "")
+			if keyChanged || envChanged {
 				switch {
+				case next.Auth.KeyEnv != "":
+					if retained.Auth.Scheme == "" || retained.Auth.Scheme == AuthNone {
+						retained.Auth.Scheme = next.Auth.Scheme
+					}
+					retained.Auth.Key, retained.Auth.KeyEnv = "", next.Auth.KeyEnv
+					retained.Auth.KeyRef = ""
+				case next.Auth.Key == "":
+					retained.Auth = Auth{Scheme: AuthNone}
 				case IsRedactedKey(next.Auth.Key):
 					// Retain existing key and key ref without overwriting
-				case next.Auth.Key == "" && next.Auth.KeyEnv == "":
-					retained.Auth = Auth{Scheme: AuthNone}
 				default:
 					if retained.Auth.Scheme == "" || retained.Auth.Scheme == AuthNone {
 						retained.Auth.Scheme = next.Auth.Scheme

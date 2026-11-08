@@ -372,3 +372,164 @@ func TestPreservingSecretsWhenUpdatingProviderWithRedactedSentinel(t *testing.T)
 		}
 	})
 }
+
+func TestAdminClearKeyOrSwitchToKeyEnvOrAuthNone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dir := t.TempDir()
+	modelsPath := filepath.Join(dir, "models.json")
+
+	m := &modelPrefs{}
+	if err := m.load(modelsPath); err != nil {
+		t.Fatal(err)
+	}
+	oldPrefs := prefs
+	prefs = m
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	rawSecret := "sk-initial-secret-123456"
+	prov := gatewayprovider.Provider{
+		ID:       "prov-switch-test",
+		Name:     "SwitchTest",
+		BaseURL:  "https://api.switchtest.example/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth:     gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, Key: rawSecret},
+		Models:   []gatewayprovider.ModelMapping{{Alias: "switchtest/m", UpstreamModel: "m"}},
+		Enabled:  true,
+	}
+	if err := m.upsertProviderV2(&prov); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	engine.Use(adminAccess("127.0.0.1:8080", ""))
+	registerAdminAPIRoutes(engine, m)
+	engine.POST("/admin/providers", handleAdminProviders)
+
+	// 1. Switch to KeyEnv via HTML form POST /admin/providers
+	t.Run("POST /admin/providers switch to KeyEnv", func(t *testing.T) {
+		formProviders := []customProvider{
+			{
+				Name:    "SwitchTest",
+				BaseURL: "https://api.switchtest.example/v1",
+				APIKey:  "",
+				KeyEnv:  "TEST_SWITCH_KEY_ENV",
+				Model:   "m",
+				Alias:   "switchtest/m",
+			},
+		}
+		bodyBytes, err := json.Marshal(formProviders)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/providers", bytes.NewReader(bodyBytes))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST failed with code %d: %s", w.Code, w.Body.String())
+		}
+
+		stored, found, err := m.getProviderV2("prov-switch-test")
+		if err != nil || !found {
+			t.Fatalf("getProviderV2 failed: found=%v, err=%v", found, err)
+		}
+		if stored.Auth.KeyEnv != "TEST_SWITCH_KEY_ENV" || stored.Auth.Key != "" || stored.Auth.KeyRef != "" {
+			t.Fatalf("expected KeyEnv switch without old key/keyref, got: %#v", stored.Auth)
+		}
+	})
+
+	// 2. Clear key (switch to AuthNone) via HTML form POST /admin/providers
+	t.Run("POST /admin/providers clear key to AuthNone", func(t *testing.T) {
+		formProviders := []customProvider{
+			{
+				Name:    "SwitchTest",
+				BaseURL: "https://api.switchtest.example/v1",
+				APIKey:  "",
+				Model:   "m",
+				Alias:   "switchtest/m",
+			},
+		}
+		bodyBytes, err := json.Marshal(formProviders)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/admin/providers", bytes.NewReader(bodyBytes))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST failed with code %d: %s", w.Code, w.Body.String())
+		}
+
+		stored, found, err := m.getProviderV2("prov-switch-test")
+		if err != nil || !found {
+			t.Fatalf("getProviderV2 failed: found=%v, err=%v", found, err)
+		}
+		if stored.Auth.Scheme != gatewayprovider.AuthNone || stored.Auth.Key != "" || stored.Auth.KeyRef != "" {
+			t.Fatalf("expected AuthNone without old key/keyref, got: %#v", stored.Auth)
+		}
+	})
+
+	// 3. Set a new key, then switch to AuthNone via PUT /admin/api/providers/:id
+	t.Run("PUT /admin/api/providers switch to AuthNone and KeyEnv", func(t *testing.T) {
+		// Restore to Bearer with key
+		prov.Auth = gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, Key: "sk-fresh-secret-4444"}
+		if err := m.upsertProviderV2(&prov); err != nil {
+			t.Fatal(err)
+		}
+
+		// Switch to AuthNone via REST API
+		provNone := prov
+		provNone.Auth = gatewayprovider.Auth{Scheme: gatewayprovider.AuthNone}
+		putBytes, err := json.Marshal(provNone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/admin/api/providers/prov-switch-test", bytes.NewReader(putBytes))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT AuthNone failed with code %d: %s", w.Code, w.Body.String())
+		}
+
+		stored, found, err := m.getProviderV2("prov-switch-test")
+		if err != nil || !found {
+			t.Fatalf("getProviderV2 failed: found=%v, err=%v", found, err)
+		}
+		if stored.Auth.Scheme != gatewayprovider.AuthNone || stored.Auth.Key != "" || stored.Auth.KeyRef != "" {
+			t.Fatalf("expected AuthNone, got: %#v", stored.Auth)
+		}
+
+		// Switch to KeyEnv via REST API
+		provKeyEnv := prov
+		provKeyEnv.Auth = gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, KeyEnv: "REST_KEY_ENV"}
+		putBytes, err = json.Marshal(provKeyEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req = httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/admin/api/providers/prov-switch-test", bytes.NewReader(putBytes))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		w = httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT KeyEnv failed with code %d: %s", w.Code, w.Body.String())
+		}
+
+		stored, found, err = m.getProviderV2("prov-switch-test")
+		if err != nil || !found {
+			t.Fatalf("getProviderV2 failed: found=%v, err=%v", found, err)
+		}
+		if stored.Auth.KeyEnv != "REST_KEY_ENV" || stored.Auth.Key != "" || stored.Auth.KeyRef != "" {
+			t.Fatalf("expected KeyEnv without old key/keyref, got: %#v", stored.Auth)
+		}
+	})
+}

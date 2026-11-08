@@ -193,6 +193,8 @@ func WriteDocumentWithSecrets(modelsPath, secretsPath string, doc Document) erro
 		activeRefs[ref] = true
 		if p.Auth.Key != "" && !IsRedactedKey(p.Auth.Key) {
 			secretsMap[ref] = p.Auth.Key
+		} else if IsRedactedKey(p.Auth.Key) && secretsMap[ref] != "" {
+			p.Auth.Key = secretsMap[ref]
 		}
 	}
 

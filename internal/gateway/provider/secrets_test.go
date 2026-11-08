@@ -285,3 +285,188 @@ func TestCheckSecretsFilePermissions(t *testing.T) {
 		t.Fatal("expected error for 0644")
 	}
 }
+
+func TestStoreUpsertSwitchToAuthNoneOrKeyEnv(t *testing.T) {
+	dir := t.TempDir()
+	modelsPath := filepath.Join(dir, "models.json")
+
+	store, err := OpenStore(modelsPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawSecret := "sk-upsert-switch-test-secret"
+	prov := Provider{
+		ID:       "prov-switch-auth",
+		Name:     "Switch Auth Prov",
+		BaseURL:  "https://api.switchauth.example/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth:     Auth{Scheme: AuthBearer, Key: rawSecret},
+		Models:   []ModelMapping{{Alias: "m", UpstreamModel: "m"}},
+	}
+	if err := store.Upsert(&prov); err != nil {
+		t.Fatalf("initial upsert failed: %v", err)
+	}
+
+	got, found := store.Get("prov-switch-auth")
+	if !found || got.Auth.Key != rawSecret {
+		t.Fatalf("initial secret mismatch: got %q, want %q", got.Auth.Key, rawSecret)
+	}
+
+	// Switch to AuthNone
+	noneProv := prov
+	noneProv.Auth = Auth{Scheme: AuthNone}
+	if err := store.Upsert(&noneProv); err != nil {
+		t.Fatalf("upsert AuthNone failed: %v", err)
+	}
+	got, found = store.Get("prov-switch-auth")
+	if !found || got.Auth.Scheme != AuthNone || got.Auth.Key != "" || got.Auth.KeyRef != "" {
+		t.Fatalf("AuthNone not preserved: %#v", got.Auth)
+	}
+
+	// Restore to Bearer
+	bearerProv := prov
+	bearerProv.Auth = Auth{Scheme: AuthBearer, Key: "sk-fresh-secret-5555"}
+	if err := store.Upsert(&bearerProv); err != nil {
+		t.Fatalf("upsert bearer failed: %v", err)
+	}
+
+	// Switch to KeyEnv
+	keyEnvProv := prov
+	keyEnvProv.Auth = Auth{Scheme: AuthBearer, KeyEnv: "MY_STORE_KEY_ENV"}
+	if err := store.Upsert(&keyEnvProv); err != nil {
+		t.Fatalf("upsert KeyEnv failed: %v", err)
+	}
+	got, found = store.Get("prov-switch-auth")
+	if !found || got.Auth.KeyEnv != "MY_STORE_KEY_ENV" || got.Auth.Key != "" || got.Auth.KeyRef != "" {
+		t.Fatalf("KeyEnv not preserved: %#v", got.Auth)
+	}
+}
+
+func TestStoreUpdatePreservesResolvedSecretInMemory(t *testing.T) {
+	dir := t.TempDir()
+	modelsPath := filepath.Join(dir, "models.json")
+
+	store, err := OpenStore(modelsPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawSecret := "sk-persistent-in-memory-secret-123"
+	prov := Provider{
+		ID:       "prov-in-memory-test",
+		Name:     "In Memory Prov",
+		BaseURL:  "https://api.inmem.example/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth:     Auth{Scheme: AuthBearer, Key: rawSecret},
+		Models:   []ModelMapping{{Alias: "m", UpstreamModel: "m"}},
+	}
+	if err := store.Upsert(&prov); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found := store.Get("prov-in-memory-test")
+	if !found || got.Auth.Key != rawSecret {
+		t.Fatalf("initial secret mismatch: got %q, want %q", got.Auth.Key, rawSecret)
+	}
+
+	// Update metadata only
+	err = store.Update(func(doc *Document) error {
+		for i := range doc.Providers {
+			if doc.Providers[i].ID == "prov-in-memory-test" {
+				doc.Providers[i].Name = "Renamed In Memory Prov"
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("metadata store.Update failed: %v", err)
+	}
+
+	got, found = store.Get("prov-in-memory-test")
+	if !found || got.Auth.Key != rawSecret {
+		t.Fatalf("secret lost after metadata update: got %q, want %q", got.Auth.Key, rawSecret)
+	}
+	snap := store.Snapshot()
+	if len(snap.Providers) != 1 || snap.Providers[0].Auth.Key != rawSecret {
+		t.Fatalf("snapshot secret lost: got %q, want %q", snap.Providers[0].Auth.Key, rawSecret)
+	}
+
+	// Update where candidate has redacted sentinel key
+	err = store.Update(func(doc *Document) error {
+		for i := range doc.Providers {
+			if doc.Providers[i].ID == "prov-in-memory-test" {
+				doc.Providers[i].Auth.Key = "[REDACTED]"
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("redacted store.Update failed: %v", err)
+	}
+
+	got, found = store.Get("prov-in-memory-test")
+	if !found || got.Auth.Key != rawSecret {
+		t.Fatalf("secret not repopulated in in-memory doc: got %q, want %q", got.Auth.Key, rawSecret)
+	}
+}
+
+func TestMergeLegacySwitchToKeyEnvOrAuthNone(t *testing.T) {
+	current := []Provider{{
+		ID:       "prov-1",
+		Name:     "ProvOne",
+		BaseURL:  "https://api.one.example/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth:     Auth{Scheme: AuthBearer, Key: "sk-original-secret", KeyRef: "prov-1"},
+		Models:   []ModelMapping{{Alias: "one/m", UpstreamModel: "m", LegacyPosition: 1}},
+		Enabled:  true,
+	}}
+
+	// 1. Switch to AuthNone by clearing key
+	legacyNone := []LegacyProvider{{
+		Name:    "ProvOne",
+		BaseURL: "https://api.one.example/v1",
+		APIKey:  "",
+		Model:   "m",
+		Alias:   "one/m",
+	}}
+	merged, err := MergeLegacy(current, legacyNone)
+	if err != nil {
+		t.Fatalf("MergeLegacy to AuthNone failed: %v", err)
+	}
+	if len(merged) != 1 || merged[0].Auth.Scheme != AuthNone || merged[0].Auth.Key != "" || merged[0].Auth.KeyRef != "" {
+		t.Fatalf("expected AuthNone without key/keyref, got: %#v", merged[0].Auth)
+	}
+
+	// 2. Switch to KeyEnv
+	legacyKeyEnv := []LegacyProvider{{
+		Name:    "ProvOne",
+		BaseURL: "https://api.one.example/v1",
+		KeyEnv:  "NEW_PROVIDER_KEY_ENV",
+		Model:   "m",
+		Alias:   "one/m",
+	}}
+	merged, err = MergeLegacy(current, legacyKeyEnv)
+	if err != nil {
+		t.Fatalf("MergeLegacy to KeyEnv failed: %v", err)
+	}
+	if len(merged) != 1 || merged[0].Auth.KeyEnv != "NEW_PROVIDER_KEY_ENV" || merged[0].Auth.Key != "" || merged[0].Auth.KeyRef != "" {
+		t.Fatalf("expected KeyEnv without key/keyref, got: %#v", merged[0].Auth)
+	}
+
+	// 3. Retain key when using redacted hint
+	legacyRedacted := []LegacyProvider{{
+		Name:    "ProvOne",
+		BaseURL: "https://api.one.example/v1",
+		APIKey:  "sk-...secret",
+		Model:   "m",
+		Alias:   "one/m",
+	}}
+	merged, err = MergeLegacy(current, legacyRedacted)
+	if err != nil {
+		t.Fatalf("MergeLegacy with redacted key failed: %v", err)
+	}
+	if len(merged) != 1 || merged[0].Auth.Key != "sk-original-secret" {
+		t.Fatalf("expected retained key, got: %#v", merged[0].Auth)
+	}
+}

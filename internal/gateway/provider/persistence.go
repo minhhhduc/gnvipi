@@ -230,7 +230,7 @@ func (s *Store) Upsert(p *Provider) error {
 	return s.Update(func(doc *Document) error {
 		for i := range doc.Providers {
 			if doc.Providers[i].ID == owned.ID {
-				if IsRedactedKey(owned.Auth.Key) && doc.Providers[i].Auth.Key != "" {
+				if owned.Auth.Scheme != "" && owned.Auth.Scheme != AuthNone && owned.Auth.KeyEnv == "" && IsRedactedKey(owned.Auth.Key) && doc.Providers[i].Auth.Key != "" {
 					owned.Auth.Key = doc.Providers[i].Auth.Key
 					if doc.Providers[i].Auth.KeyRef != "" {
 						owned.Auth.KeyRef = doc.Providers[i].Auth.KeyRef

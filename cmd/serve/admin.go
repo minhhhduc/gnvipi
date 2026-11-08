@@ -385,7 +385,7 @@ func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
 	for i := range list {
-		if gatewayprovider.IsRedactedKey(list[i].APIKey) {
+		if list[i].APIKey != "" && list[i].KeyEnv == "" && list[i].APIKeyEnv == "" && gatewayprovider.IsRedactedKey(list[i].APIKey) {
 			for _, old := range p.providers {
 				if old.Name == list[i].Name && old.BaseURL == list[i].BaseURL && (old.Model == list[i].Model || old.Alias == list[i].Alias) {
 					list[i].APIKey = old.APIKey
