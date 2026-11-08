@@ -75,6 +75,29 @@ h2{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.09
 .cycle-option label{display:flex;align-items:center;gap:.5rem;overflow-wrap:anywhere;color:var(--fg)}
 .cycle-option input[type=checkbox]{flex:none;width:1rem;height:1rem;margin:0;padding:0}
 .cycle-option button{padding:.1rem .4rem}
+.prov-card{display:block;padding:.75rem .9rem;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-bottom:.6rem}
+.prov-head{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.prov-meta{color:var(--dim);font-size:.8rem;font-family:ui-monospace,Consolas,monospace;margin-left:auto}
+.prov-aliases{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;margin-top:.45rem}
+.prov-actions{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin-top:.55rem}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.5rem .75rem;margin-bottom:.5rem}
+.form-grid label,.form-grid input,.form-grid select{display:block;width:100%}
+.form-grid label{color:var(--dim);font-size:.78rem;margin-bottom:.15rem}
+.form-grid input,.form-grid select{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:.45rem .6rem;font:inherit;margin-bottom:.4rem}
+.mm-row,.hdr-row{display:flex;gap:.4rem;align-items:center;margin-bottom:.35rem}
+.mm-row input,.hdr-row input{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:.35rem .5rem;font:inherit;font-size:.82rem;min-width:0}
+.mm-row input.mm-alias{flex:1.2}
+.mm-row input.mm-upstream{flex:1.5}
+.mm-row input.mm-fallbacks{flex:1.3}
+.mm-row label{display:flex;align-items:center;gap:.25rem;color:var(--dim);font-size:.75rem;white-space:nowrap;margin:0 .2rem}
+.hdr-row input.hdr-name{flex:1}
+.hdr-row input.hdr-val{flex:1.5}
+.del-row-btn{background:none;border:none;color:var(--dim);font-size:1.2rem;cursor:pointer;padding:0 .3rem;line-height:1}
+.del-row-btn:hover{color:var(--bad)}
+.btn-sm{padding:.25rem .55rem;font-size:.78rem}
+.btn-del{color:var(--bad);border-color:var(--bad)}
+.btn-del:hover{background:rgba(224,108,108,.15)}
+.test-res{font-size:.8rem;display:inline-flex;align-items:center;gap:.4rem}
 
 #toast{position:fixed;right:1rem;bottom:1rem;padding:.5rem .8rem;border-radius:8px;
   border:1px solid var(--line);background:var(--card);opacity:0;transition:opacity .2s}
@@ -148,14 +171,3 @@ table.stats tfoot th{color:var(--dim);background:var(--card)}
 </div></header>
 `
 }
-
-// providerForm is the "add an endpoint" card rendered above the model list.
-const providerForm = `<form id=addform class=card>
-  <input name=name placeholder="name (e.g. openrouter)" required>
-  <input name=base_url placeholder="base URL or full endpoint (https://opencode.ai/zen/v1/responses)" required>
-  <input name=api_key placeholder="api key" type=password>
-  <input name=model placeholder="their model id (e.g. x-ai/grok-4)" required>
-  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=responses_only>OpenAI Responses API (/v1/responses)</label>
-  <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;color:var(--dim)"><input type=checkbox name=messages_only>Anthropic Messages API (/v1/messages)</label>
-  <button type=submit>Add endpoint</button>
-</form>`

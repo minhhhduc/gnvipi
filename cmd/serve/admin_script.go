@@ -1,6 +1,6 @@
 package main
 
-const adminScript = adminBaseScript + adminCycleScript + adminStatsScript + adminChromeScript
+const adminScript = adminBaseScript + adminProviderScript + adminCycleScript + adminStatsScript + adminChromeScript
 
 // adminScript keeps the page and the mask file in sync: every toggle saves.
 const adminBaseScript = `
@@ -40,7 +40,7 @@ if (searchForm) {
   searchForm.addEventListener('submit', e => { e.preventDefault(); saveSearch(); });
 }
 const rows = [...document.querySelectorAll('.row')];
-const sws = [...document.querySelectorAll('.sw')];
+const sws = [...document.querySelectorAll('.row .sw')];
 const counts = document.getElementById('counts');
 const toastEl = document.getElementById('toast');
 let toastTimer;
