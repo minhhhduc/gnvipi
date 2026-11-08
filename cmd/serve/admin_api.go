@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -77,7 +78,38 @@ func redactProvider(p *gatewayprovider.Provider) gatewayprovider.Provider {
 	return cloned
 }
 
+func preserveHeaders(incoming, existing map[string]string) map[string]string {
+	if len(incoming) == 0 {
+		return incoming
+	}
+	merged := make(map[string]string, len(incoming))
+	for k, v := range incoming {
+		if isSensitiveHeader(k) && (v == "[REDACTED]" || isRedactedKey(v)) {
+			found := false
+			for ek, ev := range existing {
+				if strings.EqualFold(ek, k) {
+					merged[k] = ev
+					found = true
+					break
+				}
+			}
+			if !found {
+				merged[k] = v
+			}
+		} else {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
 func preserveSecretIfNeeded(updated, existing *gatewayprovider.Provider) {
+	if updated == nil || existing == nil {
+		return
+	}
+	if len(updated.Headers) > 0 {
+		updated.Headers = preserveHeaders(updated.Headers, existing.Headers)
+	}
 	if updated.Auth.Scheme == gatewayprovider.AuthNone {
 		updated.Auth.Key = ""
 		updated.Auth.KeyEnv = ""
@@ -403,7 +435,7 @@ func handleAdminAPITestProvider(c *gin.Context, p *modelPrefs) {
 				target.Models = overlay.Models
 			}
 			if len(overlay.Headers) > 0 {
-				target.Headers = overlay.Headers
+				target.Headers = preserveHeaders(overlay.Headers, existing.Headers)
 			}
 			if overlay.EndpointPaths != nil {
 				target.EndpointPaths = overlay.EndpointPaths
@@ -426,16 +458,64 @@ func handleAdminAPITestProvider(c *gin.Context, p *modelPrefs) {
 }
 
 func testProviderConnection(ctx context.Context, p *gatewayprovider.Provider) ConnectionTestResult {
-	secret := p.Auth.Key
-	if p.Auth.KeyEnv != "" {
-		secret = os.Getenv(p.Auth.KeyEnv)
-	}
-
 	targetProvider := gatewayprovider.Clone(p)
 	if strings.TrimSpace(targetProvider.ID) == "" {
 		targetProvider.ID = "test-provider"
 	}
-	client, err := upstream.NewClient(&targetProvider, nil)
+
+	if targetProvider.Auth.Scheme != gatewayprovider.AuthNone && targetProvider.Auth.KeyEnv != "" && os.Getenv(targetProvider.Auth.KeyEnv) == "" {
+		return ConnectionTestResult{
+			OK:     false,
+			Status: "auth_failure",
+			Error:  fmt.Sprintf("environment variable %q is not set", targetProvider.Auth.KeyEnv),
+		}
+	}
+
+	secret := targetProvider.Auth.Key
+	if targetProvider.Auth.KeyEnv != "" {
+		secret = os.Getenv(targetProvider.Auth.KeyEnv)
+	}
+
+	policy := gatewayprovider.DefaultURLPolicy()
+	proxy := targetProvider.ProxyURL
+	var proxyURL *url.URL
+	if proxy != "" {
+		var parseErr error
+		proxyURL, parseErr = url.Parse(proxy)
+		if parseErr != nil {
+			return ConnectionTestResult{
+				OK:        false,
+				Status:    "connect_failure",
+				LatencyMs: 0,
+				Error:     redact.Default.TextWithSecrets(parseErr.Error(), secret),
+			}
+		}
+	} else if origin, parseErr := url.Parse(targetProvider.BaseURL); parseErr == nil {
+		var envErr error
+		proxyURL, envErr = http.ProxyFromEnvironment(&http.Request{URL: origin})
+		if envErr != nil {
+			return ConnectionTestResult{
+				OK:        false,
+				Status:    "connect_failure",
+				LatencyMs: 0,
+				Error:     redact.Default.TextWithSecrets(envErr.Error(), secret),
+			}
+		}
+	}
+
+	options := &upstream.Options{
+		Timeouts:      targetProvider.Timeouts,
+		ProxyURL:      proxy,
+		Control:       policy.Control,
+		DialContext:   policy.Dialer(proxyURL, net.DefaultResolver, nil),
+		DisableProxy:  true,
+		CheckRedirect: policy.CheckRedirect,
+	}
+
+	factory := upstream.NewFactory()
+	defer factory.CloseIdleConnections()
+
+	client, err := factory.NewClient(&targetProvider, options)
 	if err != nil {
 		return ConnectionTestResult{
 			OK:        false,

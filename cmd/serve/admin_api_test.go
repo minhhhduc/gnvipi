@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -717,5 +720,350 @@ func TestAdminAPI_ManualDispatchRoutes(t *testing.T) {
 	res := makeRequest(t, engine, http.MethodGet, "/admin/api/providers", nil, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("GET through adminRoutes = %d, want 200", res.Code)
+	}
+}
+
+func TestAdminAPI_SensitiveHeaderPreservation(t *testing.T) {
+	p := setupTestPrefs(t)
+	oldPrefs := prefs
+	prefs = p
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	var mu sync.Mutex
+	var lastHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		lastHeaders = r.Header.Clone()
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(`{"data":[]}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	engine := testAdminEngine(t, p, "", 0)
+
+	// 1. Create provider with sensitive and normal headers
+	initial := gatewayprovider.Provider{
+		ID:       "sensitive-hdr-prov",
+		Name:     "Sensitive Headers Provider",
+		BaseURL:  server.URL + "/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth: gatewayprovider.Auth{
+			Scheme: gatewayprovider.AuthNone,
+		},
+		Headers: map[string]string{
+			"Api-Key":       "real-api-key-12345",
+			"ApiKey":        "real-apikey-67890",
+			"Custom-Config": "initial-value",
+		},
+		Models: []gatewayprovider.ModelMapping{
+			{Alias: "gpt-4o", UpstreamModel: "gpt-4o"},
+		},
+		Enabled: true,
+	}
+
+	res := makeRequest(t, engine, http.MethodPost, "/admin/api/providers", initial, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("POST /admin/api/providers = %d: %s", res.Code, res.Body.String())
+	}
+
+	// 2. GET provider -> sensitive headers must be redacted
+	res = makeRequest(t, engine, http.MethodGet, "/admin/api/providers/sensitive-hdr-prov", nil, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /admin/api/providers/sensitive-hdr-prov = %d", res.Code)
+	}
+	var fetched gatewayprovider.Provider
+	if err := json.Unmarshal(res.Body.Bytes(), &fetched); err != nil {
+		t.Fatalf("unmarshal fetched: %v", err)
+	}
+	if fetched.Headers["Api-Key"] != "[REDACTED]" {
+		t.Fatalf("Api-Key not redacted in GET: %s", fetched.Headers["Api-Key"])
+	}
+	if fetched.Headers["Apikey"] != "[REDACTED]" {
+		t.Fatalf("Apikey not redacted in GET: %s", fetched.Headers["Apikey"])
+	}
+	if fetched.Headers["Custom-Config"] != "initial-value" {
+		t.Fatalf("Custom-Config altered: %s", fetched.Headers["Custom-Config"])
+	}
+
+	// 3. PUT with redacted headers and case variation -> must preserve original secret headers
+	updatePayload := fetched
+	updatePayload.Headers["Custom-Config"] = "updated-value"
+	// Change casing for api-key to test case-insensitive matching
+	delete(updatePayload.Headers, "Api-Key")
+	updatePayload.Headers["api-key"] = "[REDACTED]"
+	delete(updatePayload.Headers, "Apikey")
+	updatePayload.Headers["apikey"] = "[REDACTED]"
+
+	res = makeRequest(t, engine, http.MethodPut, "/admin/api/providers/sensitive-hdr-prov", updatePayload, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("PUT /admin/api/providers/sensitive-hdr-prov = %d: %s", res.Code, res.Body.String())
+	}
+
+	persisted, found, err := p.getProviderV2("sensitive-hdr-prov")
+	if err != nil || !found {
+		t.Fatalf("getProviderV2: found=%v err=%v", found, err)
+	}
+	if persisted.Headers["Api-Key"] != "real-api-key-12345" && persisted.Headers["api-key"] != "real-api-key-12345" {
+		t.Fatalf("persisted Api-Key lost: %+v", persisted.Headers)
+	}
+	if persisted.Headers["Apikey"] != "real-apikey-67890" && persisted.Headers["apikey"] != "real-apikey-67890" {
+		t.Fatalf("persisted Apikey lost: %+v", persisted.Headers)
+	}
+	if persisted.Headers["Custom-Config"] != "updated-value" {
+		t.Fatalf("persisted Custom-Config not updated: %s", persisted.Headers["Custom-Config"])
+	}
+
+	// 4. POST /admin/api/providers/:id/test with overlay containing redacted headers
+	testOverlay := map[string]any{
+		"headers": map[string]string{
+			"Api-Key":     "[REDACTED]",
+			"apikey":      "[REDACTED]",
+			"Overlay-Hdr": "overlay-val",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/sensitive-hdr-prov/test", testOverlay, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /sensitive-hdr-prov/test = %d: %s", res.Code, res.Body.String())
+	}
+	var testRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &testRes); err != nil {
+		t.Fatalf("unmarshal test result: %v", err)
+	}
+	if !testRes.OK || testRes.Status != "success" {
+		t.Fatalf("expected test success, got: %+v", testRes)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if lastHeaders.Get("Api-Key") != "real-api-key-12345" {
+		t.Fatalf("upstream received wrong Api-Key: %q", lastHeaders.Get("Api-Key"))
+	}
+	if lastHeaders.Get("Apikey") != "real-apikey-67890" {
+		t.Fatalf("upstream received wrong Apikey: %q", lastHeaders.Get("Apikey"))
+	}
+	if lastHeaders.Get("Overlay-Hdr") != "overlay-val" {
+		t.Fatalf("upstream received wrong Overlay-Hdr: %q", lastHeaders.Get("Overlay-Hdr"))
+	}
+
+	// 5. Test preserveHeaders directly with all sensitive header names and casing
+	existingH := map[string]string{
+		"Authorization":       "Bearer secret-auth",
+		"Proxy-Authorization": "Basic proxy-auth",
+		"X-Api-Key":           "x-key-val",
+		"Api-Key":             "api-key-val",
+		"ApiKey":              "apikey-val",
+		"Non-Sensitive":       "orig-val",
+	}
+	incomingH := map[string]string{
+		"authorization":       "[REDACTED]",
+		"proxy-authorization": "sk-...1234",
+		"x-api-key":           "[REDACTED]",
+		"api-key":             "[REDACTED]",
+		"apikey":              "[REDACTED]",
+		"Non-Sensitive":       "new-val",
+	}
+	merged := preserveHeaders(incomingH, existingH)
+	if merged["authorization"] != "Bearer secret-auth" {
+		t.Fatalf("preserveHeaders failed for authorization: %q", merged["authorization"])
+	}
+	if merged["proxy-authorization"] != "Basic proxy-auth" {
+		t.Fatalf("preserveHeaders failed for proxy-authorization: %q", merged["proxy-authorization"])
+	}
+	if merged["x-api-key"] != "x-key-val" {
+		t.Fatalf("preserveHeaders failed for x-api-key: %q", merged["x-api-key"])
+	}
+	if merged["api-key"] != "api-key-val" {
+		t.Fatalf("preserveHeaders failed for api-key: %q", merged["api-key"])
+	}
+	if merged["apikey"] != "apikey-val" {
+		t.Fatalf("preserveHeaders failed for apikey: %q", merged["apikey"])
+	}
+	if merged["Non-Sensitive"] != "new-val" {
+		t.Fatalf("preserveHeaders overwrote non-sensitive header: %q", merged["Non-Sensitive"])
+	}
+}
+
+func TestAdminAPI_UnsetKeyEnvAuthFailure(t *testing.T) {
+	p := setupTestPrefs(t)
+	oldPrefs := prefs
+	prefs = p
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	const testEnvVar = "GNVIPI_TEST_UNSET_KEY_ENV_XYZ"
+	if err := os.Unsetenv(testEnvVar); err != nil {
+		t.Fatalf("unsetenv %s: %v", testEnvVar, err)
+	}
+
+	engine := testAdminEngine(t, p, "", 0)
+
+	prov := gatewayprovider.Provider{
+		ID:       "unset-keyenv-prov",
+		Name:     "Unset KeyEnv Provider",
+		BaseURL:  "https://api.openai.com/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth: gatewayprovider.Auth{
+			Scheme: gatewayprovider.AuthBearer,
+			KeyEnv: testEnvVar,
+		},
+		Models: []gatewayprovider.ModelMapping{
+			{Alias: "gpt-4o", UpstreamModel: "gpt-4o"},
+		},
+		Enabled: true,
+	}
+
+	if err := p.upsertProviderV2(&prov); err != nil {
+		t.Fatalf("upsert provider: %v", err)
+	}
+
+	// 1. POST /admin/api/providers/:id/test should return auth_failure immediately
+	res := makeRequest(t, engine, http.MethodPost, "/admin/api/providers/unset-keyenv-prov/test", nil, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("test returned %d, want 200", res.Code)
+	}
+	var testRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &testRes); err != nil {
+		t.Fatalf("unmarshal test result: %v", err)
+	}
+	if testRes.OK {
+		t.Fatalf("expected test failure, got ok=true")
+	}
+	if testRes.Status != "auth_failure" {
+		t.Fatalf("expected status auth_failure, got %q", testRes.Status)
+	}
+	expectedErr := fmt.Sprintf("environment variable %q is not set", testEnvVar)
+	if testRes.Error != expectedErr {
+		t.Fatalf("expected error %q, got %q", expectedErr, testRes.Error)
+	}
+
+	// 2. Direct POST /admin/api/providers/test should also return auth_failure immediately
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test", prov, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("direct test returned %d, want 200", res.Code)
+	}
+	var directRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &directRes); err != nil {
+		t.Fatalf("unmarshal direct test result: %v", err)
+	}
+	if directRes.OK || directRes.Status != "auth_failure" || directRes.Error != expectedErr {
+		t.Fatalf("expected direct test auth_failure, got: %+v", directRes)
+	}
+}
+
+func TestAdminAPI_RedirectAndSSRFGuards(t *testing.T) {
+	p := setupTestPrefs(t)
+	oldPrefs := prefs
+	prefs = p
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	// Server that redirects to link-local/metadata address
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/cross") {
+			http.Redirect(w, r, "https://api.openai.com/v1/models", http.StatusFound)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/loop") {
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+		if r.URL.Path == "/v1/models" {
+			http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer redirectServer.Close()
+
+	engine := testAdminEngine(t, p, "", 0)
+
+	// 1. Connection test redirecting to SSRF target (169.254.169.254) must fail
+	prov := gatewayprovider.Provider{
+		ID:       "ssrf-redirect-prov",
+		Name:     "SSRF Redirect Provider",
+		BaseURL:  redirectServer.URL + "/v1",
+		Protocol: ir.ProtocolOpenAIChat,
+		Auth:     gatewayprovider.Auth{Scheme: gatewayprovider.AuthNone},
+		Models:   []gatewayprovider.ModelMapping{{Alias: "gpt-4o", UpstreamModel: "gpt-4o"}},
+		Enabled:  true,
+	}
+
+	if err := p.upsertProviderV2(&prov); err != nil {
+		t.Fatalf("upsert provider: %v", err)
+	}
+
+	res := makeRequest(t, engine, http.MethodPost, "/admin/api/providers/ssrf-redirect-prov/test", nil, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("test returned %d, want 200", res.Code)
+	}
+	var testRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &testRes); err != nil {
+		t.Fatalf("unmarshal test result: %v", err)
+	}
+	if testRes.OK || testRes.Status != "connect_failure" {
+		t.Fatalf("expected connect_failure for SSRF redirect, got: %+v", testRes)
+	}
+	if !strings.Contains(testRes.Error, "metadata") && !strings.Contains(testRes.Error, "link-local") && !strings.Contains(testRes.Error, "redirect") {
+		t.Fatalf("expected error mentioning metadata/link-local/redirect, got: %s", testRes.Error)
+	}
+
+	// 2. Redirect loop should be blocked after 10 redirects
+	loopProv := prov
+	loopProv.ID = "loop-prov"
+	loopProv.BaseURL = redirectServer.URL + "/v1/loop"
+	loopProv.Models = []gatewayprovider.ModelMapping{{Alias: "loop-model", UpstreamModel: "loop-model"}}
+	if err := p.upsertProviderV2(&loopProv); err != nil {
+		t.Fatalf("upsert loop provider: %v", err)
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/loop-prov/test", nil, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("test returned %d, want 200", res.Code)
+	}
+	var loopRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &loopRes); err != nil {
+		t.Fatalf("unmarshal loop test result: %v", err)
+	}
+	if loopRes.OK || loopRes.Status != "connect_failure" {
+		t.Fatalf("expected connect_failure for redirect loop, got: %+v", loopRes)
+	}
+	if !strings.Contains(loopRes.Error, "too many upstream redirects") {
+		t.Fatalf("expected too many upstream redirects, got: %s", loopRes.Error)
+	}
+
+	// 3. Cross-origin redirect should be blocked
+	crossProv := prov
+	crossProv.ID = "cross-prov"
+	crossProv.BaseURL = redirectServer.URL + "/v1/cross"
+	crossProv.Models = []gatewayprovider.ModelMapping{{Alias: "cross-model", UpstreamModel: "cross-model"}}
+	if err := p.upsertProviderV2(&crossProv); err != nil {
+		t.Fatalf("upsert cross provider: %v", err)
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/cross-prov/test", nil, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("test returned %d, want 200", res.Code)
+	}
+	var crossRes ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &crossRes); err != nil {
+		t.Fatalf("unmarshal cross test result: %v", err)
+	}
+	if crossRes.OK || crossRes.Status != "connect_failure" {
+		t.Fatalf("expected connect_failure for cross-origin redirect, got: %+v", crossRes)
+	}
+	if !strings.Contains(crossRes.Error, "cross-origin upstream redirect is forbidden") {
+		t.Fatalf("expected cross-origin redirect forbidden, got: %s", crossRes.Error)
+	}
+
+	// 4. Direct SSRF guard in testProviderConnection when DenyPrivate is enabled
+	gatewayprovider.SetDefaultURLPolicy(gatewayprovider.URLPolicy{DenyPrivate: true})
+	t.Cleanup(func() { gatewayprovider.SetDefaultURLPolicy(gatewayprovider.URLPolicy{}) })
+
+	denyRes := testProviderConnection(t.Context(), &prov)
+	if denyRes.OK || denyRes.Status != "connect_failure" {
+		t.Fatalf("expected connect_failure with DenyPrivate, got: %+v", denyRes)
+	}
+	if !strings.Contains(denyRes.Error, "private/local") && !strings.Contains(denyRes.Error, "base_url") {
+		t.Fatalf("expected error mentioning private/local address, got: %s", denyRes.Error)
 	}
 }
