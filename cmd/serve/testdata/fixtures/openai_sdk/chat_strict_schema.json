@@ -1,0 +1,46 @@
+{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Extract entities from text in strict JSON."
+    },
+    {
+      "role": "user",
+      "content": "Alice and Bob visited Zurich in 2026."
+    }
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "entity_extraction",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "year": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "people",
+          "cities",
+          "year"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

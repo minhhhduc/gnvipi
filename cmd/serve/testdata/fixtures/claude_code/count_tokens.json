@@ -1,0 +1,35 @@
+{
+  "model": "claude-3-7-sonnet-20250219",
+  "system": [
+    {
+      "type": "text",
+      "text": "You are Claude Code, Anthropic's official CLI for agentic coding.",
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "name": "Bash",
+      "description": "Execute a bash command",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Count the tokens for this prompt and test client compatibility."
+    }
+  ]
+}

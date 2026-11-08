@@ -1,0 +1,49 @@
+{
+  "model": "gpt-4o-responses",
+  "instructions": "You are Codex, an AI coding agent.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Check git repository status."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "call_id": "call_exec_001",
+      "name": "exec_cmd",
+      "arguments": "{\"command\":\"git status\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_exec_001",
+      "output": "On branch feat/58-client-fixtures\nnothing to commit"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "exec_cmd",
+      "description": "Execute shell command",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
+  ],
+  "modalities": [
+    "text"
+  ],
+  "temperature": 0.1
+}
