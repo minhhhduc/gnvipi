@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,29 +90,39 @@ func LoadSecrets(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var flat map[string]string
-	if err := json.Unmarshal(raw, &flat); err == nil && flat != nil {
-		return flat, nil
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return make(map[string]string), nil
 	}
+
+	// Check for nested format first so {"providers": {...}, "secrets": {...}} is not
+	// misidentified or swallowed.
 	var nested struct {
-		Secrets   map[string]string         `json:"secrets"`
-		Providers map[string]map[string]any `json:"providers"`
+		Secrets   map[string]string `json:"secrets"`
+		Providers map[string]any    `json:"providers"`
 	}
-	if err := json.Unmarshal(raw, &nested); err == nil {
+	if err := json.Unmarshal(raw, &nested); err == nil && (nested.Secrets != nil || nested.Providers != nil) {
 		res := make(map[string]string)
 		for k, v := range nested.Secrets {
 			res[k] = v
 		}
-		for id, fields := range nested.Providers {
-			if k, ok := fields["key"].(string); ok {
-				res[id] = k
-			} else if k, ok := fields["api_key"].(string); ok {
-				res[id] = k
+		for id, val := range nested.Providers {
+			switch v := val.(type) {
+			case string:
+				res[id] = v
+			case map[string]any:
+				if k, ok := v["key"].(string); ok {
+					res[id] = k
+				} else if k, ok := v["api_key"].(string); ok {
+					res[id] = k
+				}
 			}
 		}
-		if len(res) > 0 {
-			return res, nil
-		}
+		return res, nil
+	}
+
+	var flat map[string]string
+	if err := json.Unmarshal(raw, &flat); err == nil && flat != nil {
+		return flat, nil
 	}
 	return make(map[string]string), nil
 }
@@ -161,8 +172,10 @@ func WriteSecrets(path string, secrets map[string]string) (err error) {
 }
 
 // WriteDocumentWithSecrets saves provider secrets to secretsPath (if set) and writes the catalog
-// document to modelsPath without literal secrets. Existing secrets in secretsPath are updated,
-// and legacy inline keys in doc.Providers are migrated to secrets.
+// document to modelsPath without literal secrets. Existing secrets in secretsPath are updated
+// and preserved; unreferenced keys are retained so saving a partial document or an independent
+// provider catalog does not purge unowned secrets.
+// The caller's in-memory doc is not mutated.
 func WriteDocumentWithSecrets(modelsPath, secretsPath string, doc Document) error {
 	if modelsPath == "" {
 		return nil
@@ -180,7 +193,6 @@ func WriteDocumentWithSecrets(modelsPath, secretsPath string, doc Document) erro
 		secretsMap[k] = v
 	}
 
-	activeRefs := make(map[string]bool, len(doc.Providers))
 	for i := range doc.Providers {
 		p := &doc.Providers[i]
 		if p.Auth.Scheme == "" || p.Auth.Scheme == AuthNone || p.Auth.KeyEnv != "" {
@@ -190,17 +202,8 @@ func WriteDocumentWithSecrets(modelsPath, secretsPath string, doc Document) erro
 			p.Auth.KeyRef = p.ID
 		}
 		ref := p.Auth.KeyRef
-		activeRefs[ref] = true
 		if p.Auth.Key != "" && !IsRedactedKey(p.Auth.Key) {
 			secretsMap[ref] = p.Auth.Key
-		} else if IsRedactedKey(p.Auth.Key) && secretsMap[ref] != "" {
-			p.Auth.Key = secretsMap[ref]
-		}
-	}
-
-	for k := range secretsMap {
-		if !activeRefs[k] {
-			delete(secretsMap, k)
 		}
 	}
 
@@ -214,6 +217,9 @@ func WriteDocumentWithSecrets(modelsPath, secretsPath string, doc Document) erro
 	for i := range catalogDoc.Providers {
 		p := &catalogDoc.Providers[i]
 		if p.Auth.Scheme != "" && p.Auth.Scheme != AuthNone && p.Auth.KeyEnv == "" {
+			if p.Auth.KeyRef == "" {
+				p.Auth.KeyRef = p.ID
+			}
 			p.Auth.Key = ""
 		}
 	}

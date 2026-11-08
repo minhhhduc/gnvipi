@@ -97,6 +97,19 @@ func TestLoadAndWriteSecrets(t *testing.T) {
 	if nestedMap["p1"] != "key-p1" || nestedMap["p2"] != "key-p2" {
 		t.Fatalf("nestedMap mismatch: %#v", nestedMap)
 	}
+
+	// Nested format with direct string provider values: {"providers": {"p1": "secret1"}}
+	nestedDirectPath := filepath.Join(dir, "nested_direct.json")
+	if err := os.WriteFile(nestedDirectPath, []byte(`{"providers": {"p1": "secret1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nestedDirectMap, err := LoadSecrets(nestedDirectPath)
+	if err != nil {
+		t.Fatalf("LoadSecrets nested direct failed: %v", err)
+	}
+	if len(nestedDirectMap) == 0 || nestedDirectMap["p1"] != "secret1" {
+		t.Fatalf("expected nestedDirectMap to contain p1: secret1 without returning empty map, got: %#v", nestedDirectMap)
+	}
 }
 
 func TestLegacyInlineKeysMigratedOnFirstSave(t *testing.T) {
@@ -468,5 +481,70 @@ func TestMergeLegacySwitchToKeyEnvOrAuthNone(t *testing.T) {
 	}
 	if len(merged) != 1 || merged[0].Auth.Key != "sk-original-secret" {
 		t.Fatalf("expected retained key, got: %#v", merged[0].Auth)
+	}
+}
+
+func TestWriteDocumentWithSecretsPreservesUnreferencedSecrets(t *testing.T) {
+	dir := t.TempDir()
+	modelsPath := filepath.Join(dir, "models.json")
+	secretsPath := filepath.Join(dir, "secrets.json")
+
+	// Pre-seed secrets.json with provider B's secret
+	initialSecrets := map[string]string{
+		"prov-b": "sk-secret-b",
+	}
+	if err := WriteSecrets(secretsPath, initialSecrets); err != nil {
+		t.Fatalf("WriteSecrets failed: %v", err)
+	}
+
+	// Create document containing only provider A
+	docA := Document{
+		Providers: []Provider{
+			{
+				ID:       "prov-a",
+				Name:     "Provider A",
+				BaseURL:  "https://api.a.example/v1",
+				Protocol: ir.ProtocolOpenAIChat,
+				Auth:     Auth{Scheme: AuthBearer, Key: "sk-secret-a", KeyRef: "prov-a"},
+				Models:   []ModelMapping{{Alias: "a/m", UpstreamModel: "m"}},
+			},
+		},
+	}
+
+	// Save document containing only provider A
+	if err := WriteDocumentWithSecrets(modelsPath, secretsPath, docA); err != nil {
+		t.Fatalf("WriteDocumentWithSecrets failed: %v", err)
+	}
+
+	// Verify secrets file still contains prov-b's secret and prov-a's secret
+	secrets, err := LoadSecrets(secretsPath)
+	if err != nil {
+		t.Fatalf("LoadSecrets failed: %v", err)
+	}
+	if secrets["prov-b"] != "sk-secret-b" {
+		t.Fatalf("provider B secret was purged! secrets: %#v", secrets)
+	}
+	if secrets["prov-a"] != "sk-secret-a" {
+		t.Fatalf("provider A secret was not saved! secrets: %#v", secrets)
+	}
+
+	// Verify docA in-memory was NOT mutated with plaintext or corrupted
+	callerDoc := Document{
+		Providers: []Provider{
+			{
+				ID:       "prov-a",
+				Name:     "Provider A",
+				BaseURL:  "https://api.a.example/v1",
+				Protocol: ir.ProtocolOpenAIChat,
+				Auth:     Auth{Scheme: AuthBearer, Key: "[REDACTED]", KeyRef: "prov-a"},
+				Models:   []ModelMapping{{Alias: "a/m", UpstreamModel: "m"}},
+			},
+		},
+	}
+	if err := WriteDocumentWithSecrets(modelsPath, secretsPath, callerDoc); err != nil {
+		t.Fatalf("WriteDocumentWithSecrets failed: %v", err)
+	}
+	if callerDoc.Providers[0].Auth.Key != "[REDACTED]" {
+		t.Fatalf("caller's in-memory doc was mutated: got %q, want [REDACTED]", callerDoc.Providers[0].Auth.Key)
 	}
 }

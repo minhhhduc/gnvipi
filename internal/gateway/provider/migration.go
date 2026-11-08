@@ -241,9 +241,21 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 			next := &converted[i]
 			retained := Clone(old)
 			retained.Name, retained.BaseURL = next.Name, next.BaseURL
+			// Detect authentication changes between existing (old) provider
+			// and incoming converted legacy provider (next).
 			keyChanged := legacyKey(old) != next.Auth.Key
-			envChanged := old.Auth.KeyEnv != next.Auth.KeyEnv && (next.Auth.KeyEnv != "" || next.Auth.Key != legacyKey(old) || next.Auth.Key == "")
-			if keyChanged || envChanged {
+			envVarChanged := old.Auth.KeyEnv != next.Auth.KeyEnv
+
+			// An environment variable transition occurs if:
+			// 1. Switched to an env var (next has KeyEnv set).
+			// 2. Switched away from an env var and provided a new literal key.
+			// 3. Switched away from an env var to no authentication (empty key).
+			switchedToEnv := next.Auth.KeyEnv != ""
+			clearedEnvWithNewKey := next.Auth.Key != legacyKey(old)
+			clearedEnvToNoAuth := next.Auth.Key == ""
+			envTransition := envVarChanged && (switchedToEnv || clearedEnvWithNewKey || clearedEnvToNoAuth)
+
+			if keyChanged || envTransition {
 				switch {
 				case next.Auth.KeyEnv != "":
 					if retained.Auth.Scheme == "" || retained.Auth.Scheme == AuthNone {

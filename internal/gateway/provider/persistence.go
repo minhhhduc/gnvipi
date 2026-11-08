@@ -205,6 +205,28 @@ func (s *Store) Update(edit func(*Document) error) error {
 		return err
 	}
 	candidate = cloneDocument(candidate)
+	for i := range candidate.Providers {
+		p := &candidate.Providers[i]
+		if p.Auth.Scheme != "" && p.Auth.Scheme != AuthNone && p.Auth.KeyEnv == "" {
+			if p.Auth.KeyRef == "" {
+				p.Auth.KeyRef = p.ID
+			}
+			for j := range s.doc.Providers {
+				if s.doc.Providers[j].ID == p.ID && s.doc.Providers[j].Auth.Key != "" && !IsRedactedKey(s.doc.Providers[j].Auth.Key) {
+					if IsRedactedKey(p.Auth.Key) {
+						p.Auth.Key = s.doc.Providers[j].Auth.Key
+					}
+					break
+				}
+			}
+			if IsRedactedKey(p.Auth.Key) && s.secretsPath != "" {
+				ref := p.Auth.KeyRef
+				if sec, err := LoadSecrets(s.secretsPath); err == nil && sec[ref] != "" {
+					p.Auth.Key = sec[ref]
+				}
+			}
+		}
+	}
 	if err := validateDocument(&candidate); err != nil {
 		return err
 	}
