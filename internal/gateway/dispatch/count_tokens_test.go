@@ -6,14 +6,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
+	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
+	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	outboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/outbound/anthropic"
 	outboundchat "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openaichat"
 	outboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openairesponses"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 )
@@ -352,5 +357,202 @@ func TestCountTokens_NilRegistryUsesDefaultAnthropicAdapter(t *testing.T) {
 	}
 	if resp.InputTokens <= 0 {
 		t.Fatalf("expected positive input_tokens, got %d", resp.InputTokens)
+	}
+}
+
+func TestCountTokens_ProviderMaxConcurrencyOccupiedSucceedsImmediately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Upstream server blocks normal chat completion request to keep MaxConcurrency slot occupied.
+	started := make(chan struct{})
+	block := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-block
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, writeErr := w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`)); writeErr != nil {
+			t.Error(writeErr)
+		}
+	}))
+	defer upstream.Close()
+
+	prov := provider.Provider{
+		ID:             "openai-vendor",
+		Name:           "openai-vendor",
+		BaseURL:        upstream.URL,
+		Protocol:       ir.ProtocolOpenAIChat,
+		Enabled:        true,
+		MaxConcurrency: 1,
+		Models: []provider.ModelMapping{
+			{Alias: "gpt-4o-alias", UpstreamModel: "gpt-4o"},
+		},
+	}
+	resolver, err := routing.NewRegistryResolver([]provider.Provider{prov}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := New(resolver, nil)
+	d.Registry = newCountTokensRegistry()
+
+	engine := gin.New()
+	engine.Use(d.Handle)
+
+	// Launch an in-flight request to fill the single concurrency slot of openai-vendor.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		chatReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(`{"model":"gpt-4o-alias","messages":[{"role":"user","content":"hold"}]}`))
+		chatRec := httptest.NewRecorder()
+		engine.ServeHTTP(chatRec, chatReq)
+	}()
+
+	// Wait until the in-flight request has acquired the concurrency slot and reached upstream.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		close(block)
+		wg.Wait()
+		t.Fatal("timed out waiting for in-flight request to start")
+	}
+
+	// While the in-flight request completely occupies the provider's MaxConcurrency slot,
+	// issue a non-Anthropic count_tokens request. It should succeed immediately without acquiring
+	// or blocking on the limiter slot.
+	countReqBody := `{"model":"gpt-4o-alias","messages":[{"role":"user","content":"Count this text"}]}`
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(countReqBody))
+	rc := core.NewRequestContext("test-req-id")
+	req = req.WithContext(core.WithRequestContext(req.Context(), rc))
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	// Clean up the in-flight request.
+	close(block)
+	wg.Wait()
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if estimate := w.Header().Get("X-Gateway-Token-Estimate"); estimate != "true" {
+		t.Fatalf("X-Gateway-Token-Estimate = %q, want \"true\"", estimate)
+	}
+	if rc.FirstByte.IsZero() {
+		t.Fatal("expected rc.FirstByte to be non-zero")
+	}
+
+	var resp struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, w.Body.String())
+	}
+	if resp.InputTokens <= 0 {
+		t.Fatalf("expected positive input_tokens, got %d", resp.InputTokens)
+	}
+}
+
+func TestCountTokens_AnthropicUpstreamCountTokensDisabledByFeaturePolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		t.Error("upstream should NOT be called when count_tokens is disabled by feature policy")
+	}))
+	defer upstream.Close()
+
+	resolver, err := routing.NewLegacyResolver([]provider.LegacyProvider{
+		{
+			Name:         "anthropic-vendor",
+			BaseURL:      upstream.URL,
+			APIKey:       "anthropic-key",
+			Model:        "claude-3-opus",
+			Alias:        "claude-alias",
+			MessagesOnly: true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := New(resolver, nil)
+	d.Registry = newCountTokensRegistry()
+	disabled := false
+	d.FeaturePolicy = gwpolicy.Config{
+		ProviderOverrides: map[string]gwpolicy.CapabilityOverrides{
+			"anthropic-vendor": {CountTokens: &disabled},
+		},
+	}
+
+	engine := gin.New()
+	engine.Use(d.Handle)
+
+	body := `{"model":"claude-alias","messages":[{"role":"user","content":"Hello Anthropic"}]}`
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if upstreamCalled {
+		t.Fatal("upstream must NOT be called")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if estimate := w.Header().Get("X-Gateway-Token-Estimate"); estimate != "true" {
+		t.Fatalf("X-Gateway-Token-Estimate = %q, want \"true\"", estimate)
+	}
+}
+
+func TestCountTokens_AnthropicUpstreamCountTokensDisabledByExtension(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		t.Error("upstream should NOT be called when count_tokens is disabled by extension")
+	}))
+	defer upstream.Close()
+
+	prov := provider.Provider{
+		ID:       "anthropic-ext",
+		Name:     "anthropic-ext",
+		BaseURL:  upstream.URL,
+		Protocol: ir.ProtocolAnthropicMessages,
+		Enabled:  true,
+		Models: []provider.ModelMapping{
+			{Alias: "claude-ext-alias", UpstreamModel: "claude-3"},
+		},
+		Extensions: map[string]json.RawMessage{
+			"capabilities": json.RawMessage(`{"count_tokens":false}`),
+		},
+	}
+	resolver, err := routing.NewRegistryResolver([]provider.Provider{prov}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := New(resolver, nil)
+	d.Registry = newCountTokensRegistry()
+
+	engine := gin.New()
+	engine.Use(d.Handle)
+
+	body := `{"model":"claude-ext-alias","messages":[{"role":"user","content":"Hello Anthropic"}]}`
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if upstreamCalled {
+		t.Fatal("upstream must NOT be called")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if estimate := w.Header().Get("X-Gateway-Token-Estimate"); estimate != "true" {
+		t.Fatalf("X-Gateway-Token-Estimate = %q, want \"true\"", estimate)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -136,6 +137,27 @@ func (d *Dispatcher) featurePolicyConfig() gwpolicy.Config {
 	return cfg
 }
 
+func (d *Dispatcher) isLocalCountTokens(route routing.Route, protocol ir.Protocol) bool {
+	if route.UpstreamProtocol != protocol {
+		return true
+	}
+	if route.Provider == nil {
+		return false
+	}
+	caps := adapter.Capabilities{CountTokens: true}
+	cfg := d.featurePolicyConfig()
+	caps = cfg.CapabilitiesForProvider(route.Provider.ID, caps)
+	if len(route.Provider.Extensions) > 0 {
+		if rawCaps, ok := route.Provider.Extensions["capabilities"]; ok {
+			var ov gwpolicy.CapabilityOverrides
+			if err := json.Unmarshal(rawCaps, &ov); err == nil {
+				caps = gwpolicy.ApplyOverrides(caps, &ov)
+			}
+		}
+	}
+	return !caps.CountTokens
+}
+
 func (d *Dispatcher) handler(model string, route routing.Route) (*relay.Relay, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -218,6 +240,10 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, &gwerr.Error{Kind: gwerr.KindInternal, Message: "resolver returned an invalid route"})
 		return
 	}
+	if c.Request.URL.Path == "/v1/messages/count_tokens" && d.isLocalCountTokens(route, protocol) {
+		d.serveCountTokensEstimate(c, body, route, rc)
+		return
+	}
 	if d.Limiter != nil {
 		release, acquireErr := d.Limiter.Acquire(c.Request.Context(), route.Provider)
 		if acquireErr != nil {
@@ -234,10 +260,6 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		}
 		c.Abort()
 		handler.ServeBuffered(c.Writer, c.Request, body)
-		return
-	}
-	if c.Request.URL.Path == "/v1/messages/count_tokens" {
-		d.serveCountTokensEstimate(c, body, route, rc)
 		return
 	}
 	if d.Registry == nil {
@@ -316,6 +338,9 @@ func (d *Dispatcher) serveCountTokensEstimate(c *gin.Context, body []byte, route
 	}
 
 	usage.InputTokens = tokens
+	if rc.FirstByte.IsZero() {
+		rc.FirstByte = time.Now()
+	}
 	c.Header("X-Gateway-Token-Estimate", "true")
 	c.JSON(http.StatusOK, gin.H{"input_tokens": tokens})
 }
