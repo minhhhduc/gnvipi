@@ -503,3 +503,68 @@ func readWire(t *testing.T, body string) []map[string]any {
 		events = append(events, value)
 	}
 }
+
+func TestStreamParallelFunctionCalls(t *testing.T) {
+	stream := &eventStream{events: []ir.StreamEvent{
+		ir.NewMessageStart("resp_parallel", ir.RoleAssistant, "gpt-4o", ir.Usage{InputTokens: 10}),
+		ir.NewBlockStart(0, ir.NewToolUseBlock("call_1", "weather", json.RawMessage(`{}`))),
+		ir.NewToolArgumentsDelta(0, "call_1", `{"city":`),
+		ir.NewToolArgumentsDelta(0, "call_1", `"Tokyo"}`),
+		ir.NewBlockStop(0),
+		ir.NewBlockStart(1, ir.NewToolUseBlock("call_2", "time", json.RawMessage(`{}`))),
+		ir.NewToolArgumentsDelta(1, "call_2", `{"tz":`),
+		ir.NewToolArgumentsDelta(1, "call_2", `"JST"}`),
+		ir.NewBlockStop(1),
+		ir.NewUsageUpdate(ir.Usage{OutputTokens: 15}),
+		ir.NewMessageStop(ir.StopToolUse),
+	}}
+
+	wire, err := encodeWire(t, context.Background(), StreamEncoder{Created: 1710000000}, stream)
+	if err != nil {
+		t.Fatalf("encodeWire error: %v", err)
+	}
+
+	eventTypes := make([]string, 0, len(wire))
+	for _, ev := range wire {
+		eventTypes = append(eventTypes, ev["type"].(string))
+	}
+
+	expectedTypes := []string{
+		"response.created",
+		"response.in_progress",
+		"response.output_item.added",
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.done",
+		"response.output_item.done",
+		"response.output_item.added",
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.delta",
+		"response.function_call_arguments.done",
+		"response.output_item.done",
+		"response.completed",
+	}
+
+	if !reflect.DeepEqual(eventTypes, expectedTypes) {
+		t.Fatalf("event sequence mismatch:\ngot:  %+v\nwant: %+v", eventTypes, expectedTypes)
+	}
+
+	// Verify items inside response.completed
+	completed := wire[len(wire)-1]
+	resp := completed["response"].(map[string]any)
+	if resp["status"] != "completed" {
+		t.Errorf("status = %v, want completed", resp["status"])
+	}
+	output := resp["output"].([]any)
+	if len(output) != 2 {
+		t.Fatalf("output length = %d, want 2", len(output))
+	}
+	o1 := output[0].(map[string]any)
+	o2 := output[1].(map[string]any)
+	if o1["call_id"] != "call_1" || o1["name"] != "weather" || o1["arguments"] != `{"city":"Tokyo"}` {
+		t.Errorf("o1 = %+v", o1)
+	}
+	if o2["call_id"] != "call_2" || o2["name"] != "time" || o2["arguments"] != `{"tz":"JST"}` {
+		t.Errorf("o2 = %+v", o2)
+	}
+}

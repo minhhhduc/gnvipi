@@ -110,3 +110,150 @@ func TestStreamIdleTimeout(t *testing.T) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
+
+func TestStreamSingleAndParallelFunctionCalls(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_parallel\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"weather\"}}\n\n" +
+		"event: response.function_call_arguments.delta\n" +
+		"data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"city\\\":\\\"\"}\n\n" +
+		"event: response.function_call_arguments.delta\n" +
+		"data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"Paris\\\"}\"}\n\n" +
+		"event: response.function_call_arguments.done\n" +
+		"data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_2\",\"name\":\"time\"}}\n\n" +
+		"event: response.function_call_arguments.delta\n" +
+		"data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{\\\"tz\\\":\\\"CET\\\"}\"}\n\n" +
+		"event: response.function_call_arguments.done\n" +
+		"data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":1,\"arguments\":\"{\\\"tz\\\":\\\"CET\\\"}\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":1}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_parallel\",\"model\":\"gpt-4o\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20}}}\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+	stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatalf("ParseStream error: %v", err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next error: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	// Verify sequence:
+	// MessageStart
+	// BlockStart 0 (weather)
+	// BlockDelta 0 (city)
+	// BlockDelta 0 (Paris)
+	// BlockStop 0
+	// BlockStart 1 (time)
+	// BlockDelta 1 (tz)
+	// BlockStop 1
+	// UsageUpdate
+	// MessageStop (ir.StopToolUse)
+	if len(events) != 10 {
+		t.Fatalf("expected 10 events, got %d: %+v", len(events), events)
+	}
+
+	if events[0].Type != ir.EventMessageStart {
+		t.Errorf("events[0] = %s", events[0].Type)
+	}
+
+	// Block 0
+	if events[1].Type != ir.EventBlockStart || events[1].Index != 0 || events[1].Block.ToolUse.ID != "call_1" {
+		t.Errorf("events[1] = %+v", events[1])
+	}
+	if events[2].Type != ir.EventBlockDelta || events[2].Index != 0 || events[2].Delta.PartialJSON != `{"city":"` {
+		t.Errorf("events[2] = %+v", events[2])
+	}
+	if events[3].Type != ir.EventBlockDelta || events[3].Index != 0 || events[3].Delta.PartialJSON != `Paris"}` {
+		t.Errorf("events[3] = %+v", events[3])
+	}
+	if events[4].Type != ir.EventBlockStop || events[4].Index != 0 {
+		t.Errorf("events[4] = %+v", events[4])
+	}
+
+	// Block 1
+	if events[5].Type != ir.EventBlockStart || events[5].Index != 1 || events[5].Block.ToolUse.ID != "call_2" {
+		t.Errorf("events[5] = %+v", events[5])
+	}
+	if events[6].Type != ir.EventBlockDelta || events[6].Index != 1 || events[6].Delta.PartialJSON != `{"tz":"CET"}` {
+		t.Errorf("events[6] = %+v", events[6])
+	}
+	if events[7].Type != ir.EventBlockStop || events[7].Index != 1 {
+		t.Errorf("events[7] = %+v", events[7])
+	}
+
+	// Usage update and stop
+	if events[8].Type != ir.EventUsageUpdate || events[8].Usage.InputTokens != 10 || events[8].Usage.OutputTokens != 20 {
+		t.Errorf("events[8] = %+v", events[8])
+	}
+	if events[9].Type != ir.EventMessageStop || events[9].StopReason != ir.StopToolUse {
+		t.Errorf("events[9] = %+v", events[9])
+	}
+}
+
+func TestStreamFunctionCallArgumentsDoneWithoutDeltas(t *testing.T) {
+	raw := "event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_direct_args\",\"model\":\"gpt-4o\"}}\n\n" +
+		"event: response.output_item.added\n" +
+		"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_0\",\"type\":\"function_call\",\"call_id\":\"call_direct\",\"name\":\"lookup\"}}\n\n" +
+		"event: response.function_call_arguments.done\n" +
+		"data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"arguments\":\"{\\\"query\\\":\\\"golang\\\"}\"}\n\n" +
+		"event: response.output_item.done\n" +
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0}\n\n" +
+		"event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_direct_args\",\"status\":\"completed\"}}\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+	stream, err := openairesponses.New().ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatalf("ParseStream error: %v", err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("stream.Next error: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	var deltas []string
+	for _, ev := range events {
+		if ev.Type == ir.EventBlockDelta && ev.Delta.Type == ir.DeltaToolArguments {
+			deltas = append(deltas, ev.Delta.PartialJSON)
+		}
+	}
+
+	if len(deltas) != 1 || deltas[0] != `{"query":"golang"}` {
+		t.Fatalf("expected 1 delta with arguments, got: %+v", deltas)
+	}
+}
