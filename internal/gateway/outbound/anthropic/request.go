@@ -52,6 +52,18 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if err != nil {
 		return nil, err
 	}
+	var thinkingBudget int
+	switch t := thinking.(type) {
+	case wireThinking:
+		thinkingBudget = t.BudgetTokens
+	case *wireThinking:
+		if t != nil {
+			thinkingBudget = t.BudgetTokens
+		}
+	}
+	if thinkingBudget > 0 && request.Sampling.MaxOutputTokens == nil && maxTokens <= thinkingBudget {
+		maxTokens = thinkingBudget + maxTokens
+	}
 
 	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, isReservedField)
 	if err != nil {

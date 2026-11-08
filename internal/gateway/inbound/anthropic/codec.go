@@ -119,7 +119,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 	}
 	if len(input.System) > 0 {
 		var preserve bool
-		blocks, err := codecContent(input.System, "system", true, &preserve)
+		blocks, err := codecContent(input.System, "system", "system", &preserve)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +147,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		if role != string(ir.RoleUser) && role != string(ir.RoleAssistant) {
 			return nil, codecInvalid(path + ".role must be user or assistant")
 		}
-		blocks, err := codecContent(message["content"], path+".content", false, &preserveMessages)
+		blocks, err := codecContent(message["content"], path+".content", role, &preserveMessages)
 		if err != nil {
 			return nil, err
 		}
@@ -374,13 +374,13 @@ func parseTextOrThinking(text string) []ir.Block {
 	return blocks
 }
 
-func codecContent(raw json.RawMessage, path string, system bool, preserve *bool) ([]ir.Block, error) {
+func codecContent(raw json.RawMessage, path, role string, preserve *bool) ([]ir.Block, error) {
 	var text string
 	if len(raw) > 0 && bytes.TrimSpace(raw)[0] == '"' && json.Unmarshal(raw, &text) == nil {
-		if system {
-			return []ir.Block{ir.NewTextBlock(text)}, nil
+		if role == string(ir.RoleAssistant) {
+			return parseTextOrThinking(text), nil
 		}
-		return parseTextOrThinking(text), nil
+		return []ir.Block{ir.NewTextBlock(text)}, nil
 	}
 	var content []json.RawMessage
 	if json.Unmarshal(raw, &content) != nil || content == nil {
@@ -397,7 +397,7 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 		if err != nil {
 			return nil, err
 		}
-		if system && typ != "text" {
+		if role == "system" && typ != "text" {
 			return nil, codecInvalid("system blocks must have type text")
 		}
 		var block ir.Block
@@ -410,9 +410,7 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 			if _, exists := object["text"]; !exists {
 				return nil, codecInvalid(blockPath + ".text is required")
 			}
-			if system {
-				block = ir.NewTextBlock(text)
-			} else {
+			if role == string(ir.RoleAssistant) {
 				parsed := parseTextOrThinking(text)
 				if len(parsed) > 1 || (len(parsed) == 1 && parsed[0].Type == ir.BlockReasoning) {
 					for _, b := range parsed {
@@ -422,6 +420,8 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 					continue
 				}
 				block = parsed[0]
+			} else {
+				block = ir.NewTextBlock(text)
 			}
 		case "image":
 			source, err := codecObject(object["source"], blockPath+".source")
@@ -490,7 +490,7 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 			}
 			var result []ir.Block
 			if raw, exists := object["content"]; exists {
-				result, err = codecContent(raw, blockPath+".content", false, preserve)
+				result, err = codecContent(raw, blockPath+".content", "tool_result", preserve)
 				if err != nil {
 					return nil, err
 				}

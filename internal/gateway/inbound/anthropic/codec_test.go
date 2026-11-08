@@ -443,3 +443,124 @@ func TestThinkingTagsDecodeAndEncode(t *testing.T) {
 		t.Errorf("expected remaining text block 'answer', got %+v", contentDisabled[0])
 	}
 }
+
+func TestThinkingTagsNotParsedInNonAssistantMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		validate func(t *testing.T, req *ir.Request)
+	}{
+		{
+			name: "user string content containing thinking tags",
+			body: `{
+				"model": "claude-3",
+				"max_tokens": 100,
+				"messages": [{"role": "user", "content": "Please answer: <thinking>internal thought</thinking> test prompt"}]
+			}`,
+			validate: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages) != 1 {
+					t.Fatalf("expected 1 message, got %d", len(req.Messages))
+				}
+				msg := req.Messages[0]
+				if msg.Role != ir.RoleUser {
+					t.Fatalf("expected user role, got %s", msg.Role)
+				}
+				if len(msg.Content) != 1 {
+					t.Fatalf("expected 1 content block, got %d", len(msg.Content))
+				}
+				if msg.Content[0].Type != ir.BlockText {
+					t.Errorf("expected BlockText, got %s", msg.Content[0].Type)
+				}
+				want := "Please answer: <thinking>internal thought</thinking> test prompt"
+				if msg.Content[0].Text != want {
+					t.Errorf("expected text %q, got %q", want, msg.Content[0].Text)
+				}
+			},
+		},
+		{
+			name: "user text block containing thinking tags",
+			body: `{
+				"model": "claude-3",
+				"max_tokens": 100,
+				"messages": [{"role": "user", "content": [{"type": "text", "text": "<thinking>pondering</thinking>hello"}]}]
+			}`,
+			validate: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages) != 1 || len(req.Messages[0].Content) != 1 {
+					t.Fatalf("expected 1 message with 1 content block, got %+v", req.Messages)
+				}
+				if req.Messages[0].Content[0].Type != ir.BlockText {
+					t.Errorf("expected BlockText, got %s", req.Messages[0].Content[0].Type)
+				}
+				if req.Messages[0].Content[0].Text != "<thinking>pondering</thinking>hello" {
+					t.Errorf("got %q", req.Messages[0].Content[0].Text)
+				}
+			},
+		},
+		{
+			name: "system prompt containing thinking tags",
+			body: `{
+				"model": "claude-3",
+				"max_tokens": 100,
+				"system": "You are a bot. <thinking>do not think</thinking>",
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			validate: func(t *testing.T, req *ir.Request) {
+				if len(req.Instructions) != 1 || len(req.Instructions[0].Content) != 1 {
+					t.Fatalf("expected 1 instruction with 1 block, got %+v", req.Instructions)
+				}
+				if req.Instructions[0].Content[0].Type != ir.BlockText {
+					t.Errorf("expected BlockText, got %s", req.Instructions[0].Content[0].Type)
+				}
+				want := "You are a bot. <thinking>do not think</thinking>"
+				if req.Instructions[0].Content[0].Text != want {
+					t.Errorf("expected %q, got %q", want, req.Instructions[0].Content[0].Text)
+				}
+			},
+		},
+		{
+			name: "tool_result containing thinking tags",
+			body: `{
+				"model": "claude-3",
+				"max_tokens": 100,
+				"messages": [{
+					"role": "user",
+					"content": [{
+						"type": "tool_result",
+						"tool_use_id": "tool_123",
+						"content": "<thinking>secret observation</thinking>result data"
+					}]
+				}]
+			}`,
+			validate: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages) != 1 || len(req.Messages[0].Content) != 1 {
+					t.Fatalf("expected 1 message with 1 block, got %+v", req.Messages)
+				}
+				block := req.Messages[0].Content[0]
+				if block.Type != ir.BlockToolResult {
+					t.Fatalf("expected BlockToolResult, got %s", block.Type)
+				}
+				if len(block.ToolResult.Content) != 1 {
+					t.Fatalf("expected 1 content block inside tool_result, got %d", len(block.ToolResult.Content))
+				}
+				inner := block.ToolResult.Content[0]
+				if inner.Type != ir.BlockText {
+					t.Errorf("expected tool_result inner block to be BlockText, got %s", inner.Type)
+				}
+				want := "<thinking>secret observation</thinking>result data"
+				if inner.Text != want {
+					t.Errorf("expected tool_result text %q, got %q", want, inner.Text)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(tc.body))
+			decoded, err := New().DecodeRequest(req)
+			if err != nil {
+				t.Fatalf("DecodeRequest: %v", err)
+			}
+			tc.validate(t, decoded)
+		})
+	}
+}
