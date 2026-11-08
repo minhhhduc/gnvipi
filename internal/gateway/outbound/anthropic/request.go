@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -26,8 +27,60 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if len(request.Tools) > 0 || request.ToolChoice != nil {
 		return nil, unsupported("Anthropic tool requests require the tool adapter")
 	}
+	var emulatedTools []any
+	var emulatedToolChoice any
 	if request.ResponseFormat != nil {
-		return nil, unsupported("Anthropic structured output is not supported by this adapter")
+		switch request.ResponseFormat.Type {
+		case ir.ResponseFormatText:
+			// Plain text requires no emulation.
+		case ir.ResponseFormatJSONSchema:
+			if !a.ToolEmulation {
+				return nil, unsupported("Anthropic structured output is not supported by this adapter")
+			}
+			if request.ResponseFormat.JSONSchema == nil {
+				return nil, invalidRequest("JSON schema format requires a schema")
+			}
+			schema := request.ResponseFormat.JSONSchema.Schema
+			if len(bytes.TrimSpace(schema)) == 0 || !gatewayoutbound.JSONObject(schema) {
+				return nil, invalidRequest("JSON schema format requires an object schema")
+			}
+			toolName := request.ResponseFormat.JSONSchema.Name
+			if toolName == "" {
+				toolName = "structured_output"
+			}
+			tool := map[string]any{
+				"name":         toolName,
+				"input_schema": schema,
+			}
+			emulatedTools = []any{tool}
+			emulatedToolChoice = map[string]any{
+				"type": "tool",
+				"name": toolName,
+			}
+		case ir.ResponseFormatJSONObject:
+			switch {
+			case a.ToolEmulation:
+				toolName := "json_output"
+				tool := map[string]any{
+					"name":        toolName,
+					"description": "Output valid JSON object",
+					"input_schema": map[string]any{
+						"type": "object",
+					},
+				}
+				emulatedTools = []any{tool}
+				emulatedToolChoice = map[string]any{
+					"type": "tool",
+					"name": toolName,
+				}
+			case a.JSONModePrompt:
+				// Inject system prompt for JSON mode
+			default:
+				return nil, unsupported("Anthropic structured output is not supported by this adapter")
+			}
+		default:
+			return nil, invalidRequest(fmt.Sprintf("unsupported response format %q", request.ResponseFormat.Type))
+		}
 	}
 	if request.Sampling.Seed != nil {
 		return nil, unsupported("Anthropic Messages does not support the seed sampling option")
@@ -36,6 +89,9 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	system, err := encodeSystem(request.Instructions)
 	if err != nil {
 		return nil, err
+	}
+	if request.ResponseFormat != nil && request.ResponseFormat.Type == ir.ResponseFormatJSONObject && a.JSONModePrompt && !a.ToolEmulation {
+		system = append(system, wireTextBlock{Type: "text", Text: "Respond with valid JSON only."})
 	}
 	messages, err := encodeMessages(request.Messages)
 	if err != nil {
@@ -76,6 +132,10 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	}
 	if thinking != nil {
 		fields["thinking"] = thinking
+	}
+	if len(emulatedTools) > 0 {
+		fields["tools"] = emulatedTools
+		fields["tool_choice"] = emulatedToolChoice
 	}
 	if request.Stream {
 		fields["stream"] = true

@@ -14,7 +14,7 @@ import (
 
 // ParseResponse converts one complete Anthropic Messages response into IR. It
 // reads but never closes the caller-owned response body.
-func (*Adapter) ParseResponse(response *http.Response) (*ir.Response, error) {
+func (a *Adapter) ParseResponse(response *http.Response) (*ir.Response, error) {
 	if response == nil || response.Body == nil {
 		return nil, &gwerr.Error{Kind: gwerr.KindInternal, Message: "Anthropic response body is required"}
 	}
@@ -25,7 +25,7 @@ func (*Adapter) ParseResponse(response *http.Response) (*ir.Response, error) {
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, gatewayoutbound.UpstreamError(response, body)
 	}
-	return parseMessage(response, body)
+	return a.parseMessage(response, body)
 }
 
 type wireResponse struct {
@@ -44,7 +44,7 @@ type wireResponse struct {
 	} `json:"usage"`
 }
 
-func parseMessage(response *http.Response, body []byte) (*ir.Response, error) {
+func (a *Adapter) parseMessage(response *http.Response, body []byte) (*ir.Response, error) {
 	var message wireResponse
 	if err := json.Unmarshal(body, &message); err != nil {
 		return nil, malformedResponse(response, "Anthropic response must be a JSON object")
@@ -54,7 +54,7 @@ func parseMessage(response *http.Response, body []byte) (*ir.Response, error) {
 	}
 	content := make([]ir.Block, 0, len(message.Content))
 	for _, raw := range message.Content {
-		block, err := parseContentBlock(response, raw)
+		block, err := a.parseContentBlock(response, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -63,6 +63,9 @@ func parseMessage(response *http.Response, body []byte) (*ir.Response, error) {
 	stopReason, err := parseStopReason(response, message.StopReason)
 	if err != nil {
 		return nil, err
+	}
+	if a.ToolEmulation && stopReason == ir.StopToolUse {
+		stopReason = ir.StopEndTurn
 	}
 	result := &ir.Response{
 		ID: message.ID, Model: message.Model, Content: content, StopReason: stopReason,
@@ -77,7 +80,7 @@ func parseMessage(response *http.Response, body []byte) (*ir.Response, error) {
 	return result, nil
 }
 
-func parseContentBlock(response *http.Response, raw json.RawMessage) (ir.Block, error) {
+func (a *Adapter) parseContentBlock(response *http.Response, raw json.RawMessage) (ir.Block, error) {
 	var kind struct {
 		Type string `json:"type"`
 	}
@@ -110,6 +113,9 @@ func parseContentBlock(response *http.Response, raw json.RawMessage) (ir.Block, 
 		}
 		if json.Unmarshal(raw, &block) != nil || block.ID == "" || block.Name == "" || !gatewayoutbound.JSONObject(block.Input) {
 			return ir.Block{}, malformedResponse(response, "Anthropic tool_use block is invalid")
+		}
+		if a.ToolEmulation {
+			return ir.NewTextBlock(string(block.Input)), nil
 		}
 		return ir.NewToolUseBlock(block.ID, block.Name, bytes.Clone(block.Input)), nil
 	default:
