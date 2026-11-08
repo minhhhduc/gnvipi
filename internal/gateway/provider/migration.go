@@ -42,7 +42,8 @@ func legacyRows(list []Provider) []legacyRow {
 		for _, m := range p.Models {
 			if !m.Hidden {
 				rows = append(rows, legacyRow{entry: LegacyProvider{Name: p.Name, BaseURL: p.BaseURL, APIKey: key,
-					Model: m.UpstreamModel, Alias: m.Alias,
+					KeyEnv: p.Auth.KeyEnv,
+					Model:  m.UpstreamModel, Alias: m.Alias,
 					MessagesOnly:  p.Protocol == ir.ProtocolAnthropicMessages,
 					ResponsesOnly: p.Protocol == ir.ProtocolOpenAIResponses}, owner: i, position: m.LegacyPosition})
 			}
@@ -97,7 +98,8 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 	for i, e := range list {
 		owners[i] = -1
 		match, count, owner, ambiguous := -1, 0, -1, false
-		for j, row := range rows {
+		for j := range rows {
+			row := &rows[j]
 			if row.entry != e {
 				continue
 			}
@@ -125,13 +127,14 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 				continue
 			}
 			match, best, owner, ambiguous := -1, 0, -1, false
-			for j, row := range rows {
-				old := row.entry
+			for j := range rows {
+				old := &rows[j].entry
+				rowOwner := rows[j].owner
 				if used[j] || old.Name != e.Name || old.MessagesOnly != e.MessagesOnly || old.ResponsesOnly != e.ResponsesOnly {
 					continue
 				}
 				score := 1
-				if old.BaseURL == e.BaseURL && old.APIKey == e.APIKey {
+				if old.BaseURL == e.BaseURL && (old.APIKey == e.APIKey || IsRedactedKey(e.APIKey)) {
 					score = 2
 				}
 				if old.Alias == e.Alias || old.Model == e.Model {
@@ -141,8 +144,8 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 					score = 4
 				}
 				if score > best {
-					match, best, owner, ambiguous = j, score, row.owner, false
-				} else if score == best && row.owner != owner {
+					match, best, owner, ambiguous = j, score, rowOwner, false
+				} else if score == best && rowOwner != owner {
 					ambiguous = true
 				}
 			}
@@ -162,13 +165,13 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 		// A new model can join a uniquely identified existing endpoint, but
 		// endpoint equality alone cannot choose between distinct v2 providers.
 		owner := -1
-		for _, row := range rows {
-			old := row.entry
+		for j := range rows {
+			old := &rows[j].entry
 			if old.Name == e.Name && old.BaseURL == e.BaseURL && old.APIKey == e.APIKey && old.MessagesOnly == e.MessagesOnly && old.ResponsesOnly == e.ResponsesOnly {
-				if owner >= 0 && owner != row.owner {
+				if owner >= 0 && owner != rows[j].owner {
 					return nil, &FieldError{Provider: e.Name, Field: "models", Problem: "new legacy model matches multiple v2 providers"}
 				}
-				owner = row.owner
+				owner = rows[j].owner
 			}
 		}
 		owners[i] = owner
@@ -238,14 +241,37 @@ func MergeLegacy(current []Provider, list []LegacyProvider) ([]Provider, error) 
 			next := &converted[i]
 			retained := Clone(old)
 			retained.Name, retained.BaseURL = next.Name, next.BaseURL
-			if legacyKey(old) != next.Auth.Key {
-				if next.Auth.Key == "" {
-					retained.Auth = Auth{Scheme: AuthNone}
-				} else {
+			// Detect authentication changes between existing (old) provider
+			// and incoming converted legacy provider (next).
+			keyChanged := legacyKey(old) != next.Auth.Key
+			envVarChanged := old.Auth.KeyEnv != next.Auth.KeyEnv
+
+			// An environment variable transition occurs if:
+			// 1. Switched to an env var (next has KeyEnv set).
+			// 2. Switched away from an env var and provided a new literal key.
+			// 3. Switched away from an env var to no authentication (empty key).
+			switchedToEnv := next.Auth.KeyEnv != ""
+			clearedEnvWithNewKey := next.Auth.Key != legacyKey(old)
+			clearedEnvToNoAuth := next.Auth.Key == ""
+			envTransition := envVarChanged && (switchedToEnv || clearedEnvWithNewKey || clearedEnvToNoAuth)
+
+			if keyChanged || envTransition {
+				switch {
+				case next.Auth.KeyEnv != "":
 					if retained.Auth.Scheme == "" || retained.Auth.Scheme == AuthNone {
 						retained.Auth.Scheme = next.Auth.Scheme
 					}
-					retained.Auth.Key, retained.Auth.KeyEnv = next.Auth.Key, ""
+					retained.Auth.Key, retained.Auth.KeyEnv = "", next.Auth.KeyEnv
+					retained.Auth.KeyRef = ""
+				case next.Auth.Key == "":
+					retained.Auth = Auth{Scheme: AuthNone}
+				case IsRedactedKey(next.Auth.Key):
+					// Retain existing key and key ref without overwriting
+				default:
+					if retained.Auth.Scheme == "" || retained.Auth.Scheme == AuthNone {
+						retained.Auth.Scheme = next.Auth.Scheme
+					}
+					retained.Auth.Key, retained.Auth.KeyEnv = next.Auth.Key, next.Auth.KeyEnv
 				}
 			}
 			retained.Models = next.Models

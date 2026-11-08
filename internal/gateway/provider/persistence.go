@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -128,80 +126,42 @@ func validateDocument(doc *Document) error {
 }
 
 // LoadDocument reads a models file; a missing file starts an empty document.
+// Credentials from the adjacent secrets file (if present) are resolved.
 func LoadDocument(path string) (Document, error) {
-	if path == "" {
-		return Document{Providers: []Provider{}, Fields: map[string]json.RawMessage{}}, nil
-	}
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Document{Providers: []Provider{}, Fields: map[string]json.RawMessage{}}, nil
-	}
-	if err != nil {
-		return Document{}, err
-	}
-	return DecodeDocument(raw)
+	return LoadDocumentWithSecrets(path, DefaultSecretsPath(path))
 }
 
 // WriteDocument replaces the file atomically using a synced, private temporary
-// file beside the destination. Any error leaves the published store unchanged.
-func WriteDocument(path string, doc Document) (err error) {
-	if path == "" {
-		return nil
-	}
-	raw, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return err
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".gnvipi-providers-*")
-	if err != nil {
-		return err
-	}
-	name := file.Name()
-	defer func() {
-		if removeErr := os.Remove(name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = errors.Join(err, removeErr)
-		}
-	}()
-	defer func() {
-		if file != nil {
-			err = errors.Join(err, file.Close())
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := file.Write(append(raw, '\n')); err != nil {
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
-	err = file.Close()
-	file = nil
-	if err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+// file beside the destination. Secrets are stored in the adjacent secrets store.
+// Any error leaves the published store unchanged.
+func WriteDocument(path string, doc Document) error {
+	return WriteDocumentWithSecrets(path, DefaultSecretsPath(path), doc)
 }
 
 // Store serializes candidate validation, disk replacement, publication, and
 // notifications. Callbacks may read snapshots, but must not mutate the store.
 // Every exported snapshot is defensive, including callback arguments.
 type Store struct {
-	changeMu sync.Mutex
-	mu       sync.RWMutex
-	path     string
-	doc      Document
-	onChange func([]Provider)
+	changeMu    sync.Mutex
+	mu          sync.RWMutex
+	path        string
+	secretsPath string
+	doc         Document
+	onChange    func([]Provider)
 }
 
 // OpenStore loads without modifying the file, rejecting unsafe documents.
 func OpenStore(path string, onChange func([]Provider)) (*Store, error) {
-	doc, err := LoadDocument(path)
+	return OpenStoreWithSecrets(path, DefaultSecretsPath(path), onChange)
+}
+
+// OpenStoreWithSecrets loads using an explicit secrets file path.
+func OpenStoreWithSecrets(path, secretsPath string, onChange func([]Provider)) (*Store, error) {
+	doc, err := LoadDocumentWithSecrets(path, secretsPath)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, doc: doc, onChange: onChange}, nil
+	return &Store{path: path, secretsPath: secretsPath, doc: doc, onChange: onChange}, nil
 }
 
 // Snapshot returns the full document, owned by the caller.
@@ -245,10 +205,32 @@ func (s *Store) Update(edit func(*Document) error) error {
 		return err
 	}
 	candidate = cloneDocument(candidate)
+	for i := range candidate.Providers {
+		p := &candidate.Providers[i]
+		if p.Auth.Scheme != "" && p.Auth.Scheme != AuthNone && p.Auth.KeyEnv == "" {
+			if p.Auth.KeyRef == "" {
+				p.Auth.KeyRef = p.ID
+			}
+			for j := range s.doc.Providers {
+				if s.doc.Providers[j].ID == p.ID && s.doc.Providers[j].Auth.Key != "" && !IsRedactedKey(s.doc.Providers[j].Auth.Key) {
+					if IsRedactedKey(p.Auth.Key) {
+						p.Auth.Key = s.doc.Providers[j].Auth.Key
+					}
+					break
+				}
+			}
+			if IsRedactedKey(p.Auth.Key) && s.secretsPath != "" {
+				ref := p.Auth.KeyRef
+				if sec, err := LoadSecrets(s.secretsPath); err == nil && sec[ref] != "" {
+					p.Auth.Key = sec[ref]
+				}
+			}
+		}
+	}
 	if err := validateDocument(&candidate); err != nil {
 		return err
 	}
-	if err := WriteDocument(s.path, candidate); err != nil {
+	if err := WriteDocumentWithSecrets(s.path, s.secretsPath, candidate); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -261,6 +243,7 @@ func (s *Store) Update(edit func(*Document) error) error {
 }
 
 // Upsert inserts a provider or replaces the provider with its ID in-place.
+// Redacted keys or sentinels will preserve existing credentials.
 func (s *Store) Upsert(p *Provider) error {
 	if p == nil {
 		return &FieldError{Field: "id", Problem: "provider is nil"}
@@ -269,6 +252,12 @@ func (s *Store) Upsert(p *Provider) error {
 	return s.Update(func(doc *Document) error {
 		for i := range doc.Providers {
 			if doc.Providers[i].ID == owned.ID {
+				if owned.Auth.Scheme != "" && owned.Auth.Scheme != AuthNone && owned.Auth.KeyEnv == "" && IsRedactedKey(owned.Auth.Key) && doc.Providers[i].Auth.Key != "" {
+					owned.Auth.Key = doc.Providers[i].Auth.Key
+					if doc.Providers[i].Auth.KeyRef != "" {
+						owned.Auth.KeyRef = doc.Providers[i].Auth.KeyRef
+					}
+				}
 				doc.Providers[i] = owned
 				return nil
 			}

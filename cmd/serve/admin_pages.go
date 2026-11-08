@@ -122,7 +122,12 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	if providers == nil {
 		providers = []customProvider{}
 	}
-	blob, err := json.Marshal(providers)
+	redactedProviders := make([]customProvider, len(providers))
+	for i, p := range providers {
+		redactedProviders[i] = p
+		redactedProviders[i].APIKey = maskSecret(p.APIKey)
+	}
+	blob, err := json.Marshal(redactedProviders)
 	if err != nil {
 		blob = []byte("[]")
 	}

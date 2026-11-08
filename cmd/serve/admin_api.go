@@ -32,22 +32,11 @@ type ConnectionTestResult struct {
 }
 
 func maskSecret(key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return ""
-	}
-	if strings.HasPrefix(key, "sk-") && len(key) >= 8 {
-		return "sk-..." + key[len(key)-4:]
-	}
-	if len(key) >= 8 {
-		return key[:3] + "..." + key[len(key)-4:]
-	}
-	return "[REDACTED]"
+	return gatewayprovider.MaskSecret(key)
 }
 
 func isRedactedKey(key string) bool {
-	key = strings.TrimSpace(key)
-	return key == "[REDACTED]" || strings.Contains(key, "...")
+	return gatewayprovider.IsRedactedKey(key)
 }
 
 func isSensitiveHeader(name string) bool {
@@ -63,7 +52,10 @@ func redactProvider(p *gatewayprovider.Provider) gatewayprovider.Provider {
 	cloned := gatewayprovider.Clone(p)
 	if cloned.Auth.Key != "" {
 		cloned.Auth.Key = maskSecret(cloned.Auth.Key)
+	} else if cloned.Auth.KeyRef != "" && cloned.Auth.Scheme != gatewayprovider.AuthNone && cloned.Auth.KeyEnv == "" {
+		cloned.Auth.Key = "[REDACTED]"
 	}
+	cloned.Auth.KeyRef = ""
 	if len(cloned.Headers) > 0 {
 		headers := make(map[string]string, len(cloned.Headers))
 		for k, v := range cloned.Headers {
@@ -113,14 +105,17 @@ func preserveSecretIfNeeded(updated, existing *gatewayprovider.Provider) {
 	if updated.Auth.Scheme == gatewayprovider.AuthNone {
 		updated.Auth.Key = ""
 		updated.Auth.KeyEnv = ""
+		updated.Auth.KeyRef = ""
 		return
 	}
 	if updated.Auth.KeyEnv != "" {
 		updated.Auth.Key = ""
+		updated.Auth.KeyRef = ""
 		return
 	}
-	if (strings.TrimSpace(updated.Auth.Key) == "" || isRedactedKey(updated.Auth.Key)) && existing.Auth.Key != "" {
+	if (strings.TrimSpace(updated.Auth.Key) == "" || isRedactedKey(updated.Auth.Key)) && (existing.Auth.Key != "" || existing.Auth.KeyRef != "") {
 		updated.Auth.Key = existing.Auth.Key
+		updated.Auth.KeyRef = existing.Auth.KeyRef
 	}
 }
 

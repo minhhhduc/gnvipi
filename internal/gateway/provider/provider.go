@@ -37,16 +37,34 @@ const (
 	TLSChrome TLSProfile = "chrome"
 )
 
-// Auth is one provider credential. Exactly one of Key and KeyEnv is set when
+// Auth is one provider credential. Exactly one of Key, KeyEnv, or KeyRef is set when
 // the scheme is not none: Key is a literal secret, KeyEnv names the environment
-// variable holding it.
+// variable holding it, and KeyRef references a key stored in secrets.json.
 type Auth struct {
 	Scheme AuthScheme `json:"scheme"`
 	Key    string     `json:"key,omitempty"`
 	KeyEnv string     `json:"key_env,omitempty"`
+	KeyRef string     `json:"key_ref,omitempty"`
 	// HeaderName moves the already-resolved credential to this header, retaining
 	// its exact value (including a bearer prefix). It never changes key lookup.
 	HeaderName string `json:"header_name,omitempty"`
+}
+
+// UnmarshalJSON supports unmarshaling both key_env and api_key_env aliases.
+func (a *Auth) UnmarshalJSON(data []byte) error {
+	type rawAuth Auth
+	var alias struct {
+		rawAuth
+		APIKeyEnv string `json:"api_key_env,omitempty"`
+	}
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*a = Auth(alias.rawAuth)
+	if a.KeyEnv == "" && alias.APIKeyEnv != "" {
+		a.KeyEnv = alias.APIKeyEnv
+	}
+	return nil
 }
 
 // ModelMapping is one model the provider serves: the alias clients ask for and
@@ -204,14 +222,14 @@ func (p *Provider) ValidateWithPolicy(policy URLPolicy) error {
 func (p *Provider) validateAuth(add func(field, problem string)) {
 	switch p.Auth.Scheme {
 	case "", AuthNone:
-		if p.Auth.Key != "" || p.Auth.KeyEnv != "" {
+		if p.Auth.Key != "" || p.Auth.KeyEnv != "" || p.Auth.KeyRef != "" {
 			add("auth.key", "must be empty when auth.scheme is none")
 		}
 	case AuthBearer, AuthAPIKey:
 		switch {
-		case p.Auth.Key != "" && p.Auth.KeyEnv != "":
+		case p.Auth.KeyEnv != "" && (p.Auth.Key != "" || p.Auth.KeyRef != ""):
 			add("auth.key", "set either auth.key or auth.key_env, not both")
-		case p.Auth.Key == "" && p.Auth.KeyEnv == "":
+		case p.Auth.Key == "" && p.Auth.KeyEnv == "" && p.Auth.KeyRef == "":
 			add("auth.key", "required when auth.scheme is "+string(p.Auth.Scheme))
 		}
 	default:

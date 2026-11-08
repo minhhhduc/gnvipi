@@ -14,6 +14,8 @@ type LegacyProvider struct {
 	Name          string `json:"name"`
 	BaseURL       string `json:"base_url"`
 	APIKey        string `json:"api_key"`
+	APIKeyEnv     string `json:"api_key_env,omitempty"`
+	KeyEnv        string `json:"key_env,omitempty"`
 	Model         string `json:"model"`
 	Alias         string `json:"alias,omitempty"`
 	MessagesOnly  bool   `json:"messages_only,omitempty"`
@@ -31,8 +33,8 @@ type LegacyProvider struct {
 // with both MessagesOnly and ResponsesOnly set.
 func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	type identity struct {
-		name, baseURL, apiKey string
-		protocol              ir.Protocol
+		name, baseURL, apiKey, keyEnv string
+		protocol                      ir.Protocol
 	}
 
 	out := make([]Provider, 0, len(list))
@@ -55,8 +57,12 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			})
 			continue
 		}
+		keyEnv := e.KeyEnv
+		if keyEnv == "" {
+			keyEnv = e.APIKeyEnv
+		}
 		mapping := ModelMapping{Alias: LegacyAlias(e), UpstreamModel: e.Model, LegacyPosition: i + 1}
-		key := identity{e.Name, e.BaseURL, e.APIKey, protocol}
+		key := identity{e.Name, e.BaseURL, e.APIKey, keyEnv, protocol}
 		at := -1
 		for _, candidate := range merged[key] {
 			duplicate := false
@@ -83,7 +89,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			Name:     e.Name,
 			BaseURL:  e.BaseURL,
 			Protocol: protocol,
-			Auth:     legacyAuth(e.APIKey),
+			Auth:     legacyAuth(e.APIKey, keyEnv),
 			Models:   []ModelMapping{mapping},
 			Enabled:  true,
 		})
@@ -127,7 +133,10 @@ func LegacyProtocol(e *LegacyProvider) (ir.Protocol, bool) {
 
 // legacyAuth keeps the legacy behavior: a configured key is sent as a bearer
 // token, the same way CLIProxyAPI's api-key-entries are.
-func legacyAuth(apiKey string) Auth {
+func legacyAuth(apiKey, keyEnv string) Auth {
+	if keyEnv != "" {
+		return Auth{Scheme: AuthBearer, KeyEnv: keyEnv}
+	}
 	if apiKey == "" {
 		return Auth{Scheme: AuthNone}
 	}

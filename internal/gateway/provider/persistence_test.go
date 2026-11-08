@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,8 +211,13 @@ func TestStoreFailureLeavesDiskSnapshotAndCallbacksUnchanged(t *testing.T) {
 		t.Fatalf("previous file lost: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("temporary file leaked: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".gnvipi-") {
+			t.Fatalf("temporary file leaked: %s", entry.Name())
+		}
 	}
 }
 

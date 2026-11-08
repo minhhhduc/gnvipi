@@ -85,11 +85,13 @@ type ModelItem struct {
 // customProvider is an OpenAI-compatible endpoint added from /admin. CLIProxyAPI
 // owns the actual calls and the Anthropic<->OpenAI translation.
 type customProvider struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
-	Alias   string `json:"alias,omitempty"`
+	Name      string `json:"name"`
+	BaseURL   string `json:"base_url"`
+	APIKey    string `json:"api_key"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	KeyEnv    string `json:"key_env,omitempty"`
+	Model     string `json:"model"`
+	Alias     string `json:"alias,omitempty"`
 	// MessagesOnly marks an upstream whose WAF blocks the /v1/chat/completions
 	// path; requests for its models are forwarded to /v1/messages instead.
 	MessagesOnly bool `json:"messages_only,omitempty"`
@@ -124,6 +126,10 @@ func (p *modelPrefs) load(path string) error {
 	p.hidden, p.deleted = map[string]struct{}{}, map[string]struct{}{}
 	p.providers, p.providerStore, p.loadErr = nil, nil, nil
 	p.autoModel, p.searchURL, p.cycle, p.cycleIndex = "", "", &cycleConfig{Name: "cycle"}, 0
+	secretsPath := gatewayprovider.DefaultSecretsPath(path)
+	if warn := gatewayprovider.CheckSecretsFilePermissions(secretsPath); warn != nil {
+		log.Printf("warning: %v", warn)
+	}
 	store, err := gatewayprovider.OpenStore(path, nil)
 	if err != nil {
 		p.loadErr = err
@@ -378,6 +384,16 @@ func normalizeSearchURL(raw string) string {
 func (p *modelPrefs) setProviders(list []customProvider) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
+	for i := range list {
+		if list[i].APIKey != "" && list[i].KeyEnv == "" && list[i].APIKeyEnv == "" && gatewayprovider.IsRedactedKey(list[i].APIKey) {
+			for _, old := range p.providers {
+				if old.Name == list[i].Name && old.BaseURL == list[i].BaseURL && (old.Model == list[i].Model || old.Alias == list[i].Alias) {
+					list[i].APIKey = old.APIKey
+					break
+				}
+			}
+		}
+	}
 	if err := validateLegacyProviderURLs(list); err != nil {
 		return err
 	}
