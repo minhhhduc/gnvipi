@@ -38,12 +38,13 @@ func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolAnthropicMessages }
 // Capabilities reports behavior implemented by this package.
 func (a *Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
-		Streaming:        true,
-		Tools:            true,
-		Images:           adapter.ImageCapabilityBoth,
-		Reasoning:        true,
-		StructuredOutput: a.ToolEmulation || a.JSONModePrompt,
-		TopK:             true,
+		Streaming:         true,
+		Tools:             true,
+		ParallelToolCalls: true,
+		Images:            adapter.ImageCapabilityBoth,
+		Reasoning:         true,
+		StructuredOutput:  a.ToolEmulation || a.JSONModePrompt,
+		TopK:              true,
 	}
 }
 

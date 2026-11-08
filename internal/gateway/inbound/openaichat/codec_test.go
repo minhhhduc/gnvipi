@@ -352,6 +352,34 @@ func TestDecodeLegacyFunctionsAndFunctionCall(t *testing.T) {
 			t.Fatal("expected error for function_call without name")
 		}
 	})
+
+	t.Run("both tool_choice and function_call present", func(t *testing.T) {
+		body := `{
+			"model": "gpt-4",
+			"messages": [{"role": "user", "content": "hi"}],
+			"tools": [{"type": "function", "function": {"name": "weather"}}],
+			"tool_choice": "auto",
+			"functions": [{"name": "stale_weather"}],
+			"function_call": "none"
+		}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		got, err := openaichat.New().DecodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ToolChoice == nil || got.ToolChoice.Mode != ir.ToolChoiceAuto {
+			t.Fatalf("tool_choice mismatch: %+v, want auto", got.ToolChoice)
+		}
+		if _, ok := got.Extensions["function_call"]; ok {
+			t.Fatalf("expected function_call to be stripped from extensions, got: %s", got.Extensions["function_call"])
+		}
+		if _, ok := got.Extensions["functions"]; ok {
+			t.Fatalf("expected functions to be stripped from extensions, got: %s", got.Extensions["functions"])
+		}
+		if len(got.Tools) != 1 || got.Tools[0].Name != "weather" {
+			t.Fatalf("tools mismatch: %+v", got.Tools)
+		}
+	})
 }
 
 func TestEncodeToolResponsePreservesInvalidJSONArguments(t *testing.T) {

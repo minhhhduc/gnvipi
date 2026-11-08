@@ -44,6 +44,8 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		}
 	}
 	var wireChoice any
+	// request.ResponseFormat != nil is included alongside wireTools because the
+	// emulated-tool structured output path synthesizes a tool_choice.
 	if request.ToolChoice != nil || (request.ParallelToolCalls != nil && (len(wireTools) > 0 || request.ResponseFormat != nil)) {
 		tc, err := encodeToolChoice(request.ToolChoice, request.ParallelToolCalls)
 		if err != nil {
@@ -152,7 +154,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		maxTokens = thinkingBudget + maxTokens
 	}
 
-	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, isReservedField)
+	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, normalizedExtensionFields)
 	if err != nil {
 		return nil, invalidRequest(err.Error())
 	}
@@ -415,6 +417,7 @@ func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block) (any, error) 
 
 func (a *Adapter) encodeToolResultContent(blocks []ir.Block) (any, error) {
 	if len(blocks) == 0 {
+		// Per Anthropic spec allowance, empty content is returned as an empty string.
 		return "", nil
 	}
 	if len(blocks) == 1 && blocks[0].Type == ir.BlockText {
@@ -541,16 +544,17 @@ func encodeThinking(request *ir.Request) (any, error) {
 	return nil, nil
 }
 
-var normalizedExtensionFields = map[string]struct{}{
-	"model": {}, "system": {}, "messages": {}, "input": {}, "instructions": {},
-	"max_tokens": {}, "max_output_tokens": {}, "max_completion_tokens": {},
-	"temperature": {}, "top_p": {}, "top_k": {}, "stop": {}, "stop_sequences": {}, "seed": {},
-	"stream": {}, "stream_options": {}, "thinking": {}, "reasoning": {}, "reasoning_effort": {},
-	"tools": {}, "tool_choice": {}, "response_format": {}, "text": {},
-	"metadata": {}, "user": {}, "store": {}, "previous_response_id": {}, "conversation": {},
-}
-
-func isReservedField(name string) bool {
-	_, ok := normalizedExtensionFields[name]
-	return ok
+func normalizedExtensionFields(name string) bool {
+	switch name {
+	case "model", "system", "messages", "input", "instructions",
+		"max_tokens", "max_output_tokens", "max_completion_tokens",
+		"temperature", "top_p", "top_k", "stop", "stop_sequences", "seed",
+		"stream", "stream_options", "thinking", "reasoning", "reasoning_effort",
+		"tools", "tool_choice", "response_format", "text",
+		"metadata", "user", "store", "previous_response_id", "conversation",
+		"parallel_tool_calls", "disable_parallel_tool_use", "functions", "function_call":
+		return true
+	default:
+		return false
+	}
 }
