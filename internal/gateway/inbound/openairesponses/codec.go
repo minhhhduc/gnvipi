@@ -159,6 +159,9 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		if err := json.Unmarshal(rawTool, &tool); err != nil || tool.Name == "" || !absentResponsesJSON(tool.Parameters) && !responsesJSONObject(tool.Parameters) {
 			return nil, invalidResponses("function tools require a name and object parameters")
 		}
+		// Note: tool.Strict is decoded above to validate the input structure, but
+		// ir.Tool deliberately does not carry a Strict field (unlike ir.JSONSchema for structured
+		// outputs). The provider-specific strict schema enforcement flag is omitted from normalized IR.
 		result.Tools = append(result.Tools, ir.Tool{Name: tool.Name, Description: tool.Description, Schema: tool.Parameters})
 	}
 	if !absentResponsesJSON(wire.ToolChoice) {
@@ -382,6 +385,9 @@ func decodeResponsesToolChoice(raw json.RawMessage) (*ir.ToolChoice, error) {
 	if !responsesJSONObject(raw) || json.Unmarshal(raw, &header) != nil || header.Type == "" {
 		return nil, invalidResponses("tool_choice must be a string or typed tool object")
 	}
+	// Non-function tool choices (e.g. custom or vendor extensions with type != "function")
+	// are not represented as ir.ToolChoiceTool. Returning (nil, nil) leaves result.ToolChoice
+	// unset so downstream adapters can fall back to provider defaults or raw extensions.
 	if header.Type != "function" {
 		return nil, nil
 	}

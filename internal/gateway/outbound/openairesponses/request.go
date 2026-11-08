@@ -276,6 +276,9 @@ func encodeToolResult(block *ir.Block) (map[string]any, error) {
 	if block.ToolResult == nil || block.ToolResult.ToolUseID == "" {
 		return nil, invalid("function_call_output requires call_id")
 	}
+	// If Content is empty or consists purely of text blocks, emit a string output.
+	// In particular, an empty Content slice cleanly evaluates to output = "" per
+	// the OpenAI Responses wire specification for empty tool results.
 	allText := true
 	for _, b := range block.ToolResult.Content {
 		if b.Type != ir.BlockText {

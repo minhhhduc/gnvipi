@@ -554,7 +554,7 @@ func TestRoundTripFunctionCallOutput(t *testing.T) {
 
 	// Assistant tool call
 	tu := decoded.Messages[1].Content[0].ToolUse
-	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `"{\"key\":\"abc\"}"` && string(tu.Input) != `{"key":"abc"}` {
+	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `"{\"key\":\"abc\"}"` {
 		t.Errorf("round-trip tool use: %+v", tu)
 	}
 
@@ -562,5 +562,39 @@ func TestRoundTripFunctionCallOutput(t *testing.T) {
 	tr := decoded.Messages[2].Content[0].ToolResult
 	if tr == nil || tr.ToolUseID != "call_xyz" || len(tr.Content) != 1 || tr.Content[0].Text != "result_123" {
 		t.Errorf("round-trip tool result: %+v", tr)
+	}
+}
+
+func TestEncodeToolResultEmptyContent(t *testing.T) {
+	req := &ir.Request{
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_empty", nil, false)),
+		},
+	}
+	target := adapter.Target{BaseURL: "https://provider.invalid", Model: "gpt-4o"}
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest error: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(wire.Input) != 1 {
+		t.Fatalf("input length = %d, want 1", len(wire.Input))
+	}
+	if wire.Input[0]["type"] != "function_call_output" || wire.Input[0]["call_id"] != "call_empty" || wire.Input[0]["output"] != "" {
+		t.Errorf("input[0] = %+v, want empty output string", wire.Input[0])
 	}
 }
