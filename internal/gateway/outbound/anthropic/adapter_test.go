@@ -29,7 +29,7 @@ func TestOutboundContract(t *testing.T) {
 	if a.Protocol() != ir.ProtocolAnthropicMessages {
 		t.Fatalf("Protocol = %q, want %q", a.Protocol(), ir.ProtocolAnthropicMessages)
 	}
-	wantCapabilities := adapter.Capabilities{Streaming: true, Tools: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, TopK: true}
+	wantCapabilities := adapter.Capabilities{Streaming: true, Tools: true, ParallelToolCalls: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, TopK: true}
 	if got := a.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, wantCapabilities)
 	}

@@ -477,4 +477,44 @@ func TestBuildRequestTools(t *testing.T) {
 	})
 }
 
+func TestBuildRequestNormalizedExtensionFields(t *testing.T) {
+	target := adapter.Target{BaseURL: "https://upstream.invalid", Model: "claude-3-5"}
+	a := anthropic.New()
+
+	req := &ir.Request{
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Extensions: map[string]json.RawMessage{
+			"parallel_tool_calls":       json.RawMessage(`true`),
+			"disable_parallel_tool_use": json.RawMessage(`false`),
+			"functions":                 json.RawMessage(`[]`),
+			"function_call":             json.RawMessage(`"auto"`),
+			"custom_extra":              json.RawMessage(`"preserved"`),
+		},
+	}
+
+	httpReq, err := a.BuildRequest(t.Context(), req, target)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var body map[string]any
+	if err := json.NewDecoder(httpReq.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	for _, reserved := range []string{"parallel_tool_calls", "disable_parallel_tool_use", "functions", "function_call"} {
+		if _, exists := body[reserved]; exists {
+			t.Errorf("expected %q to be filtered out of request body, but found it", reserved)
+		}
+	}
+	if body["custom_extra"] != "preserved" {
+		t.Errorf("expected custom_extra to be preserved, got %v", body["custom_extra"])
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
