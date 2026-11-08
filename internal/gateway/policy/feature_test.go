@@ -27,7 +27,7 @@ func allCapabilities() adapter.Capabilities {
 		Streaming:         true,
 		Tools:             true,
 		ParallelToolCalls: true,
-		Images:            true,
+		Images:            adapter.ImageCapabilityBoth,
 		Reasoning:         true,
 		StructuredOutput:  true,
 		TopK:              true,
@@ -353,6 +353,145 @@ func TestFeatureValidationTable(t *testing.T) {
 			},
 			caps:       noCapabilities(),
 			mode:       policy.ModeStrict,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "images capability base64 preserves base64 and drops URL in lenient mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityBase64
+				return c
+			}(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages[0].Content) != 2 {
+					t.Fatalf("expected 2 blocks (text and base64 image), got %d", len(req.Messages[0].Content))
+				}
+				if req.Messages[0].Content[1].Type != ir.BlockImage || !req.Messages[0].Content[1].Image.IsBase64() {
+					t.Fatalf("expected remaining image to be base64, got %+v", req.Messages[0].Content[1])
+				}
+			},
+		},
+		{
+			name: "images capability base64 rejects URL image in strict mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityBase64
+				return c
+			}(),
+			mode:       policy.ModeStrict,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "images capability url preserves URL and drops base64 in lenient mode",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser,
+							ir.NewTextBlock("hi"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+							ir.NewImageBlockURL("https://example.com/a.png"),
+						),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.Images = adapter.ImageCapabilityURL
+				return c
+			}(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				if len(req.Messages[0].Content) != 2 {
+					t.Fatalf("expected 2 blocks (text and URL image), got %d", len(req.Messages[0].Content))
+				}
+				if req.Messages[0].Content[1].Type != ir.BlockImage || !req.Messages[0].Content[1].Image.IsURL() {
+					t.Fatalf("expected remaining image to be URL, got %+v", req.Messages[0].Content[1])
+				}
+			},
+		},
+		{
+			name: "images inside tool_result dropped when images capability is none",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleTool, ir.NewToolResultBlock("call_1", []ir.Block{
+							ir.NewTextBlock("result text"),
+							ir.NewImageBlockBase64("image/png", "aGVsbG8="),
+						}, false)),
+					},
+				}
+			},
+			caps:        noCapabilities(),
+			mode:        policy.ModeLenient,
+			wantDropped: []string{policy.ParamImages},
+			wantHeader:  "images",
+			checkMutation: func(t *testing.T, req *ir.Request) {
+				tr := req.Messages[0].Content[0].ToolResult
+				if len(tr.Content) != 1 || tr.Content[0].Type != ir.BlockText {
+					t.Fatalf("expected only text block remaining in tool result, got %+v", tr.Content)
+				}
+			},
+		},
+		{
+			name: "image exceeding max image bytes returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")), // 5 bytes decoded
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.MaxImageBytes = 3 // limit to 3 bytes
+				return c
+			}(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "image with invalid media type returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("application/pdf", "aGVsbG8=")),
+					},
+				}
+			},
+			caps:       allCapabilities(),
+			mode:       policy.ModeLenient,
 			wantErr:    true,
 			wantStatus: http.StatusBadRequest,
 			wantKind:   gwerr.KindInvalidRequest,

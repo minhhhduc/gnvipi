@@ -207,24 +207,40 @@ func encodeContentBlock(block ir.Block) (any, error) {
 }
 
 func encodeImage(image *ir.Image) (any, error) {
+	if image == nil {
+		return nil, invalidRequest("image block has no image payload")
+	}
+	base64Data := image.Base64Data()
+	if strings.HasPrefix(image.URL, "data:") {
+		mediaType, data, ok := ir.ParseDataURL(image.URL)
+		if !ok || !strings.HasPrefix(mediaType, "image/") || data == "" {
+			return nil, invalidRequest("inline image has invalid data URL format")
+		}
+		if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))); err != nil {
+			return nil, invalidRequest("image data must be valid base64")
+		}
+		return wireImageBlock{Type: "image", Source: wireImageSource{
+			Type: "base64", MediaType: mediaType, Data: data,
+		}}, nil
+	}
 	if image.URL != "" {
-		if image.Base64 != "" {
+		if base64Data != "" {
 			return nil, invalidRequest("image block cannot contain both URL and base64 data")
 		}
 		parsed, err := url.Parse(image.URL)
-		if err != nil || parsed.Hostname() == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return nil, invalidRequest("image URL must be an absolute HTTP or HTTPS URL")
 		}
 		return wireImageBlock{Type: "image", Source: wireImageSource{Type: "url", URL: image.URL}}, nil
 	}
-	if image.Base64 == "" || !strings.HasPrefix(image.MediaType, "image/") {
+	if base64Data == "" || !strings.HasPrefix(image.MediaType, "image/") {
 		return nil, invalidRequest("base64 image requires data and an image media type")
 	}
-	if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(image.Base64))); err != nil {
+	if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(base64Data))); err != nil {
 		return nil, invalidRequest("image data must be valid base64")
 	}
 	return wireImageBlock{Type: "image", Source: wireImageSource{
-		Type: "base64", MediaType: image.MediaType, Data: image.Base64,
+		Type: "base64", MediaType: image.MediaType, Data: base64Data,
 	}}, nil
 }
 

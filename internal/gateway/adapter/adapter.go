@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -101,19 +103,71 @@ type Outbound interface {
 	ParseStream(ctx context.Context, resp *http.Response) (Stream, error)
 }
 
+// ImageCapability enumerates supported image input forms for an upstream protocol.
+type ImageCapability string
+
+const (
+	ImageCapabilityNone   ImageCapability = "none"
+	ImageCapabilityBase64 ImageCapability = "base64"
+	ImageCapabilityURL    ImageCapability = "url"
+	ImageCapabilityBoth   ImageCapability = "both"
+)
+
+// Enabled reports whether any image format is supported.
+func (c ImageCapability) Enabled() bool {
+	return c == ImageCapabilityBase64 || c == ImageCapabilityURL || c == ImageCapabilityBoth
+}
+
+// SupportsBase64 reports whether inline base64 images are supported.
+func (c ImageCapability) SupportsBase64() bool {
+	return c == ImageCapabilityBase64 || c == ImageCapabilityBoth
+}
+
+// SupportsURL reports whether remote HTTP/HTTPS image URLs are supported.
+func (c ImageCapability) SupportsURL() bool {
+	return c == ImageCapabilityURL || c == ImageCapabilityBoth
+}
+
+func (c *ImageCapability) UnmarshalJSON(data []byte) error {
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		if b {
+			*c = ImageCapabilityBoth
+		} else {
+			*c = ImageCapabilityNone
+		}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	switch ImageCapability(s) {
+	case ImageCapabilityNone, ImageCapabilityBase64, ImageCapabilityURL, ImageCapabilityBoth:
+		*c = ImageCapability(s)
+		return nil
+	case "":
+		*c = ImageCapabilityNone
+		return nil
+	default:
+		return fmt.Errorf("invalid image capability %q: must be none, base64, url, or both", s)
+	}
+}
+
 // Capabilities describes what an upstream protocol can express. Fields that
 // are false are not necessarily errors: the dispatcher decides per request
 // whether to drop the feature, reject it, or fall back to another provider.
 type Capabilities struct {
-	Streaming         bool `json:"streaming"`           // server-sent events
-	Tools             bool `json:"tools"`               // tool / function definitions and calls
-	ParallelToolCalls bool `json:"parallel_tool_calls"` // more than one tool call per turn
-	Images            bool `json:"images"`              // image inputs
-	Reasoning         bool `json:"reasoning"`           // extended thinking / reasoning tokens
-	StructuredOutput  bool `json:"structured_output"`   // JSON mode and JSON schema
-	TopK              bool `json:"top_k"`               // top-k sampling
-	StatefulResponses bool `json:"stateful_responses"`  // server-side conversation state
-	CountTokens       bool `json:"count_tokens"`        // an exact token-count endpoint
+	Streaming         bool            `json:"streaming"`           // server-sent events
+	Tools             bool            `json:"tools"`               // tool / function definitions and calls
+	ParallelToolCalls bool            `json:"parallel_tool_calls"` // more than one tool call per turn
+	Images            ImageCapability `json:"images"`              // image inputs: none|base64|url|both
+	Reasoning         bool            `json:"reasoning"`           // extended thinking / reasoning tokens
+	StructuredOutput  bool            `json:"structured_output"`   // JSON mode and JSON schema
+	TopK              bool            `json:"top_k"`               // top-k sampling
+	StatefulResponses bool            `json:"stateful_responses"`  // server-side conversation state
+	CountTokens       bool            `json:"count_tokens"`        // an exact token-count endpoint
+	MaxImageBytes     int64           `json:"max_image_bytes,omitempty"`
 }
 
 // Target is the resolved upstream endpoint for one request.
