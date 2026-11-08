@@ -44,6 +44,8 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		}
 	}
 	var wireChoice any
+	// request.ResponseFormat != nil is included alongside wireTools because the
+	// emulated-tool structured output path synthesizes a tool_choice.
 	if request.ToolChoice != nil || (request.ParallelToolCalls != nil && (len(wireTools) > 0 || request.ResponseFormat != nil)) {
 		tc, err := encodeToolChoice(request.ToolChoice, request.ParallelToolCalls)
 		if err != nil {
@@ -415,6 +417,7 @@ func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block) (any, error) 
 
 func (a *Adapter) encodeToolResultContent(blocks []ir.Block) (any, error) {
 	if len(blocks) == 0 {
+		// Per Anthropic spec allowance, empty content is returned as an empty string.
 		return "", nil
 	}
 	if len(blocks) == 1 && blocks[0].Type == ir.BlockText {
