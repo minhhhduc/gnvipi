@@ -219,6 +219,7 @@ type Sampling struct {
 	Stop            []string `json:"stop,omitempty"`
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 	Seed            *int64   `json:"seed,omitempty"`
+	N               *int     `json:"n,omitempty"`
 }
 
 // ResponseFormatType selects the requested output structure.
@@ -291,6 +292,8 @@ type Request struct {
 	Reasoning          *ReasoningConfig           `json:"reasoning,omitempty"`
 	Stream             bool                       `json:"stream,omitempty"`
 	StreamIncludeUsage bool                       `json:"stream_include_usage,omitempty"`
+	ParallelToolCalls  *bool                      `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID string                     `json:"previous_response_id,omitempty"`
 	Metadata           *Metadata                  `json:"metadata,omitempty"`
 	Extensions         map[string]json.RawMessage `json:"extensions,omitempty"`
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
@@ -400,6 +401,45 @@ func TestStreamTranslationIdleTimeout(t *testing.T) {
 	completion := receiveTranslationCompletion(t, recorder)
 	if !errors.Is(completion.Err, context.DeadlineExceeded) && !errors.Is(completion.Err, context.Canceled) {
 		t.Fatalf("expected timeout error in completion, got: %v", completion.Err)
+	}
+}
+
+func TestStreamTranslationUnsupportedStreamingGuards(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached when streaming is unsupported by effective capabilities")
+	}))
+	defer server.Close()
+
+	prov := translationProvider(t, server.URL)
+	inbound := fakeStreamInbound{protocol: ir.ProtocolOpenAIChat}
+	outbound := fakeStreamOutbound{protocol: prov.Protocol}
+
+	registry := adapter.NewRegistry()
+	registry.RegisterInbound(inbound)
+	registry.RegisterOutbound(outbound)
+
+	recorder := newTranslationRecorder()
+	dispatcher := translationDispatcher(t, &prov, registry, recorder)
+
+	// Provider capability override: disable streaming for this provider
+	streamingFalse := false
+	dispatcher.FeaturePolicy.ProviderOverrides = map[string]gwpolicy.CapabilityOverrides{
+		prov.ID: {Streaming: &streamingFalse},
+	}
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"client-alias","stream":true}`))
+	out := httptest.NewRecorder()
+
+	engine.ServeHTTP(out, req)
+
+	if out.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when effective streaming is unsupported", out.Code)
+	}
+	if !strings.Contains(out.Body.String(), "streaming") {
+		t.Errorf("error body should mention streaming: %s", out.Body.String())
 	}
 }
 

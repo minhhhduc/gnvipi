@@ -17,6 +17,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
@@ -41,6 +42,9 @@ type Dispatcher struct {
 	Registry *adapter.Registry
 	// Limiter bounds concurrent upstream calls per provider.
 	Limiter *reliability.Limiter
+
+	// FeaturePolicy configures capability validation and unsupported parameter handling.
+	FeaturePolicy gwpolicy.Config
 
 	resolver     routing.Resolver
 	options      relay.Options
@@ -103,6 +107,30 @@ func restoreAndContinue(c *gin.Context, body []byte) {
 func requestedStream(raw json.RawMessage) bool {
 	var stream bool
 	return len(raw) != 0 && json.Unmarshal(raw, &stream) == nil && stream
+}
+
+func (d *Dispatcher) featurePolicyConfig() gwpolicy.Config {
+	cfg := d.options.FeaturePolicy
+	if d.FeaturePolicy.DefaultMode != "" {
+		cfg.DefaultMode = d.FeaturePolicy.DefaultMode
+	}
+	if len(d.FeaturePolicy.ProviderModes) > 0 {
+		if cfg.ProviderModes == nil {
+			cfg.ProviderModes = make(map[string]gwpolicy.Mode)
+		}
+		for k, v := range d.FeaturePolicy.ProviderModes {
+			cfg.ProviderModes[k] = v
+		}
+	}
+	if len(d.FeaturePolicy.ProviderOverrides) > 0 {
+		if cfg.ProviderOverrides == nil {
+			cfg.ProviderOverrides = make(map[string]gwpolicy.CapabilityOverrides)
+		}
+		for k, v := range d.FeaturePolicy.ProviderOverrides {
+			cfg.ProviderOverrides[k] = v
+		}
+	}
+	return cfg
 }
 
 func (d *Dispatcher) handler(model string, route routing.Route) (*relay.Relay, error) {

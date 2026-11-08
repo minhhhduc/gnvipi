@@ -14,5 +14,6 @@ func Clone(p *Provider) Provider {
 	out.ForwardHeaders = slices.Clone(p.ForwardHeaders)
 	out.EndpointPaths = maps.Clone(p.EndpointPaths)
 	out.ExtraBody = slices.Clone(p.ExtraBody)
+	out.Extensions = maps.Clone(p.Extensions)
 	return out
 }

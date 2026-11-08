@@ -12,8 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
+	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound"
+	"github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
@@ -61,6 +63,26 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		normalized.StreamIncludeUsage = true
 	}
 	ctx = adapter.WithStreamOptions(ctx, adapter.StreamOptions{IncludeUsage: normalized.StreamIncludeUsage})
+
+	effCaps, mode := h.resolvePolicy()
+	policyRes, err := policy.Validate(normalized, effCaps, mode)
+	if err != nil {
+		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
+		return
+	}
+	if dropped := policyRes.DroppedParamsHeaderValue(); dropped != "" {
+		c.Writer.Header().Set(policy.DroppedParamsHeader, dropped)
+	}
+	if !effCaps.Streaming || !normalized.Stream {
+		terminal = &gwerr.Error{
+			Kind:    gwerr.KindInvalidRequest,
+			Status:  http.StatusBadRequest,
+			Message: "streaming is not supported by target upstream",
+		}
+		writeTranslationError(c, request.InboundProtocol, terminal)
+		return
+	}
 
 	headerRequest := c.Request.Clone(ctx)
 	headerRequest.Body = http.NoBody

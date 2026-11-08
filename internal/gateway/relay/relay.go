@@ -17,6 +17,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
@@ -28,11 +29,12 @@ import (
 // proxy settings override these defaults. An empty proxy uses ProxyFromEnvironment.
 // The relay always installs the policy's dial and redirect guards.
 type Options struct {
-	Factory  *upstream.Factory
-	Timeouts provider.Timeouts
-	ProxyURL string
-	Policy   *provider.URLPolicy
-	Recorder core.Recorder
+	Factory       *upstream.Factory
+	Timeouts      provider.Timeouts
+	ProxyURL      string
+	Policy        *provider.URLPolicy
+	Recorder      core.Recorder
+	FeaturePolicy gwpolicy.Config
 }
 
 // Relay is an http.Handler for one immutable provider and resolved upstream model.

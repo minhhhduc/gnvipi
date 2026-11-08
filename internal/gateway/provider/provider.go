@@ -91,6 +91,9 @@ type Provider struct {
 	// ExtraBody shallow-merges top-level JSON fields after adapter encoding.
 	// Config wins collisions, except model and stream are forbidden overrides.
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
+	// Extensions holds per-provider extension metadata, including feature policy
+	// and capability overrides.
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 	// MaxConcurrency bounds concurrent in-flight requests for this provider.
 	// Zero or negative means unbounded concurrency.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
