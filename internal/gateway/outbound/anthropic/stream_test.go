@@ -212,3 +212,81 @@ func TestStreamToolEmulation(t *testing.T) {
 		t.Errorf("message_stop event = %+v, want StopEndTurn", stopEvent)
 	}
 }
+
+func TestStreamParallelToolCalling(t *testing.T) {
+	out := anthropic.New()
+	rawSSE := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_tool_stream\",\"model\":\"claude\",\"usage\":{\"input_tokens\":10}}}\n\n" +
+		"event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"lookup\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"id\\\":1\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"23}\"}}\n\n" +
+		"event: content_block_stop\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: content_block_start\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_2\",\"name\":\"weather\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}\n\n" +
+		"event: content_block_stop\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":1}\n\n" +
+		"event: message_delta\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":15}}\n\n" +
+		"event: message_stop\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(rawSSE))}
+	stream, err := out.ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+		events = append(events, ev)
+	}
+
+	if len(events) < 8 {
+		t.Fatalf("expected at least 8 events, got %d", len(events))
+	}
+	// Block 0 start
+	if events[1].Type != ir.EventBlockStart || events[1].Block.Type != ir.BlockToolUse || events[1].Block.ToolUse.ID != "call_1" {
+		t.Errorf("block 0 start mismatch: %+v", events[1])
+	}
+	// Block 0 deltas
+	if events[2].Type != ir.EventBlockDelta || events[2].Delta.Type != ir.DeltaToolArguments || events[2].Delta.ToolCallID != "call_1" {
+		t.Errorf("block 0 delta 1 mismatch: %+v", events[2])
+	}
+	// Block 1 start
+	if events[5].Type != ir.EventBlockStart || events[5].Block.Type != ir.BlockToolUse || events[5].Block.ToolUse.ID != "call_2" {
+		t.Errorf("block 1 start mismatch: %+v", events[5])
+	}
+	// Block 1 delta
+	if events[6].Type != ir.EventBlockDelta || events[6].Delta.Type != ir.DeltaToolArguments || events[6].Delta.ToolCallID != "call_2" {
+		t.Errorf("block 1 delta mismatch: %+v", events[6])
+	}
+
+	var stopEvent *ir.StreamEvent
+	for i := range events {
+		if events[i].Type == ir.EventMessageStop {
+			stopEvent = &events[i]
+			break
+		}
+	}
+	if stopEvent == nil || stopEvent.StopReason != ir.StopToolUse {
+		t.Errorf("message_stop = %+v, want StopToolUse", stopEvent)
+	}
+}

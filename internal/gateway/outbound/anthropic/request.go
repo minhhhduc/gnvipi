@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,8 +25,33 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		return nil, err
 	}
 
-	if len(request.Tools) > 0 || request.ToolChoice != nil {
-		return nil, unsupported("Anthropic tool requests require the tool adapter")
+	var wireTools []wireTool
+	if len(request.Tools) > 0 {
+		wireTools = make([]wireTool, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			if tool.Name == "" {
+				return nil, invalidRequest("tool name is required")
+			}
+			schema := tool.Schema
+			if len(schema) == 0 {
+				schema = json.RawMessage(`{"type":"object"}`)
+			}
+			wireTools = append(wireTools, wireTool{
+				Name:        tool.Name,
+				Description: tool.Description,
+				InputSchema: schema,
+			})
+		}
+	}
+	var wireChoice any
+	// request.ResponseFormat != nil is included alongside wireTools because the
+	// emulated-tool structured output path synthesizes a tool_choice.
+	if request.ToolChoice != nil || (request.ParallelToolCalls != nil && (len(wireTools) > 0 || request.ResponseFormat != nil)) {
+		tc, err := encodeToolChoice(request.ToolChoice, request.ParallelToolCalls)
+		if err != nil {
+			return nil, err
+		}
+		wireChoice = tc
 	}
 	var emulatedTools []any
 	var emulatedToolChoice any
@@ -100,7 +126,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 			system = append(system, wireTextBlock{Type: "text", Text: prompt})
 		}
 	}
-	messages, err := encodeMessages(request.Messages)
+	messages, err := a.encodeMessages(request.Messages)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +154,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		maxTokens = thinkingBudget + maxTokens
 	}
 
-	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, isReservedField)
+	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, normalizedExtensionFields)
 	if err != nil {
 		return nil, invalidRequest(err.Error())
 	}
@@ -152,9 +178,17 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if thinking != nil {
 		fields["thinking"] = thinking
 	}
-	if len(emulatedTools) > 0 {
+	switch {
+	case len(wireTools) > 0:
+		fields["tools"] = wireTools
+		if wireChoice != nil {
+			fields["tool_choice"] = wireChoice
+		}
+	case len(emulatedTools) > 0:
 		fields["tools"] = emulatedTools
 		fields["tool_choice"] = emulatedToolChoice
+	case wireChoice != nil:
+		fields["tool_choice"] = wireChoice
 	}
 	if request.Stream {
 		fields["stream"] = true
@@ -212,6 +246,62 @@ type wireThinkingBlock struct {
 	Signature string `json:"signature,omitempty"`
 }
 
+type wireTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+type wireToolChoice struct {
+	Type                   string `json:"type"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse *bool  `json:"disable_parallel_tool_use,omitempty"`
+}
+
+type wireToolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type wireToolResultBlock struct {
+	Type      string `json:"type"`
+	ToolUseID string `json:"tool_use_id"`
+	Content   any    `json:"content"`
+	IsError   bool   `json:"is_error,omitempty"`
+}
+
+func encodeToolChoice(tc *ir.ToolChoice, parallelToolCalls *bool) (any, error) {
+	if tc == nil {
+		if parallelToolCalls != nil && !*parallelToolCalls {
+			disabled := true
+			return wireToolChoice{Type: "auto", DisableParallelToolUse: &disabled}, nil
+		}
+		return nil, nil
+	}
+	disableParallel := tc.DisableParallelToolUse
+	if disableParallel == nil && parallelToolCalls != nil {
+		d := !*parallelToolCalls
+		disableParallel = &d
+	}
+	switch tc.Mode {
+	case ir.ToolChoiceAuto:
+		return wireToolChoice{Type: "auto", DisableParallelToolUse: disableParallel}, nil
+	case ir.ToolChoiceAny:
+		return wireToolChoice{Type: "any", DisableParallelToolUse: disableParallel}, nil
+	case ir.ToolChoiceTool:
+		if tc.Name == "" {
+			return nil, invalidRequest("tool_choice tool mode requires tool name")
+		}
+		return wireToolChoice{Type: "tool", Name: tc.Name, DisableParallelToolUse: disableParallel}, nil
+	case ir.ToolChoiceNone:
+		return wireToolChoice{Type: "none", DisableParallelToolUse: disableParallel}, nil
+	default:
+		return nil, invalidRequest(fmt.Sprintf("unsupported tool choice mode %q", tc.Mode))
+	}
+}
+
 func encodeSystem(instructions []ir.Instruction) ([]any, error) {
 	var blocks []any
 	for _, instruction := range instructions {
@@ -225,30 +315,30 @@ func encodeSystem(instructions []ir.Instruction) ([]any, error) {
 	return blocks, nil
 }
 
-func encodeMessages(input []ir.Message) ([]wireMessage, error) {
+func (a *Adapter) encodeMessages(input []ir.Message) ([]wireMessage, error) {
 	if len(input) == 0 {
 		return nil, invalidRequest("at least one message is required")
 	}
-	if input[0].Role != ir.RoleUser {
+	if input[0].Role != ir.RoleUser && input[0].Role != ir.RoleTool {
 		return nil, unsupported("the first message must have the user role for Anthropic Messages")
 	}
 	messages := make([]wireMessage, 0, len(input))
 	for _, message := range input {
-		if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant {
-			if message.Role == ir.RoleTool {
-				return nil, unsupported("Anthropic tool result messages require the tool adapter")
-			}
+		if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant && message.Role != ir.RoleTool {
 			return nil, invalidRequest(fmt.Sprintf("unsupported message role %q", message.Role))
 		}
 		content := make([]any, 0, len(message.Content))
 		for _, block := range message.Content {
-			encoded, err := encodeContentBlock(block)
+			encoded, err := a.encodeContentBlock(message.Role, block)
 			if err != nil {
 				return nil, err
 			}
 			content = append(content, encoded)
 		}
 		role := string(message.Role)
+		if message.Role == ir.RoleTool {
+			role = string(ir.RoleUser)
+		}
 		last := len(messages) - 1
 		if last >= 0 && messages[last].Role == role {
 			messages[last].Content = append(messages[last].Content, content...)
@@ -264,7 +354,7 @@ func encodeMessages(input []ir.Message) ([]wireMessage, error) {
 	return messages, nil
 }
 
-func encodeContentBlock(block ir.Block) (any, error) {
+func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block) (any, error) {
 	switch block.Type {
 	case ir.BlockText:
 		return wireTextBlock{Type: "text", Text: block.Text}, nil
@@ -278,11 +368,89 @@ func encodeContentBlock(block ir.Block) (any, error) {
 			return nil, invalidRequest("reasoning block has no reasoning payload")
 		}
 		return wireThinkingBlock{Type: "thinking", Thinking: block.Reasoning.Content, Signature: block.Reasoning.Signature}, nil
-	case ir.BlockToolUse, ir.BlockToolResult:
-		return nil, unsupported("Anthropic tool content requires the tool adapter")
+	case ir.BlockToolUse:
+		if role != ir.RoleAssistant {
+			return nil, invalidRequest("tool_use blocks are only supported in assistant messages")
+		}
+		if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
+			return nil, invalidRequest("tool_use block requires id and name")
+		}
+		input := block.ToolUse.Input
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		} else if trimmed := bytes.TrimSpace(input); len(trimmed) > 0 && trimmed[0] == '"' {
+			var unquoted string
+			if err := json.Unmarshal(trimmed, &unquoted); err == nil && json.Valid([]byte(unquoted)) {
+				input = json.RawMessage(unquoted)
+			}
+		}
+		if !gatewayoutbound.JSONObject(input) {
+			return nil, invalidRequest("tool_use block input must be a JSON object")
+		}
+		return wireToolUseBlock{
+			Type:  "tool_use",
+			ID:    block.ToolUse.ID,
+			Name:  block.ToolUse.Name,
+			Input: input,
+		}, nil
+	case ir.BlockToolResult:
+		if role == ir.RoleAssistant {
+			return nil, invalidRequest("tool_result blocks are not supported in assistant messages")
+		}
+		if block.ToolResult == nil || block.ToolResult.ToolUseID == "" {
+			return nil, invalidRequest("tool_result block requires tool_use_id")
+		}
+		content, err := a.encodeToolResultContent(block.ToolResult.Content)
+		if err != nil {
+			return nil, err
+		}
+		return wireToolResultBlock{
+			Type:      "tool_result",
+			ToolUseID: block.ToolResult.ToolUseID,
+			Content:   content,
+			IsError:   block.ToolResult.IsError,
+		}, nil
 	default:
 		return nil, unsupported(fmt.Sprintf("Anthropic content block type %q is not supported", block.Type))
 	}
+}
+
+func (a *Adapter) encodeToolResultContent(blocks []ir.Block) (any, error) {
+	if len(blocks) == 0 {
+		// Per Anthropic spec allowance, empty content is returned as an empty string.
+		return "", nil
+	}
+	if len(blocks) == 1 && blocks[0].Type == ir.BlockText {
+		return blocks[0].Text, nil
+	}
+	supportsImages := a.Capabilities().Images != adapter.ImageCapabilityNone
+	parts := make([]any, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Type {
+		case ir.BlockText:
+			parts = append(parts, wireTextBlock{Type: "text", Text: block.Text})
+		case ir.BlockImage:
+			if block.Image == nil {
+				return nil, invalidRequest("image block has no image payload")
+			}
+			if supportsImages {
+				img, err := encodeImage(block.Image)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, img)
+			} else {
+				fallback := "[image]"
+				if block.Image.URL != "" {
+					fallback = fmt.Sprintf("[image: %s]", block.Image.URL)
+				}
+				parts = append(parts, wireTextBlock{Type: "text", Text: fallback})
+			}
+		default:
+			return nil, invalidRequest(fmt.Sprintf("unsupported block type %q in tool result", block.Type))
+		}
+	}
+	return parts, nil
 }
 
 func encodeImage(image *ir.Image) (any, error) {
@@ -376,16 +544,17 @@ func encodeThinking(request *ir.Request) (any, error) {
 	return nil, nil
 }
 
-var normalizedExtensionFields = map[string]struct{}{
-	"model": {}, "system": {}, "messages": {}, "input": {}, "instructions": {},
-	"max_tokens": {}, "max_output_tokens": {}, "max_completion_tokens": {},
-	"temperature": {}, "top_p": {}, "top_k": {}, "stop": {}, "stop_sequences": {}, "seed": {},
-	"stream": {}, "stream_options": {}, "thinking": {}, "reasoning": {}, "reasoning_effort": {},
-	"tools": {}, "tool_choice": {}, "response_format": {}, "text": {},
-	"metadata": {}, "user": {}, "store": {}, "previous_response_id": {}, "conversation": {},
-}
-
-func isReservedField(name string) bool {
-	_, ok := normalizedExtensionFields[name]
-	return ok
+func normalizedExtensionFields(name string) bool {
+	switch name {
+	case "model", "system", "messages", "input", "instructions",
+		"max_tokens", "max_output_tokens", "max_completion_tokens",
+		"temperature", "top_p", "top_k", "stop", "stop_sequences", "seed",
+		"stream", "stream_options", "thinking", "reasoning", "reasoning_effort",
+		"tools", "tool_choice", "response_format", "text",
+		"metadata", "user", "store", "previous_response_id", "conversation",
+		"parallel_tool_calls", "disable_parallel_tool_use", "functions", "function_call":
+		return true
+	default:
+		return false
+	}
 }

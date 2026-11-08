@@ -29,7 +29,7 @@ func TestOutboundContract(t *testing.T) {
 	if a.Protocol() != ir.ProtocolAnthropicMessages {
 		t.Fatalf("Protocol = %q, want %q", a.Protocol(), ir.ProtocolAnthropicMessages)
 	}
-	wantCapabilities := adapter.Capabilities{Streaming: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, TopK: true}
+	wantCapabilities := adapter.Capabilities{Streaming: true, Tools: true, ParallelToolCalls: true, Images: adapter.ImageCapabilityBoth, Reasoning: true, TopK: true}
 	if got := a.Capabilities(); !reflect.DeepEqual(got, wantCapabilities) {
 		t.Fatalf("Capabilities = %+v, want %+v", got, wantCapabilities)
 	}
@@ -97,14 +97,6 @@ func TestBuildRequestRejectsUnrepresentableInput(t *testing.T) {
 				ir.NewMessage(ir.RoleAssistant, ir.NewTextBlock("prefill")),
 			}},
 			message: "first message",
-		},
-		{
-			name: "tools deferred",
-			request: ir.Request{
-				Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))},
-				Tools:    []ir.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)}},
-			},
-			message: "tool",
 		},
 		{
 			name: "structured output unsupported by default",
