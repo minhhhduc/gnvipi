@@ -406,6 +406,9 @@ func (a *Adapter) EncodeResponse(response *ir.Response) ([]byte, error) {
 			prefix, item.Type, item.Role = "msg_", "message", "assistant"
 			item.Content = &[]responseStreamPart{part}
 		case ir.BlockReasoning:
+			if a.DisableReasoning {
+				continue
+			}
 			if block.Reasoning == nil {
 				return nil, fmt.Errorf("openairesponses: reasoning block has no payload")
 			}

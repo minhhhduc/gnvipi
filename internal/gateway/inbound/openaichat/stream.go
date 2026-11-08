@@ -235,7 +235,11 @@ func (s *streamState) writeDelta(block *streamBlock, delta *ir.Delta) error {
 		if s.encoder.DisableReasoning {
 			return nil
 		}
-		return s.writeChunk(streamDelta{Reasoning: &delta.Text}, "", false)
+		text := delta.Text
+		if text == "" && delta.ReasoningContent != "" {
+			text = delta.ReasoningContent
+		}
+		return s.writeChunk(streamDelta{Reasoning: &text}, "", false)
 	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaSignature:
 		return nil
 	case block.kind == ir.BlockToolUse && delta.Type == ir.DeltaToolArguments:

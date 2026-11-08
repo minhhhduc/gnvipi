@@ -80,10 +80,11 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		}
 		fields["response_format"] = format
 	}
+	effort := request.GetReasoningEffort()
+	if effort != "" {
+		fields["reasoning_effort"] = string(effort)
+	}
 	if request.Reasoning != nil {
-		if request.Reasoning.Effort != "" {
-			fields["reasoning_effort"] = request.Reasoning.Effort
-		}
 		reasoning := make(map[string]any, 2)
 		if request.Reasoning.Enabled != nil {
 			reasoning["enabled"] = *request.Reasoning.Enabled
@@ -154,8 +155,8 @@ func encodeMessages(request *ir.Request, instructionRole ir.InstructionRole) ([]
 		}
 		messages = append(messages, chatMessage{Role: string(instructionRole), Content: content})
 	}
-	for i, message := range request.Messages {
-		encoded, err := encodeMessage(message)
+	for i := range request.Messages {
+		encoded, err := encodeMessage(&request.Messages[i])
 		if err != nil {
 			return nil, invalid(fmt.Sprintf("OpenAI Chat message %d: %s", i, err))
 		}
@@ -164,7 +165,7 @@ func encodeMessages(request *ir.Request, instructionRole ir.InstructionRole) ([]
 	return messages, nil
 }
 
-func encodeMessage(message ir.Message) (chatMessage, error) {
+func encodeMessage(message *ir.Message) (chatMessage, error) {
 	encoded := chatMessage{Role: string(message.Role)}
 	switch message.Role {
 	case ir.RoleUser:

@@ -40,12 +40,12 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	}
 	input := make([]any, 0, len(instructionItems)+len(request.Messages))
 	input = append(input, instructionItems...)
-	for index, message := range request.Messages {
-		item, err := encodeMessage(message)
+	for index := range request.Messages {
+		items, err := encodeMessageItems(&request.Messages[index])
 		if err != nil {
 			return nil, fmt.Errorf("openairesponses: messages[%d]: %w", index, err)
 		}
-		input = append(input, item)
+		input = append(input, items...)
 	}
 	fields["input"] = input
 	if instructions != nil {
@@ -66,8 +66,8 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	if len(request.Sampling.Stop) != 0 {
 		fields["stop"] = request.Sampling.Stop
 	}
-	if request.Reasoning != nil {
-		reasoning, err := encodeReasoning(request.Reasoning)
+	if request.Reasoning != nil || request.ReasoningEffort != "" || request.BudgetTokens != nil {
+		reasoning, err := encodeReasoning(request)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func encodeInstructions(instructions []ir.Instruction) (instruction *string, ite
 	return nil, items, nil
 }
 
-func encodeMessage(message ir.Message) (map[string]any, error) {
+func encodeMessageItems(message *ir.Message) ([]any, error) {
 	if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant {
 		if message.Role == ir.RoleTool {
 			return nil, unsupported("function call outputs require the tool-calling adapter")
@@ -160,6 +160,7 @@ func encodeMessage(message ir.Message) (map[string]any, error) {
 	if len(message.Content) == 0 {
 		return nil, invalid("content must not be empty")
 	}
+	var items []any
 	content := make([]any, 0, len(message.Content))
 	for index, block := range message.Content {
 		switch block.Type {
@@ -178,13 +179,27 @@ func encodeMessage(message ir.Message) (map[string]any, error) {
 				return nil, fmt.Errorf("content[%d]: %w", index, err)
 			}
 			content = append(content, image)
+		case ir.BlockReasoning:
+			contentStr := ""
+			if block.Reasoning != nil {
+				contentStr = block.Reasoning.Content
+			}
+			items = append(items, map[string]any{
+				"type": "reasoning",
+				"summary": []map[string]any{
+					{"type": "summary_text", "text": contentStr},
+				},
+			})
 		case ir.BlockToolUse, ir.BlockToolResult:
 			return nil, unsupported("function call history requires the tool-calling adapter")
 		default:
 			return nil, invalid(fmt.Sprintf("content[%d] has unsupported block type %q", index, block.Type))
 		}
 	}
-	return map[string]any{"role": message.Role, "content": content}, nil
+	if len(content) > 0 {
+		items = append(items, map[string]any{"role": message.Role, "content": content})
+	}
+	return items, nil
 }
 
 func encodeImage(image *ir.Image) (map[string]any, error) {
@@ -202,21 +217,30 @@ func encodeImage(image *ir.Image) (map[string]any, error) {
 	}
 }
 
-func encodeReasoning(reasoning *ir.ReasoningConfig) (map[string]any, error) {
-	if reasoning == nil {
+func encodeReasoning(request *ir.Request) (map[string]any, error) {
+	if request == nil {
 		return nil, nil
 	}
-	if reasoning.Enabled != nil || reasoning.MaxTokens != nil {
-		return nil, unsupported("Responses reasoning translation supports effort only")
-	}
-	if reasoning.Effort == "" {
+	reasoning := request.Reasoning
+	if reasoning == nil && request.ReasoningEffort == "" && request.BudgetTokens == nil {
 		return nil, nil
 	}
-	switch reasoning.Effort {
+	if reasoning != nil && reasoning.Enabled != nil && !*reasoning.Enabled {
+		return nil, nil
+	}
+	effort := request.GetReasoningEffort()
+	if effort == "" {
+		if reasoning != nil && reasoning.Enabled != nil && *reasoning.Enabled {
+			effort = ir.ReasoningEffortMedium
+		} else {
+			return nil, nil
+		}
+	}
+	switch effort {
 	case ir.ReasoningEffortLow, ir.ReasoningEffortMedium, ir.ReasoningEffortHigh:
-		return map[string]any{"effort": reasoning.Effort}, nil
+		return map[string]any{"effort": string(effort)}, nil
 	default:
-		return nil, invalid(fmt.Sprintf("unsupported reasoning effort %q", reasoning.Effort))
+		return nil, invalid(fmt.Sprintf("unsupported reasoning effort %q", effort))
 	}
 }
 

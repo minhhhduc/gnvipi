@@ -332,6 +332,91 @@ func TestStreamEventJSON(t *testing.T) {
 	}
 }
 
+func TestReasoningMappingAndFields(t *testing.T) {
+	// Effort to Budget
+	if EffortToBudget(ReasoningEffortLow) != 1024 {
+		t.Errorf("EffortToBudget(low) = %d, want 1024", EffortToBudget(ReasoningEffortLow))
+	}
+	if EffortToBudget(ReasoningEffortMedium) != 4096 {
+		t.Errorf("EffortToBudget(medium) = %d, want 4096", EffortToBudget(ReasoningEffortMedium))
+	}
+	if EffortToBudget(ReasoningEffortHigh) != 16384 {
+		t.Errorf("EffortToBudget(high) = %d, want 16384", EffortToBudget(ReasoningEffortHigh))
+	}
+
+	// Budget to Effort
+	if BudgetToEffort(1024) != ReasoningEffortLow {
+		t.Errorf("BudgetToEffort(1024) = %v, want low", BudgetToEffort(1024))
+	}
+	if BudgetToEffort(4096) != ReasoningEffortMedium {
+		t.Errorf("BudgetToEffort(4096) = %v, want medium", BudgetToEffort(4096))
+	}
+	if BudgetToEffort(16384) != ReasoningEffortHigh {
+		t.Errorf("BudgetToEffort(16384) = %v, want high", BudgetToEffort(16384))
+	}
+
+	// Request getters with ReasoningEffort
+	req1 := &Request{ReasoningEffort: ReasoningEffortHigh}
+	if req1.GetReasoningEffort() != ReasoningEffortHigh {
+		t.Errorf("req1.GetReasoningEffort() = %v, want high", req1.GetReasoningEffort())
+	}
+	if b := req1.GetBudgetTokens(); b == nil || *b != 16384 {
+		t.Errorf("req1.GetBudgetTokens() = %v, want 16384", b)
+	}
+
+	// Request getters with BudgetTokens
+	budget2048 := 2048
+	req2 := &Request{BudgetTokens: &budget2048}
+	if req2.GetReasoningEffort() != ReasoningEffortLow {
+		t.Errorf("req2.GetReasoningEffort() = %v, want low", req2.GetReasoningEffort())
+	}
+	if b := req2.GetBudgetTokens(); b == nil || *b != 2048 {
+		t.Errorf("req2.GetBudgetTokens() = %v, want 2048", b)
+	}
+
+	// Request getters with ReasoningConfig
+	req3 := &Request{Reasoning: &ReasoningConfig{Effort: ReasoningEffortMedium}}
+	if req3.GetReasoningEffort() != ReasoningEffortMedium {
+		t.Errorf("req3.GetReasoningEffort() = %v, want medium", req3.GetReasoningEffort())
+	}
+	if b := req3.GetBudgetTokens(); b == nil || *b != 4096 {
+		t.Errorf("req3.GetBudgetTokens() = %v, want 4096", b)
+	}
+
+	// Message and Delta fields
+	msg := Message{Role: RoleAssistant, ReasoningContent: "thought", ThinkingSignature: "signature123"}
+	if msg.ReasoningContent != "thought" || msg.ThinkingSignature != "signature123" {
+		t.Errorf("Message fields mismatch: %+v", msg)
+	}
+
+	rd := NewReasoningDelta(0, "thought delta")
+	if rd.Delta.ReasoningContent != "thought delta" || rd.Delta.Text != "thought delta" {
+		t.Errorf("NewReasoningDelta fields mismatch: %+v", rd.Delta)
+	}
+
+	sd := NewSignatureDelta(0, "sig delta")
+	if sd.Delta.ThinkingSignature != "sig delta" || sd.Delta.Signature != "sig delta" {
+		t.Errorf("NewSignatureDelta fields mismatch: %+v", sd.Delta)
+	}
+
+	// TextBlock
+	tb := TextBlock{Text: "answer", ReasoningContent: "thought", ThinkingSignature: "sig"}
+	if tb.Text != "answer" || tb.ReasoningContent != "thought" || tb.ThinkingSignature != "sig" {
+		t.Errorf("TextBlock fields mismatch: %+v", tb)
+	}
+
+	// Configurable mapping
+	defer ResetReasoningMapping()
+	SetReasoningMapping(ReasoningMappingConfig{
+		EffortToBudget: map[ReasoningEffort]int{
+			ReasoningEffortLow: 2000,
+		},
+	})
+	if EffortToBudget(ReasoningEffortLow) != 2000 {
+		t.Errorf("EffortToBudget(low) after SetReasoningMapping = %d, want 2000", EffortToBudget(ReasoningEffortLow))
+	}
+}
+
 func TestImageHelpersAndJSON(t *testing.T) {
 	// Base64 block constructor sets Data, Base64, and MediaType.
 	b := NewImageBlockBase64("image/png", "aGVsbG8=")

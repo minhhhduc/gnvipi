@@ -111,9 +111,21 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if err := validateSampling(request.Sampling); err != nil {
 		return nil, err
 	}
-	thinking, err := encodeThinking(request.Reasoning)
+	thinking, err := encodeThinking(request)
 	if err != nil {
 		return nil, err
+	}
+	var thinkingBudget int
+	switch t := thinking.(type) {
+	case wireThinking:
+		thinkingBudget = t.BudgetTokens
+	case *wireThinking:
+		if t != nil {
+			thinkingBudget = t.BudgetTokens
+		}
+	}
+	if thinkingBudget > 0 && request.Sampling.MaxOutputTokens == nil && maxTokens <= thinkingBudget {
+		maxTokens = thinkingBudget + maxTokens
 	}
 
 	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, isReservedField)
@@ -329,26 +341,36 @@ type wireThinking struct {
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
-func encodeThinking(reasoning *ir.ReasoningConfig) (any, error) {
-	if reasoning == nil {
+func encodeThinking(request *ir.Request) (any, error) {
+	if request == nil {
 		return nil, nil
 	}
-	if reasoning.Effort != "" {
-		return nil, unsupported("Anthropic thinking effort is not supported by this adapter")
+	reasoning := request.Reasoning
+	if reasoning == nil && request.ReasoningEffort == "" && request.BudgetTokens == nil {
+		return nil, nil
 	}
-	if reasoning.Enabled != nil && !*reasoning.Enabled {
-		if reasoning.MaxTokens != nil {
+	if reasoning != nil && reasoning.Enabled != nil && !*reasoning.Enabled {
+		if reasoning.MaxTokens != nil || request.BudgetTokens != nil {
 			return nil, invalidRequest("disabled thinking cannot have a token budget")
 		}
 		return wireThinking{Type: "disabled"}, nil
 	}
-	if reasoning.MaxTokens != nil {
-		if *reasoning.MaxTokens < 1024 {
+	budget := request.GetBudgetTokens()
+	if budget != nil {
+		if *budget < 1024 {
 			return nil, invalidRequest("thinking token budget must be at least 1024")
 		}
-		return wireThinking{Type: "enabled", BudgetTokens: *reasoning.MaxTokens}, nil
+		return wireThinking{Type: "enabled", BudgetTokens: *budget}, nil
 	}
-	if reasoning.Enabled != nil && *reasoning.Enabled {
+	effort := request.GetReasoningEffort()
+	if effort != "" {
+		b := ir.EffortToBudget(effort)
+		if b < 1024 {
+			b = 1024
+		}
+		return wireThinking{Type: "enabled", BudgetTokens: b}, nil
+	}
+	if reasoning != nil && reasoning.Enabled != nil && *reasoning.Enabled {
 		return wireThinking{Type: "adaptive"}, nil
 	}
 	return nil, nil

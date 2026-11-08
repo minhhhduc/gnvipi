@@ -21,7 +21,9 @@ import (
 // waiting for the next upstream event. Encoders share no per-request state.
 // It is independent of the JSON adapter and can be embedded by that adapter.
 type StreamEncoder struct {
-	KeepaliveInterval time.Duration
+	KeepaliveInterval  time.Duration
+	DisableReasoning   bool
+	FormatThinkingTags bool
 }
 
 // EncodeStream leaves stream ownership with the caller: it never calls Close.
@@ -35,7 +37,7 @@ func (e StreamEncoder) EncodeStream(ctx context.Context, events adapter.Stream, 
 	if e.KeepaliveInterval > 0 {
 		ctx, cancel = context.WithCancel(ctx)
 	}
-	state := streamState{ctx: ctx, writer: w, blocks: make(map[int]*streamBlock)}
+	state := streamState{encoder: e, ctx: ctx, writer: w, blocks: make(map[int]*streamBlock)}
 	next := func() streamReadResult {
 		event, err := events.Next(ctx)
 		return streamReadResult{event: event, err: err, readFailure: true}
@@ -135,6 +137,7 @@ type streamReadResult struct {
 }
 
 type streamState struct {
+	encoder StreamEncoder
 	ctx     context.Context
 	writer  *sse.Writer
 	started bool
@@ -150,6 +153,8 @@ type streamBlock struct {
 	initialArguments            string
 	argumentsStarted            bool
 	open                        bool
+	disabled                    bool
+	isThinkingTag               bool
 }
 
 type streamFrame struct {
@@ -286,6 +291,9 @@ func (s *streamState) handle(event *ir.StreamEvent) (bool, error) {
 		if block == nil || !block.open {
 			return true, s.invalid("delta for unopened block %d", event.Index)
 		}
+		if block.disabled {
+			return false, nil
+		}
 		if event.Delta == nil {
 			return true, s.invalid("block %d delta has no payload", event.Index)
 		}
@@ -297,16 +305,34 @@ func (s *streamState) handle(event *ir.StreamEvent) (bool, error) {
 			}
 			delta.Type, delta.Text = "text_delta", &event.Delta.Text
 		case ir.DeltaReasoning:
-			if block.kind != ir.BlockReasoning {
-				return true, s.invalid("thinking delta for %s block", block.kind)
+			if s.encoder.DisableReasoning {
+				return false, nil
 			}
-			delta.Type, delta.Thinking = "thinking_delta", &event.Delta.Text
+			text := event.Delta.Text
+			if text == "" && event.Delta.ReasoningContent != "" {
+				text = event.Delta.ReasoningContent
+			}
+			if s.encoder.FormatThinkingTags {
+				delta.Type, delta.Text = "text_delta", &text
+			} else {
+				if block.kind != ir.BlockReasoning {
+					return true, s.invalid("thinking delta for %s block", block.kind)
+				}
+				delta.Type, delta.Thinking = "thinking_delta", &text
+			}
 		case ir.DeltaSignature:
+			if s.encoder.DisableReasoning || s.encoder.FormatThinkingTags {
+				return false, nil
+			}
 			if block.kind != ir.BlockReasoning {
 				return true, s.invalid("signature delta for %s block", block.kind)
 			}
+			sig := event.Delta.Signature
+			if sig == "" && event.Delta.ThinkingSignature != "" {
+				sig = event.Delta.ThinkingSignature
+			}
 			block.signature = ""
-			delta.Type, delta.Signature = "signature_delta", &event.Delta.Signature
+			delta.Type, delta.Signature = "signature_delta", &sig
 		case ir.DeltaToolArguments:
 			if block.kind != ir.BlockToolUse {
 				return true, s.invalid("tool delta for %s block", block.kind)
@@ -386,11 +412,24 @@ func (s *streamState) startBlock(index int, prototype *ir.Block) error {
 			initial = &streamDelta{Type: "text_delta", Text: &prototype.Text}
 		}
 	case ir.BlockReasoning:
-		content.Type, content.Thinking = "thinking", &empty
-		if prototype.Reasoning != nil {
-			block.signature = prototype.Reasoning.Signature
-			if prototype.Reasoning.Content != "" {
-				initial = &streamDelta{Type: "thinking_delta", Thinking: &prototype.Reasoning.Content}
+		if s.encoder.DisableReasoning {
+			block.disabled = true
+			s.blocks[index] = block
+			return nil
+		}
+		if s.encoder.FormatThinkingTags {
+			content.Type, content.Text = "text", &empty
+			block.kind = ir.BlockText
+			block.isThinkingTag = true
+			tag := "<thinking>"
+			initial = &streamDelta{Type: "text_delta", Text: &tag}
+		} else {
+			content.Type, content.Thinking = "thinking", &empty
+			if prototype.Reasoning != nil {
+				block.signature = prototype.Reasoning.Signature
+				if prototype.Reasoning.Content != "" {
+					initial = &streamDelta{Type: "thinking_delta", Thinking: &prototype.Reasoning.Content}
+				}
 			}
 		}
 	case ir.BlockToolUse:
@@ -429,6 +468,16 @@ func (s *streamState) startBlock(index int, prototype *ir.Block) error {
 }
 
 func (s *streamState) stopBlock(block *streamBlock) error {
+	if block.disabled {
+		block.open = false
+		return nil
+	}
+	if block.isThinkingTag {
+		closeTag := "</thinking>"
+		if err := s.emit(streamFrame{Type: "content_block_delta", Index: &block.wireIndex, Delta: streamDelta{Type: "text_delta", Text: &closeTag}}); err != nil {
+			return err
+		}
+	}
 	// A prototype may just be {} before real fragments arrive. Emit it only
 	// when completion proves there were no fragments; argument-less calls keep
 	// the valid empty input object already supplied by content_block_start.
