@@ -112,11 +112,17 @@ func (*Adapter) ParseResponse(response *http.Response) (*ir.Response, error) {
 		if call.Type != "function" || call.ID == "" || call.Function.Name == "" {
 			return nil, malformedResponse(response, fmt.Sprintf("OpenAI Chat upstream tool call %d is invalid", i))
 		}
-		input := json.RawMessage(call.Function.Arguments)
-		if !json.Valid(input) {
-			input, err = json.Marshal(call.Function.Arguments)
-			if err != nil {
-				return nil, malformedResponse(response, fmt.Sprintf("OpenAI Chat upstream tool call %d arguments: %v", i, err))
+		var input json.RawMessage
+		if call.Function.Arguments != "" {
+			raw := json.RawMessage(call.Function.Arguments)
+			if json.Valid(raw) {
+				input = raw
+			} else {
+				var err error
+				input, err = json.Marshal(call.Function.Arguments)
+				if err != nil {
+					return nil, malformedResponse(response, fmt.Sprintf("OpenAI Chat upstream tool call %d arguments: %v", i, err))
+				}
 			}
 		}
 		content = append(content, ir.NewToolUseBlock(call.ID, call.Function.Name, input))

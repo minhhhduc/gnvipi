@@ -28,11 +28,13 @@ func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolOpenAIChat }
 
 func (*Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
-		Streaming:        true,
-		Images:           adapter.ImageCapabilityBoth,
-		Reasoning:        true,
-		StructuredOutput: true,
-		TopK:             true,
+		Streaming:         true,
+		Images:            adapter.ImageCapabilityBoth,
+		Reasoning:         true,
+		StructuredOutput:  true,
+		TopK:              true,
+		Tools:             true,
+		ParallelToolCalls: true,
 	}
 }
 
@@ -43,8 +45,4 @@ func (*Adapter) ParseStream(ctx context.Context, resp *http.Response) (adapter.S
 
 func invalid(message string) error {
 	return &gwerr.Error{Kind: gwerr.KindInvalidRequest, Status: http.StatusBadRequest, Message: message}
-}
-
-func unsupported(message string) error {
-	return &gwerr.Error{Kind: gwerr.KindInvalidRequest, Status: http.StatusBadRequest, Code: "unsupported_feature", Message: message}
 }

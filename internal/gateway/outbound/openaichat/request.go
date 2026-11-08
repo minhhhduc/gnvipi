@@ -22,9 +22,6 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if len(request.Messages) == 0 {
 		return nil, invalid("OpenAI Chat requires at least one message")
 	}
-	if len(request.Tools) != 0 || request.ToolChoice != nil {
-		return nil, unsupported("OpenAI Chat tool definitions and choices are not supported")
-	}
 	instructionRole := a.InstructionRole
 	if instructionRole == "" {
 		instructionRole = ir.InstructionSystem
@@ -42,6 +39,48 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	}
 	fields["messages"] = messages
 	fields["stream"] = request.Stream
+	if len(request.Tools) != 0 {
+		tools := make([]map[string]any, 0, len(request.Tools))
+		for _, t := range request.Tools {
+			fn := map[string]any{"name": t.Name}
+			if t.Description != "" {
+				fn["description"] = t.Description
+			}
+			if len(t.Schema) != 0 {
+				fn["parameters"] = t.Schema
+			}
+			tools = append(tools, map[string]any{
+				"type":     "function",
+				"function": fn,
+			})
+		}
+		fields["tools"] = tools
+	}
+	if request.ToolChoice != nil {
+		switch request.ToolChoice.Mode {
+		case ir.ToolChoiceAuto:
+			fields["tool_choice"] = "auto"
+		case ir.ToolChoiceNone:
+			fields["tool_choice"] = "none"
+		case ir.ToolChoiceAny:
+			fields["tool_choice"] = "required"
+		case ir.ToolChoiceTool:
+			if request.ToolChoice.Name == "" {
+				return nil, invalid("OpenAI Chat tool_choice mode tool requires a function name")
+			}
+			fields["tool_choice"] = map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": request.ToolChoice.Name},
+			}
+		default:
+			return nil, invalid(fmt.Sprintf("OpenAI Chat tool_choice mode %q is unsupported", request.ToolChoice.Mode))
+		}
+	}
+	if request.ParallelToolCalls != nil {
+		fields["parallel_tool_calls"] = *request.ParallelToolCalls
+	} else if request.ToolChoice != nil && request.ToolChoice.DisableParallelToolUse != nil {
+		fields["parallel_tool_calls"] = !*request.ToolChoice.DisableParallelToolUse
+	}
 	if request.Sampling.Temperature != nil {
 		fields["temperature"] = *request.Sampling.Temperature
 	}
@@ -194,10 +233,7 @@ func encodeMessage(message *ir.Message) (chatMessage, error) {
 				if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
 					return encoded, fmt.Errorf("tool use requires an ID and name")
 				}
-				arguments, err := encodeToolArguments(block.ToolUse.Input)
-				if err != nil {
-					return encoded, err
-				}
+				arguments := encodeToolArguments(block.ToolUse.Input)
 				encoded.ToolCalls = append(encoded.ToolCalls, chatToolCall{ID: block.ToolUse.ID, Type: "function", Function: chatToolFunction{Name: block.ToolUse.Name, Arguments: arguments}})
 			default:
 				return encoded, fmt.Errorf("block type %q is not valid assistant content", block.Type)
@@ -220,9 +256,6 @@ func encodeMessage(message *ir.Message) (chatMessage, error) {
 		result := message.Content[0].ToolResult
 		if result.ToolUseID == "" {
 			return encoded, fmt.Errorf("tool result requires a tool call ID")
-		}
-		if result.IsError {
-			return encoded, fmt.Errorf("failed tool results are not representable without full tool support")
 		}
 		content, err := encodeVisibleContent(result.Content, false)
 		if err != nil {
@@ -278,22 +311,18 @@ func encodeVisibleContent(blocks []ir.Block, allowImages bool) (any, error) {
 	return parts, nil
 }
 
-func encodeToolArguments(input json.RawMessage) (string, error) {
+func encodeToolArguments(input json.RawMessage) string {
 	input = bytes.TrimSpace(input)
 	if len(input) == 0 {
-		return "{}", nil
-	}
-	if !json.Valid(input) {
-		return "", fmt.Errorf("tool arguments contain invalid JSON")
+		return "{}"
 	}
 	if input[0] == '"' {
 		var text string
-		if err := json.Unmarshal(input, &text); err != nil {
-			return "", fmt.Errorf("tool arguments: %w", err)
+		if err := json.Unmarshal(input, &text); err == nil {
+			return text
 		}
-		return text, nil
 	}
-	return string(input), nil
+	return string(input)
 }
 
 func encodeResponseFormat(format *ir.ResponseFormat) (any, error) {
