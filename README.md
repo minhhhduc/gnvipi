@@ -225,10 +225,11 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
   decoding is stateless: translated requests reject `previous_response_id`,
   `conversation` and `store: true` with a Responses-shaped 400. Same-protocol
   passthrough bypasses decoding; the default CLIProxyAPI routing remains unchanged.
-- **Gateway v2 dispatcher**: `-gateway-v2` opts custom same-protocol traffic into
-  the shared relay, including Anthropic `count_tokens`; disabled by default.
-  NVIDIA and cross-protocol requests keep the legacy path. With the flag enabled,
-  the resolver rejects hidden models with protocol-shaped errors; disabled mode
+- **Gateway v2 dispatcher**: `-gateway-v2` routes custom same-protocol traffic through
+  the shared relay (enabled by default), including Anthropic `count_tokens`.
+  Setting `-gateway-v2=false` provides a deprecated escape hatch to legacy routing.
+  NVIDIA and cross-protocol requests keep their designated paths. With gateway v2 enabled,
+  the resolver rejects hidden models with protocol-shaped errors; the legacy escape hatch
   preserves legacy routing, including its Responses hidden-model fallthrough.
   Persisted transport/auth/header/endpoint policies remain intact. Exact alias
   precedence is unchanged; registry/wildcard routing is a separate backlog item.
@@ -254,7 +255,7 @@ NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latenc
 -max-body-bytes N         client API body limit (default 32 MiB)
 -max-admin-body-bytes N   admin body limit (default 1 MiB)
 -gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
--gateway-v2               same-protocol gateway dispatcher (default off)
+-gateway-v2               same-protocol gateway dispatcher (default on; false is deprecated escape hatch)
 -admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
 -deny-private-upstreams   deny loopback/LAN custom upstreams
 -allow-unsafe-upstreams  permit link-local/cloud metadata targets (unsafe)
