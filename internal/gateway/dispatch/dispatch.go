@@ -20,6 +20,7 @@ import (
 	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
@@ -39,6 +40,8 @@ type Dispatcher struct {
 	// Registry is optional so construction remains compatible with the legacy
 	// dispatcher. Assign it before serving requests; do not replace it live.
 	Registry *adapter.Registry
+	// Limiter bounds concurrent upstream calls per provider.
+	Limiter *reliability.Limiter
 
 	// FeaturePolicy configures capability validation and unsupported parameter handling.
 	FeaturePolicy gwpolicy.Config
@@ -54,7 +57,12 @@ func New(resolver routing.Resolver, options *relay.Options) *Dispatcher {
 	if resolver == nil {
 		panic("dispatch: resolver is required")
 	}
-	d := &Dispatcher{resolver: resolver, handlers: make(map[string]cachedRelay), translations: make(map[string]cachedTranslation)}
+	d := &Dispatcher{
+		resolver:     resolver,
+		handlers:     make(map[string]cachedRelay),
+		translations: make(map[string]cachedTranslation),
+		Limiter:      reliability.NewLimiter(),
+	}
 	if options != nil {
 		d.options = *options
 	}
@@ -206,6 +214,14 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 	if route.Kind != routing.Custom || route.Provider == nil || route.UpstreamProtocol != route.Provider.Protocol {
 		writeDispatchError(c, protocol, &gwerr.Error{Kind: gwerr.KindInternal, Message: "resolver returned an invalid route"})
 		return
+	}
+	if d.Limiter != nil {
+		release, acquireErr := d.Limiter.Acquire(c.Request.Context(), route.Provider)
+		if acquireErr != nil {
+			writeDispatchError(c, protocol, acquireErr)
+			return
+		}
+		defer release()
 	}
 	if route.UpstreamProtocol == protocol {
 		handler, err := d.handler(payload.Model, route)

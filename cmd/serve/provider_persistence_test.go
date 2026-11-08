@@ -331,3 +331,73 @@ func TestMigratedDuplicateAliasesKeepBareModelRoutes(t *testing.T) {
 	}
 	assertRoutes(loaded)
 }
+
+func TestMaskToggleSucceedsWithCollidingOrShadowingProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	raw := `{
+		"schema_version": 2,
+		"providers_v2": [
+			{
+				"id": "p1",
+				"name": "p1",
+				"base_url": "https://p1.invalid/v1",
+				"protocol": "openai-chat",
+				"enabled": true,
+				"models": [
+					{"alias": "shared-alias", "upstream_model": "m1"}
+				]
+			},
+			{
+				"id": "p2",
+				"name": "p2",
+				"base_url": "https://p2.invalid/v1",
+				"protocol": "openai-chat",
+				"enabled": true,
+				"models": [
+					{"alias": "shared-alias", "upstream_model": "m2"},
+					{"alias": "nvidia/nemotron-3.5-lightning-30b-a3b", "upstream_model": "m3"}
+				]
+			}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &modelPrefs{}
+	if err := p.load(path); err != nil {
+		t.Fatalf("load should succeed with collision/shadow: %v", err)
+	}
+
+	// Toggling model masks must succeed even though existing loaded providers have collisions/shadows
+	if err := p.setHidden([]string{"target-model"}); err != nil {
+		t.Fatalf("setHidden failed: %v", err)
+	}
+	if !p.isHidden("target-model") {
+		t.Fatalf("expected target-model to be hidden")
+	}
+
+	// Reload from disk and verify mask persisted
+	loaded := &modelPrefs{}
+	if err := loaded.load(path); err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	if !loaded.isHidden("target-model") {
+		t.Fatalf("reloaded mask was not preserved")
+	}
+
+	// Untoggling mask also succeeds
+	if err := p.setHidden(nil); err != nil {
+		t.Fatalf("unmasking failed: %v", err)
+	}
+	if p.isHidden("target-model") {
+		t.Fatalf("expected target-model to be unhidden")
+	}
+
+	// Deleting model mask also succeeds
+	if err := p.addDeleted("deleted-model"); err != nil {
+		t.Fatalf("addDeleted failed: %v", err)
+	}
+	if !p.isDeleted("deleted-model") {
+		t.Fatalf("expected deleted-model to be marked deleted")
+	}
+}

@@ -60,7 +60,7 @@ type modelPrefs struct {
 	cycleIndex    int
 	onChange      func([]customProvider) // rewrites config.yaml so cliproxy reloads
 	onMaskChange  func()                 // triggers re-registration of models in cliproxy
-	resolver      *routing.LegacyResolver
+	resolver      *routing.RegistryResolver
 }
 
 type prefsFile struct {
