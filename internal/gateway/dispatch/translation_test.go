@@ -20,6 +20,7 @@ import (
 	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound"
+	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
@@ -437,4 +438,140 @@ func TestTranslationDropsUnsupportedParametersHeader(t *testing.T) {
 	if got := out.Header().Get("X-Gateway-Dropped-Params"); got != "top_k" {
 		t.Errorf("X-Gateway-Dropped-Params = %q, want %q", got, "top_k")
 	}
+}
+
+func TestTranslationRejectsUnsupportedToolsInBothModes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached when tools are unsupported")
+	}))
+	defer server.Close()
+
+	var decodes, builds atomic.Int32
+	prov := translationProvider(t, server.URL)
+	registry := translationRegistry(&decodes, &builds, true, true)
+	registry.RegisterInbound(inboundanthropic.New())
+	dispatcher := translationDispatcher(t, &prov, registry, newTranslationRecorder())
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	clientJSON := `{"model":"client-alias","max_tokens":100,"messages":[{"role":"user","content":"ping"}],"tools":[{"name":"calc","description":"calc"}]}`
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(clientJSON))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer client-secret")
+
+	out := httptest.NewRecorder()
+	engine.ServeHTTP(out, request)
+
+	if out.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for unsupported tools", out.Code)
+	}
+	if !strings.Contains(out.Body.String(), "tools") {
+		t.Errorf("error body should mention tools: %s", out.Body.String())
+	}
+}
+
+func TestTranslationGlobalStrictModeRejectsUnsupported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("upstream should not be reached in strict mode with unsupported feature")
+	}))
+	defer server.Close()
+
+	var decodes, builds atomic.Int32
+	prov := translationProvider(t, server.URL)
+	registry := translationRegistry(&decodes, &builds, true, true)
+	registry.RegisterInbound(inboundanthropic.New())
+
+	dispatcher := translationDispatcher(t, &prov, registry, newTranslationRecorder())
+	dispatcher.FeaturePolicy.DefaultMode = gwpolicy.ModeStrict
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	clientJSON := `{"model":"client-alias","max_tokens":100,"messages":[{"role":"user","content":"ping"}],"top_k":40}`
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(clientJSON))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer client-secret")
+
+	out := httptest.NewRecorder()
+	engine.ServeHTTP(out, request)
+
+	if out.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 in strict mode", out.Code)
+	}
+}
+
+func TestTranslationPerProviderOverrides(t *testing.T) {
+	t.Run("capability override preserves parameter", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if _, err := io.WriteString(w, `{"id":"upstream-id","model":"upstream-model","answer":"pong"}`); err != nil {
+				t.Error(err)
+			}
+		}))
+		defer server.Close()
+
+		var decodes, builds atomic.Int32
+		prov := translationProvider(t, server.URL)
+		registry := translationRegistry(&decodes, &builds, true, true)
+		registry.RegisterInbound(inboundanthropic.New())
+
+		dispatcher := translationDispatcher(t, &prov, registry, newTranslationRecorder())
+		topKTrue := true
+		dispatcher.FeaturePolicy.ProviderOverrides = map[string]gwpolicy.CapabilityOverrides{
+			prov.ID: {TopK: &topKTrue},
+		}
+
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		clientJSON := `{"model":"client-alias","max_tokens":100,"messages":[{"role":"user","content":"ping"}],"top_k":40}`
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(clientJSON))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer client-secret")
+
+		out := httptest.NewRecorder()
+		engine.ServeHTTP(out, request)
+
+		if out.Code != http.StatusOK {
+			t.Fatalf("status = %d %s", out.Code, out.Body.String())
+		}
+		// Since TopK capability was overridden to true for this provider, it was NOT dropped!
+		if got := out.Header().Get("X-Gateway-Dropped-Params"); got != "" {
+			t.Errorf("X-Gateway-Dropped-Params should be empty when TopK is supported, got %q", got)
+		}
+	})
+
+	t.Run("provider extensions mode override rejects in strict mode", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("upstream should not be reached when provider extension specifies strict mode")
+		}))
+		defer server.Close()
+
+		var decodes, builds atomic.Int32
+		prov := translationProvider(t, server.URL)
+		prov.Extensions = map[string]json.RawMessage{
+			"feature_policy": json.RawMessage(`"strict"`),
+		}
+		registry := translationRegistry(&decodes, &builds, true, true)
+		registry.RegisterInbound(inboundanthropic.New())
+
+		dispatcher := translationDispatcher(t, &prov, registry, newTranslationRecorder())
+		// Default mode is lenient, but provider extension overrides to strict.
+
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		clientJSON := `{"model":"client-alias","max_tokens":100,"messages":[{"role":"user","content":"ping"}],"top_k":40}`
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(clientJSON))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer client-secret")
+
+		out := httptest.NewRecorder()
+		engine.ServeHTTP(out, request)
+
+		if out.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 when provider overrides to strict mode", out.Code)
+		}
+	})
 }

@@ -203,15 +203,19 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 		}
 	}
 
+	if (len(req.Tools) > 0 || req.ToolChoice != nil) && !caps.Tools {
+		return nil, &gwerr.Error{
+			Kind:    gwerr.KindInvalidRequest,
+			Status:  http.StatusBadRequest,
+			Message: "tools are not supported by target upstream",
+		}
+	}
+
 	// Evaluate non-semantic features against capabilities.
 	var unsupported []string
 
 	if req.Stream && !caps.Streaming {
 		unsupported = append(unsupported, ParamStream)
-	}
-
-	if len(req.Tools) > 0 && !caps.Tools {
-		unsupported = append(unsupported, ParamTools)
 	}
 
 	if hasParallelToolCalls(req) && !caps.ParallelToolCalls {
@@ -261,10 +265,6 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 		case ParamStream:
 			req.Stream = false
 			dropped = append(dropped, ParamStream)
-		case ParamTools:
-			req.Tools = nil
-			req.ToolChoice = nil
-			dropped = append(dropped, ParamTools)
 		case ParamParallelToolCalls:
 			if req.ParallelToolCalls != nil {
 				disabled := false
@@ -279,7 +279,9 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 			}
 			dropped = append(dropped, ParamParallelToolCalls)
 		case ParamImages:
-			dropImages(req)
+			if err := dropImages(req); err != nil {
+				return nil, err
+			}
 			dropped = append(dropped, ParamImages)
 		case ParamReasoning:
 			req.Reasoning = nil
@@ -386,15 +388,22 @@ func hasImages(req *ir.Request) bool {
 	return false
 }
 
-func dropImages(req *ir.Request) {
+func dropImages(req *ir.Request) error {
 	if req == nil {
-		return
+		return nil
 	}
 	for i := range req.Messages {
 		var filtered []ir.Block
 		for _, b := range req.Messages[i].Content {
 			if b.Type != ir.BlockImage && b.Image == nil {
 				filtered = append(filtered, b)
+			}
+		}
+		if len(req.Messages[i].Content) > 0 && len(filtered) == 0 {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: "message contains only image inputs which are not supported by the target provider",
 			}
 		}
 		req.Messages[i].Content = filtered
@@ -406,6 +415,14 @@ func dropImages(req *ir.Request) {
 				filtered = append(filtered, b)
 			}
 		}
+		if len(req.Instructions[i].Content) > 0 && len(filtered) == 0 {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: "message contains only image inputs which are not supported by the target provider",
+			}
+		}
 		req.Instructions[i].Content = filtered
 	}
+	return nil
 }

@@ -90,6 +90,9 @@ type Provider struct {
 	// ExtraBody shallow-merges top-level JSON fields after adapter encoding.
 	// Config wins collisions, except model and stream are forbidden overrides.
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
+	// Extensions holds per-provider extension metadata, including feature policy
+	// and capability overrides.
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 // FieldError reports one invalid field of one provider.

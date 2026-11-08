@@ -3,6 +3,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -31,12 +32,39 @@ type cachedTranslation struct {
 }
 
 type translation struct {
-	provider provider.Provider
-	model    string
-	outbound adapter.Outbound
-	policy   provider.URLPolicy
-	client   *http.Client
-	recorder core.Recorder
+	provider     provider.Provider
+	model        string
+	outbound     adapter.Outbound
+	policy       provider.URLPolicy
+	client       *http.Client
+	recorder     core.Recorder
+	policyConfig gwpolicy.Config
+}
+
+func (h *translation) resolvePolicy() (adapter.Capabilities, gwpolicy.Mode) {
+	caps := h.policyConfig.CapabilitiesForProvider(h.provider.ID, h.outbound.Capabilities())
+	mode := h.policyConfig.ModeForProvider(h.provider.ID)
+
+	if len(h.provider.Extensions) > 0 {
+		if rawMode, ok := h.provider.Extensions["feature_policy"]; ok {
+			var m string
+			if err := json.Unmarshal(rawMode, &m); err == nil && m != "" {
+				mode = gwpolicy.ResolveMode(mode, gwpolicy.Mode(m))
+			}
+		} else if rawMode, ok := h.provider.Extensions["mode"]; ok {
+			var m string
+			if err := json.Unmarshal(rawMode, &m); err == nil && m != "" {
+				mode = gwpolicy.ResolveMode(mode, gwpolicy.Mode(m))
+			}
+		}
+		if rawCaps, ok := h.provider.Extensions["capabilities"]; ok {
+			var ov gwpolicy.CapabilityOverrides
+			if err := json.Unmarshal(rawCaps, &ov); err == nil {
+				caps = gwpolicy.ApplyOverrides(caps, &ov)
+			}
+		}
+	}
+	return caps, mode
 }
 
 func (d *Dispatcher) translator(model string, route routing.Route, base adapter.Outbound) (*translation, error) {
@@ -45,7 +73,7 @@ func (d *Dispatcher) translator(model string, route routing.Route, base adapter.
 	if cached, found := d.translations[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
 		return cached.handler, nil
 	}
-	handler, err := newTranslation(route.Provider, route.UpstreamModel, base, &d.options)
+	handler, err := newTranslation(route.Provider, route.UpstreamModel, base, &d.options, d.featurePolicyConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +94,7 @@ func (d *Dispatcher) failTranslation(c *gin.Context, protocol ir.Protocol, route
 	cancel()
 }
 
-func newTranslation(p *provider.Provider, upstreamModel string, base adapter.Outbound, options *relay.Options) (*translation, error) {
+func newTranslation(p *provider.Provider, upstreamModel string, base adapter.Outbound, options *relay.Options, policyConfig gwpolicy.Config) (*translation, error) {
 	if p == nil {
 		return nil, errors.New("dispatch: translation provider is required")
 	}
@@ -120,7 +148,7 @@ func newTranslation(p *provider.Provider, upstreamModel string, base adapter.Out
 	if err != nil {
 		return nil, err
 	}
-	return &translation{provider: snapshot, model: upstreamModel, outbound: configured, policy: policy, client: client, recorder: options.Recorder}, nil
+	return &translation{provider: snapshot, model: upstreamModel, outbound: configured, policy: policy, client: client, recorder: options.Recorder, policyConfig: policyConfig}, nil
 }
 
 func (h *translation) Serve(c *gin.Context, body []byte, inbound adapter.Inbound, request *core.RequestContext) {
@@ -158,7 +186,8 @@ func (h *translation) Serve(c *gin.Context, body []byte, inbound adapter.Inbound
 		return
 	}
 
-	policyRes, err := gwpolicy.Validate(normalized, h.outbound.Capabilities(), gwpolicy.ModeLenient)
+	effCaps, mode := h.resolvePolicy()
+	policyRes, err := gwpolicy.Validate(normalized, effCaps, mode)
 	if err != nil {
 		terminal = err
 		writeTranslationError(c, request.InboundProtocol, err)

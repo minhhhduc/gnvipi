@@ -139,7 +139,7 @@ func TestFeatureValidationTable(t *testing.T) {
 			wantKind:   gwerr.KindInvalidRequest,
 		},
 
-		// --- Tools ---
+		// --- Tools (Always errors in both modes if unsupported) ---
 		{
 			name: "tools supported in lenient mode",
 			reqFunc: func() *ir.Request {
@@ -159,27 +159,45 @@ func TestFeatureValidationTable(t *testing.T) {
 			},
 		},
 		{
-			name: "tools unsupported in lenient mode drops parameter",
+			name: "tools unsupported in lenient mode returns 400",
 			reqFunc: func() *ir.Request {
 				return &ir.Request{
 					Tools:      []ir.Tool{{Name: "weather"}},
 					ToolChoice: &ir.ToolChoice{Mode: ir.ToolChoiceAuto},
 				}
 			},
-			caps:        noCapabilities(),
-			mode:        policy.ModeLenient,
-			wantDropped: []string{policy.ParamTools},
-			wantHeader:  "tools",
-			checkMutation: func(t *testing.T, req *ir.Request) {
-				if req.Tools != nil || req.ToolChoice != nil {
-					t.Fatalf("expected tools and tool_choice to be cleared, got tools=%v, choice=%v", req.Tools, req.ToolChoice)
-				}
-			},
+			caps:       noCapabilities(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
 		},
 		{
 			name: "tools unsupported in strict mode returns 400",
 			reqFunc: func() *ir.Request {
 				return &ir.Request{Tools: []ir.Tool{{Name: "weather"}}}
+			},
+			caps:       noCapabilities(),
+			mode:       policy.ModeStrict,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "tool_choice unsupported in lenient mode returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{ToolChoice: &ir.ToolChoice{Mode: ir.ToolChoiceAuto}}
+			},
+			caps:       noCapabilities(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
+		{
+			name: "tool_choice unsupported in strict mode returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{ToolChoice: &ir.ToolChoice{Mode: ir.ToolChoiceAuto}}
 			},
 			caps:       noCapabilities(),
 			mode:       policy.ModeStrict,
@@ -229,7 +247,7 @@ func TestFeatureValidationTable(t *testing.T) {
 					},
 				}
 			},
-			caps:        noCapabilities(),
+			caps:        adapter.Capabilities{Tools: true, ParallelToolCalls: false},
 			mode:        policy.ModeLenient,
 			wantDropped: []string{policy.ParamParallelToolCalls},
 			wantHeader:  "parallel_tool_calls",
@@ -308,6 +326,21 @@ func TestFeatureValidationTable(t *testing.T) {
 					t.Fatalf("expected only text block remaining, got %v", req.Messages[0].Content)
 				}
 			},
+		},
+		{
+			name: "images unsupported in lenient mode with image-only message returns 400",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockURL("https://example.com/a.png")),
+					},
+				}
+			},
+			caps:       noCapabilities(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
 		},
 		{
 			name: "images unsupported in strict mode returns 400",
@@ -530,19 +563,18 @@ func TestFeatureValidationTable(t *testing.T) {
 					Sampling:          ir.Sampling{TopK: intPtr(50)},
 					Reasoning:         &ir.ReasoningConfig{Effort: ir.ReasoningEffortMedium},
 					ParallelToolCalls: boolPtr(true),
-					Tools:             []ir.Tool{{Name: "calc"}},
 					ResponseFormat:    &ir.ResponseFormat{Type: ir.ResponseFormatJSONObject},
 					Messages: []ir.Message{
-						ir.NewMessage(ir.RoleUser, ir.NewImageBlockURL("https://example.com/b.png")),
+						ir.NewMessage(ir.RoleUser, ir.NewTextBlock("prompt"), ir.NewImageBlockURL("https://example.com/b.png")),
 					},
 				}
 			},
 			caps:        noCapabilities(),
 			mode:        policy.ModeLenient,
-			wantDropped: []string{"images", "parallel_tool_calls", "reasoning", "response_format", "stream", "tools", "top_k"},
-			wantHeader:  "images,parallel_tool_calls,reasoning,response_format,stream,tools,top_k",
+			wantDropped: []string{"images", "parallel_tool_calls", "reasoning", "response_format", "stream", "top_k"},
+			wantHeader:  "images,parallel_tool_calls,reasoning,response_format,stream,top_k",
 			checkMutation: func(t *testing.T, req *ir.Request) {
-				if req.Stream || req.Sampling.TopK != nil || req.Reasoning != nil || req.Tools != nil || req.ResponseFormat != nil {
+				if req.Stream || req.Sampling.TopK != nil || req.Reasoning != nil || req.ResponseFormat != nil {
 					t.Fatalf("expected all unsupported features to be cleared, got %+v", req)
 				}
 			},
@@ -770,14 +802,13 @@ func TestPipelineIntegrationStrictError(t *testing.T) {
 	inbound := inboundchat.New()
 	outbound := outboundanthropic.New()
 
-	// Anthropic outbound does not support tools without tool adapter in this configuration
 	targetCaps := outbound.Capabilities()
-	targetCaps.Tools = false // Simulate text-only provider
+	targetCaps.StructuredOutput = false
 
 	clientJSON := `{
 		"model": "claude-3-5-sonnet",
-		"messages": [{"role": "user", "content": "calc"}],
-		"tools": [{"type": "function", "function": {"name": "calc"}}]
+		"messages": [{"role": "user", "content": "format"}],
+		"response_format": {"type": "json_object"}
 	}`
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(clientJSON))
@@ -790,7 +821,7 @@ func TestPipelineIntegrationStrictError(t *testing.T) {
 
 	_, err = policy.Validate(normalized, targetCaps, policy.ModeStrict)
 	if err == nil {
-		t.Fatal("expected error in strict mode with unsupported tools")
+		t.Fatal("expected error in strict mode with unsupported response_format")
 	}
 
 	var gwErr *gwerr.Error
