@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"gopkg.in/yaml.v3"
 )
@@ -43,7 +42,7 @@ func uniqueURLs(urls []string) []string {
 // (~/.claude/cache/gateway-models.json) so /model reflects admin mask changes
 // without waiting for Claude Code to re-fetch /v1/models. Best-effort: a
 // missing cache dir or Claude Code version with a different format is ignored.
-func writeClaudeModelCache(addr string, catalog []*cliproxy.ModelInfo) {
+func writeClaudeModelCache(addr string, catalog []gatewayModel) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -54,13 +53,15 @@ func writeClaudeModelCache(addr string, catalog []*cliproxy.ModelInfo) {
 		DisplayName string `json:"display_name"`
 	}
 	modelsOut := make([]entry, 0, len(catalog))
-	for _, m := range catalog {
-		if m == nil {
-			continue
+	for i := range catalog {
+		m := &catalog[i]
+		displayName := m.DisplayName
+		if displayName == "" {
+			displayName = m.ID
 		}
 		modelsOut = append(modelsOut, entry{
 			ID:          m.ID,
-			DisplayName: m.ID,
+			DisplayName: displayName,
 		})
 	}
 	payload, err := json.Marshal(gin.H{

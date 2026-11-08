@@ -79,7 +79,8 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 	if strings.TrimSpace(input.Model) == "" {
 		return nil, codecInvalid("model must be a non-empty string")
 	}
-	if input.MaxTokens == nil || *input.MaxTokens < 0 {
+	isCountTokens := request.URL != nil && strings.HasSuffix(strings.TrimRight(request.URL.Path, "/"), "/count_tokens")
+	if (input.MaxTokens == nil && !isCountTokens) || (input.MaxTokens != nil && *input.MaxTokens < 0) {
 		return nil, codecInvalid("max_tokens must be a non-negative integer")
 	}
 	for _, name := range []string{"temperature", "top_p", "top_k", "stop_sequences", "stream"} {
@@ -128,7 +129,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		}
 	}
 	var messages []json.RawMessage
-	if len(input.Messages) == 0 || json.Unmarshal(input.Messages, &messages) != nil || len(messages) == 0 {
+	if len(input.Messages) == 0 || json.Unmarshal(input.Messages, &messages) != nil || (len(messages) == 0 && !isCountTokens) {
 		return nil, codecInvalid("messages must be a non-empty array")
 	}
 	out.Messages = make([]ir.Message, 0, len(messages))

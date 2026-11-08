@@ -105,9 +105,9 @@ type Provider struct {
 
 // FieldError reports one invalid field of one provider.
 type FieldError struct {
-	Provider string // provider ID, or "legacy[i]" while converting
-	Field    string // "name", "base_url", "auth.key", "models[2].alias", ...
-	Problem  string // what is wrong, without repeating the field name
+	Provider string `json:"provider,omitempty"` // provider ID, or "legacy[i]" while converting
+	Field    string `json:"field"`              // "name", "base_url", "auth.key", "models[2].alias", ...
+	Problem  string `json:"problem"`            // what is wrong, without repeating the field name
 }
 
 // Error implements error.

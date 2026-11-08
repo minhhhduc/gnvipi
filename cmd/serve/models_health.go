@@ -5,29 +5,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
 // modelsAndHealthMiddleware handles /v1/models catalog discovery and /healthz
 // status checks before CLIProxyAPI's default routes.
-func modelsAndHealthMiddleware(getModels func() []*cliproxy.ModelInfo, exec *nvidia.Executor) gin.HandlerFunc {
+func modelsAndHealthMiddleware(getModels func() []gatewayModel, exec *nvidia.Executor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if c.Request.Method == http.MethodGet && (path == "/v1/models" || path == "/v1/models/") {
-			catalog := getModels()
-			data := make([]gatewayModel, 0, len(catalog))
-			for _, m := range catalog {
-				if m == nil {
-					continue
-				}
-				data = append(data, gatewayModel{
-					Type:        "model",
-					Object:      "model",
-					ID:          m.ID,
-					Name:        m.ID,
-					DisplayName: m.ID,
-					OwnedBy:     m.OwnedBy,
-				})
+			data := getModels()
+			if data == nil {
+				data = []gatewayModel{}
 			}
 			firstID, lastID := "", ""
 			if len(data) > 0 {
