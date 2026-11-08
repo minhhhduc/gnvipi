@@ -83,14 +83,14 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 			caps = configured.Capabilities()
 		}
 	}
-	if caps == (adapter.Capabilities{}) {
+	if caps.IsZero() {
 		switch p.Protocol {
 		case ir.ProtocolAnthropicMessages:
 			caps = adapter.Capabilities{
 				Streaming:         true,
 				Tools:             true,
 				ParallelToolCalls: true,
-				Images:            true,
+				Images:            adapter.ImageCapabilityBoth,
 				Reasoning:         true,
 				TopK:              true,
 				CountTokens:       true,
@@ -101,7 +101,7 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 		case ir.ProtocolOpenAIChat:
 			caps = adapter.Capabilities{
 				Streaming:        true,
-				Images:           true,
+				Images:           adapter.ImageCapabilityBoth,
 				Reasoning:        true,
 				StructuredOutput: true,
 				TopK:             true,
@@ -109,7 +109,7 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 		case ir.ProtocolOpenAIResponses:
 			caps = adapter.Capabilities{
 				Streaming:        true,
-				Images:           true,
+				Images:           adapter.ImageCapabilityBoth,
 				Reasoning:        true,
 				StructuredOutput: true,
 			}
@@ -169,7 +169,11 @@ func resolveNvidiaCapabilities(modelID string) adapter.Capabilities {
 	if info, err := models.Lookup(modelID); err == nil && info.Capability != nil {
 		caps.Tools = info.Capability.ToolCalling
 		caps.StructuredOutput = info.Capability.StructuredOutput
-		caps.Images = info.Capability.Vision
+		if info.Capability.Vision {
+			caps.Images = adapter.ImageCapabilityBoth
+		} else {
+			caps.Images = adapter.ImageCapabilityNone
+		}
 		caps.Reasoning = info.Capability.Reasoning
 	}
 	return caps

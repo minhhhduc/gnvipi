@@ -36,6 +36,9 @@ type Route struct {
 	UpstreamProtocol ir.Protocol
 	Kind             Kind
 	Candidates       []Route
+	Fallbacks        []Route
+	FallbackStatuses []int
+	Alias            string
 }
 
 type Resolver interface {
@@ -59,9 +62,11 @@ var (
 )
 
 type resolvedRoute struct {
-	route  Route
-	alias  string
-	hidden bool
+	route            Route
+	alias            string
+	hidden           bool
+	fallbacks        []string
+	fallbackStatuses []int
 }
 
 type snapshot struct {
@@ -182,7 +187,20 @@ func (r *LegacyResolver) UpdateProviders(list []provider.Provider, hidden []stri
 	}
 	for _, current := range rows {
 		mapping, p := current.mapping, current.provider
-		entry := resolvedRoute{route: Route{Provider: p, UpstreamModel: mapping.UpstreamModel, UpstreamProtocol: p.Protocol, Kind: Custom}, alias: mapping.Alias, hidden: mapping.Hidden}
+		entry := resolvedRoute{
+			route: Route{
+				Provider:         p,
+				UpstreamModel:    mapping.UpstreamModel,
+				UpstreamProtocol: p.Protocol,
+				Kind:             Custom,
+				Alias:            mapping.Alias,
+				FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
+			},
+			alias:            mapping.Alias,
+			hidden:           mapping.Hidden,
+			fallbacks:        slices.Clone(mapping.Fallbacks),
+			fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
+		}
 		for _, model := range []string{mapping.Alias, mapping.UpstreamModel} {
 			if _, exists := next.routes[model]; !exists {
 				next.routes[model] = entry
@@ -233,18 +251,61 @@ func (r *LegacyResolver) AdvanceCycle(failed string) {
 	}
 }
 
-func (r *LegacyResolver) resolveConcrete(_ context.Context, current *snapshot, clientModel string, _ ir.Protocol) (Route, error) {
+func (r *LegacyResolver) resolveEntry(current *snapshot, clientModel string) (Route, []string, error) {
 	if current.hidden[clientModel] {
-		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+		return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 	}
 	entry, found := current.routes[clientModel]
 	if !found {
-		return Route{Kind: Fallthrough, UpstreamModel: clientModel}, nil
+		return Route{Kind: Fallthrough, UpstreamModel: clientModel, Alias: clientModel}, nil, nil
 	}
 	if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
-		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+		return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 	}
-	return entry.route, nil
+	return entry.route, entry.fallbacks, nil
+}
+
+func (r *LegacyResolver) resolveConcrete(ctx context.Context, current *snapshot, clientModel string, _ ir.Protocol) (Route, error) {
+	return r.resolveWithFallbacks(ctx, current, clientModel, make(map[string]bool))
+}
+
+func (r *LegacyResolver) resolveWithFallbacks(ctx context.Context, current *snapshot, clientModel string, seen map[string]bool) (Route, error) {
+	if err := ctx.Err(); err != nil {
+		return Route{}, err
+	}
+	route, fallbacksList, err := r.resolveEntry(current, clientModel)
+	if err != nil {
+		return Route{}, err
+	}
+	if route.Kind != Custom {
+		return route, nil
+	}
+	seen[clientModel] = true
+	if route.Alias != "" {
+		seen[route.Alias] = true
+	}
+	var fallbacks []Route
+	var resolveHop func(alias string)
+	resolveHop = func(alias string) {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || seen[alias] {
+			return
+		}
+		seen[alias] = true
+		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, alias)
+		if fbErr == nil && fbRoute.Kind == Custom && fbRoute.Provider != nil {
+			fbRoute.Alias = alias
+			fallbacks = append(fallbacks, fbRoute)
+			for _, nextAlias := range nestedFbs {
+				resolveHop(nextAlias)
+			}
+		}
+	}
+	for _, fbAlias := range fallbacksList {
+		resolveHop(fbAlias)
+	}
+	route.Fallbacks = fallbacks
+	return route, nil
 }
 
 func (r *LegacyResolver) resolveCycle(ctx context.Context, current *snapshot, protocol ir.Protocol) (Route, error) {
@@ -361,13 +422,15 @@ func (r *LegacyResolver) ResolveCandidates(ctx context.Context, clientModel stri
 // ----------------------------------------------------------------------------
 
 type wildcardEntry struct {
-	prefix        string
-	alias         string
-	upstreamModel string
-	provider      *provider.Provider
-	protocol      ir.Protocol
-	hidden        bool
-	allowShadow   bool
+	prefix           string
+	alias            string
+	upstreamModel    string
+	provider         *provider.Provider
+	protocol         ir.Protocol
+	hidden           bool
+	allowShadow      bool
+	fallbacks        []string
+	fallbackStatuses []int
 }
 
 type registrySnapshot struct {
@@ -661,13 +724,15 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 			}
 
 			wildcards = append(wildcards, wildcardEntry{
-				prefix:        prefix,
-				alias:         alias,
-				upstreamModel: mapping.UpstreamModel,
-				provider:      p,
-				protocol:      p.Protocol,
-				hidden:        mapping.Hidden,
-				allowShadow:   allowShadow,
+				prefix:           prefix,
+				alias:            alias,
+				upstreamModel:    mapping.UpstreamModel,
+				provider:         p,
+				protocol:         p.Protocol,
+				hidden:           mapping.Hidden,
+				allowShadow:      allowShadow,
+				fallbacks:        slices.Clone(mapping.Fallbacks),
+				fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 			})
 		} else {
 			if !allowShadow && isProtected(alias) {
@@ -683,9 +748,13 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 							UpstreamModel:    mapping.UpstreamModel,
 							UpstreamProtocol: p.Protocol,
 							Kind:             Custom,
+							Alias:            alias,
+							FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 						},
-						alias:  alias,
-						hidden: mapping.Hidden,
+						alias:            alias,
+						hidden:           mapping.Hidden,
+						fallbacks:        slices.Clone(mapping.Fallbacks),
+						fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 					}
 				}
 			}
@@ -702,9 +771,13 @@ func (r *RegistryResolver) UpdateProviders(list []provider.Provider, hidden []st
 						UpstreamModel:    mapping.UpstreamModel,
 						UpstreamProtocol: p.Protocol,
 						Kind:             Custom,
+						Alias:            alias,
+						FallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 					},
-					alias:  alias,
-					hidden: mapping.Hidden,
+					alias:            alias,
+					hidden:           mapping.Hidden,
+					fallbacks:        slices.Clone(mapping.Fallbacks),
+					fallbackStatuses: slices.Clone(mapping.FallbackStatuses),
 				}
 			}
 		}
@@ -787,21 +860,22 @@ func (r *RegistryResolver) AdvanceCycle(failed string) {
 	}
 }
 
-func (r *RegistryResolver) resolveConcrete(_ context.Context, current *registrySnapshot, clientModel string, _ ir.Protocol) (Route, error) {
+func (r *RegistryResolver) resolveEntry(current *registrySnapshot, clientModel string) (Route, []string, error) {
 	if current.hidden[clientModel] {
-		return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+		return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 	}
 
 	// 1. Exact alias match (O(1))
 	if entry, ok := current.exactRoutes[clientModel]; ok {
 		if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
-			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+			return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 		}
-		return entry.route, nil
+		return entry.route, entry.fallbacks, nil
 	}
 
 	// 2. Wildcard prefix match (O(prefixes))
-	for _, wc := range current.wildcards {
+	for i := range current.wildcards {
+		wc := &current.wildcards[i]
 		if !strings.HasPrefix(clientModel, wc.prefix) || len(clientModel) <= len(wc.prefix) {
 			continue
 		}
@@ -810,7 +884,7 @@ func (r *RegistryResolver) resolveConcrete(_ context.Context, current *registryS
 			continue
 		}
 		if wc.hidden || current.hidden[clientModel] || current.hidden[wc.alias] {
-			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+			return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 		}
 		suffix := clientModel[len(wc.prefix):]
 		upstreamModel := suffix
@@ -826,21 +900,66 @@ func (r *RegistryResolver) resolveConcrete(_ context.Context, current *registryS
 			UpstreamModel:    upstreamModel,
 			UpstreamProtocol: wc.protocol,
 			Kind:             Custom,
-		}, nil
+			Alias:            clientModel,
+			FallbackStatuses: slices.Clone(wc.fallbackStatuses),
+		}, wc.fallbacks, nil
 	}
 
 	// 3. Bare upstream-name match (O(1), if enabled)
 	if !current.disableBareModels {
 		if entry, ok := current.bareRoutes[clientModel]; ok {
 			if entry.hidden || current.hidden[clientModel] || current.hidden[entry.alias] {
-				return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
+				return Route{}, nil, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "model is hidden"}
 			}
-			return entry.route, nil
+			return entry.route, entry.fallbacks, nil
 		}
 	}
 
 	// 4. Fallthrough
-	return Route{Kind: Fallthrough, UpstreamModel: clientModel}, nil
+	return Route{Kind: Fallthrough, UpstreamModel: clientModel, Alias: clientModel}, nil, nil
+}
+
+func (r *RegistryResolver) resolveConcrete(ctx context.Context, current *registrySnapshot, clientModel string, _ ir.Protocol) (Route, error) {
+	return r.resolveWithFallbacks(ctx, current, clientModel, make(map[string]bool))
+}
+
+func (r *RegistryResolver) resolveWithFallbacks(ctx context.Context, current *registrySnapshot, clientModel string, seen map[string]bool) (Route, error) {
+	if err := ctx.Err(); err != nil {
+		return Route{}, err
+	}
+	route, fallbackAliases, err := r.resolveEntry(current, clientModel)
+	if err != nil {
+		return Route{}, err
+	}
+	if route.Kind != Custom {
+		return route, nil
+	}
+	seen[clientModel] = true
+	if route.Alias != "" {
+		seen[route.Alias] = true
+	}
+	var fallbacks []Route
+	var resolveHop func(alias string)
+	resolveHop = func(alias string) {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || seen[alias] {
+			return
+		}
+		seen[alias] = true
+		fbRoute, nestedFbs, fbErr := r.resolveEntry(current, alias)
+		if fbErr == nil && fbRoute.Kind == Custom && fbRoute.Provider != nil {
+			fbRoute.Alias = alias
+			fallbacks = append(fallbacks, fbRoute)
+			for _, nextAlias := range nestedFbs {
+				resolveHop(nextAlias)
+			}
+		}
+	}
+	for _, fbAlias := range fallbackAliases {
+		resolveHop(fbAlias)
+	}
+	route.Fallbacks = fallbacks
+	return route, nil
 }
 
 func (r *RegistryResolver) resolveCycle(ctx context.Context, current *registrySnapshot, protocol ir.Protocol) (Route, error) {

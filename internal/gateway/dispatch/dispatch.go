@@ -244,6 +244,11 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		d.serveCountTokensEstimate(c, body, &route, rc)
 		return
 	}
+	if len(route.Fallbacks) > 0 {
+		candidates := append([]routing.Route{route}, route.Fallbacks...)
+		d.dispatchWithFallbacks(c, body, payload.Model, payload.Stream, candidates, rc, protocol)
+		return
+	}
 	if d.Limiter != nil {
 		release, acquireErr := d.Limiter.Acquire(c.Request.Context(), route.Provider)
 		if acquireErr != nil {

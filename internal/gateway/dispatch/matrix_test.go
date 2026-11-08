@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -22,6 +23,7 @@ import (
 	outboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 )
 
@@ -572,10 +574,19 @@ func TestCrossProtocolUpstreamErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := gatewaytest.New(t)
-			upstream.Script(tc.upstreamPath, gatewaytest.Step{
-				Status: tc.upstreamStatus,
-				Body:   tc.cannedError,
+			steps := []gatewaytest.Step{
+				{Status: tc.upstreamStatus, Body: tc.cannedError},
+			}
+			if tc.upstreamStatus == http.StatusTooManyRequests || tc.upstreamStatus == http.StatusBadGateway || tc.upstreamStatus == http.StatusServiceUnavailable || tc.upstreamStatus == http.StatusGatewayTimeout {
+				steps = append(steps, gatewaytest.Step{Status: tc.upstreamStatus, Body: tc.cannedError})
+			}
+			upstream.Script(tc.upstreamPath, steps...)
+
+			initialBackoff := time.Millisecond
+			reliability.RegisterProviderRetry("err-provider", reliability.ProviderRetryConfig{
+				InitialBackoff: &initialBackoff,
 			})
+			defer reliability.ClearProviderRetries()
 
 			prov := provider.Provider{
 				ID:       "err-provider",

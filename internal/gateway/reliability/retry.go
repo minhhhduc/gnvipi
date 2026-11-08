@@ -84,6 +84,7 @@ type ProviderRetryConfig struct {
 	MaxBackoff     *time.Duration `json:"max_backoff,omitempty"`
 	MaxRetryAfter  *time.Duration `json:"max_retry_after,omitempty"`
 	DisableJitter  *bool          `json:"disable_jitter,omitempty"`
+	LogRetries     *bool          `json:"log_retries,omitempty"`
 }
 
 var (
@@ -128,9 +129,12 @@ func (p *Policy) applyOverride(cfg ProviderRetryConfig) {
 	if cfg.DisableJitter != nil {
 		p.DisableJitter = *cfg.DisableJitter
 	}
+	if cfg.LogRetries != nil {
+		p.LogRetries = *cfg.LogRetries
+	}
 }
 
-func parseExtraBodyRetry(raw json.RawMessage) (ProviderRetryConfig, bool) {
+func parseRetryConfig(raw json.RawMessage) (ProviderRetryConfig, bool) {
 	if len(raw) == 0 {
 		return ProviderRetryConfig{}, false
 	}
@@ -148,6 +152,7 @@ func parseExtraBodyRetry(raw json.RawMessage) (ProviderRetryConfig, bool) {
 		MaxBackoff     interface{} `json:"max_backoff"`
 		MaxRetryAfter  interface{} `json:"max_retry_after"`
 		DisableJitter  *bool       `json:"disable_jitter"`
+		LogRetries     *bool       `json:"log_retries"`
 	}
 	if err := json.Unmarshal(target, &parsed); err != nil {
 		return ProviderRetryConfig{}, false
@@ -156,6 +161,7 @@ func parseExtraBodyRetry(raw json.RawMessage) (ProviderRetryConfig, bool) {
 	var cfg ProviderRetryConfig
 	cfg.MaxAttempts = parsed.MaxAttempts
 	cfg.DisableJitter = parsed.DisableJitter
+	cfg.LogRetries = parsed.LogRetries
 
 	parseDuration := func(v interface{}) *time.Duration {
 		if v == nil {
@@ -177,12 +183,17 @@ func parseExtraBodyRetry(raw json.RawMessage) (ProviderRetryConfig, bool) {
 	cfg.MaxBackoff = parseDuration(parsed.MaxBackoff)
 	cfg.MaxRetryAfter = parseDuration(parsed.MaxRetryAfter)
 
+	if cfg.MaxAttempts == nil && cfg.InitialBackoff == nil && cfg.MaxBackoff == nil &&
+		cfg.MaxRetryAfter == nil && cfg.DisableJitter == nil && cfg.LogRetries == nil {
+		return ProviderRetryConfig{}, false
+	}
+
 	return cfg, true
 }
 
 // DefaultPolicy returns a Policy with standard gateway defaults:
 // 2 max attempts (1 initial + 1 retry), 100ms initial backoff, 3s max backoff,
-// 5s max Retry-After cap, factor 2.0, and 25% jitter.
+// 5s max Retry-After cap, factor 2.0, 25% jitter, and retry logging enabled.
 func DefaultPolicy() Policy {
 	return Policy{
 		MaxAttempts:    DefaultMaxAttempts,
@@ -191,6 +202,7 @@ func DefaultPolicy() Policy {
 		MaxRetryAfter:  DefaultMaxRetryAfter,
 		BackoffFactor:  DefaultBackoffFactor,
 		JitterFraction: DefaultJitterFraction,
+		LogRetries:     true,
 	}
 }
 
@@ -235,8 +247,8 @@ func defaultSleep(ctx context.Context, d time.Duration) error {
 }
 
 // ForProvider returns a copy of p customized for the given provider.
-// It checks for per-provider overrides registered via RegisterProviderRetry
-// and embedded in prov.ExtraBody under the "retry" key.
+// It checks for per-provider overrides registered via RegisterProviderRetry,
+// in prov.Extensions["retry"], or embedded in prov.ExtraBody under the "retry" key.
 // When LogRetries is enabled, it ensures provider ID is included in logs and callbacks.
 func (p Policy) ForProvider(prov *provider.Provider) Policy {
 	out := p
@@ -248,8 +260,18 @@ func (p Policy) ForProvider(prov *provider.Provider) Policy {
 		out.applyOverride(override)
 	}
 
-	if len(prov.ExtraBody) > 0 {
-		if override, ok := parseExtraBodyRetry(prov.ExtraBody); ok {
+	foundExt := false
+	if len(prov.Extensions) > 0 {
+		if raw, ok := prov.Extensions["retry"]; ok && len(raw) > 0 {
+			if override, ok := parseRetryConfig(raw); ok {
+				out.applyOverride(override)
+				foundExt = true
+			}
+		}
+	}
+
+	if !foundExt && len(prov.ExtraBody) > 0 {
+		if override, ok := parseRetryConfig(prov.ExtraBody); ok {
 			out.applyOverride(override)
 		}
 	}
@@ -827,3 +849,41 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, false, err
 	})
 }
+
+// CloseIdleConnections closes any idle connections on Base if it implements
+// a CloseIdleConnections method.
+func (t *Transport) CloseIdleConnections() {
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if ci, ok := base.(interface{ CloseIdleConnections() }); ok {
+		ci.CloseIdleConnections()
+	}
+}
+
+// ForProvider wraps base with a retry Transport customized for the given provider.
+// If base is nil, http.DefaultTransport is used.
+func ForProvider(prov *provider.Provider, base http.RoundTripper) *Transport {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if t, ok := base.(*Transport); ok {
+		base = t.Base
+		if base == nil {
+			base = http.DefaultTransport
+		}
+	}
+	return &Transport{
+		Base:   base,
+		Policy: DefaultPolicy().ForProvider(prov),
+	}
+}
+
+// DefaultRetryConfig returns standard gateway default retry settings.
+func DefaultRetryConfig() Policy {
+	return DefaultPolicy()
+}
+
+// RetryOptions is an alias for Policy.
+type RetryOptions = Policy

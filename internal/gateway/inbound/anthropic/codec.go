@@ -405,11 +405,22 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 				if err != nil {
 					return nil, err
 				}
-				parsed, err := url.Parse(imageURL)
-				if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-					return nil, codecInvalid(blockPath + ".source.url must be an absolute HTTP or HTTPS URL")
+				if strings.HasPrefix(imageURL, "data:") {
+					mediaType, data, ok := ir.ParseDataURL(imageURL)
+					if !ok || !strings.HasPrefix(mediaType, "image/") || data == "" {
+						return nil, codecInvalid(blockPath + ".source.url is an invalid data URL")
+					}
+					if _, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))); err != nil {
+						return nil, codecInvalid(blockPath + ".source.url must be base64")
+					}
+					block = ir.NewImageBlockBase64(mediaType, data)
+				} else {
+					parsed, err := url.Parse(imageURL)
+					if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+						return nil, codecInvalid(blockPath + ".source.url must be an absolute HTTP or HTTPS URL")
+					}
+					block = ir.NewImageBlockURL(imageURL)
 				}
-				block = ir.NewImageBlockURL(imageURL)
 				*preserve = *preserve || codecHasUnknown(source, "type", "url")
 			default:
 				// File-backed and future sources are retained in raw messages.

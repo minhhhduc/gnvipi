@@ -4,10 +4,12 @@ package policy
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -46,17 +48,34 @@ const (
 	ParamPreviousResponseID = "previous_response_id"
 )
 
+// Default limits for image validation.
+const (
+	// DefaultMaxImageBytes is the default maximum decoded image payload size (20 MB).
+	DefaultMaxImageBytes int64 = 20 * 1024 * 1024
+)
+
+// DefaultAllowedMediaTypes enumerates the standard multimodal image MIME types supported across protocols.
+var DefaultAllowedMediaTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/jpg":  true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
 // CapabilityOverrides allows per-provider overrides of adapter.Capabilities.
 type CapabilityOverrides struct {
-	Streaming         *bool `json:"streaming,omitempty"`
-	Tools             *bool `json:"tools,omitempty"`
-	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
-	Images            *bool `json:"images,omitempty"`
-	Reasoning         *bool `json:"reasoning,omitempty"`
-	StructuredOutput  *bool `json:"structured_output,omitempty"`
-	TopK              *bool `json:"top_k,omitempty"`
-	StatefulResponses *bool `json:"stateful_responses,omitempty"`
-	CountTokens       *bool `json:"count_tokens,omitempty"`
+	Streaming         *bool                    `json:"streaming,omitempty"`
+	Tools             *bool                    `json:"tools,omitempty"`
+	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
+	Images            *adapter.ImageCapability `json:"images,omitempty"`
+	Reasoning         *bool                    `json:"reasoning,omitempty"`
+	StructuredOutput  *bool                    `json:"structured_output,omitempty"`
+	TopK              *bool                    `json:"top_k,omitempty"`
+	StatefulResponses *bool                    `json:"stateful_responses,omitempty"`
+	CountTokens       *bool                    `json:"count_tokens,omitempty"`
+	MaxImageBytes     *int64                   `json:"max_image_bytes,omitempty"`
+	AllowedMediaTypes []string                 `json:"allowed_media_types,omitempty"`
 }
 
 // ApplyOverrides returns a copy of base with non-nil fields from overrides applied.
@@ -92,6 +111,16 @@ func ApplyOverrides(base adapter.Capabilities, overrides *CapabilityOverrides) a
 	if overrides.CountTokens != nil {
 		caps.CountTokens = *overrides.CountTokens
 	}
+	if overrides.MaxImageBytes != nil {
+		caps.MaxImageBytes = *overrides.MaxImageBytes
+	}
+	if overrides.AllowedMediaTypes != nil {
+		caps.AllowedMediaTypes = make([]string, len(overrides.AllowedMediaTypes))
+		copy(caps.AllowedMediaTypes, overrides.AllowedMediaTypes)
+	} else if base.AllowedMediaTypes != nil {
+		caps.AllowedMediaTypes = make([]string, len(base.AllowedMediaTypes))
+		copy(caps.AllowedMediaTypes, base.AllowedMediaTypes)
+	}
 	return caps
 }
 
@@ -112,6 +141,8 @@ type Config struct {
 	DefaultMode       Mode
 	ProviderModes     map[string]Mode
 	ProviderOverrides map[string]CapabilityOverrides
+	MaxImageBytes     int64
+	AllowedMediaTypes []string
 }
 
 // ModeForProvider returns the effective Mode for a given provider ID.
@@ -129,6 +160,13 @@ func (c *Config) ModeForProvider(providerID string) Mode {
 
 // CapabilitiesForProvider returns effective capabilities with per-provider overrides applied.
 func (c *Config) CapabilitiesForProvider(providerID string, base adapter.Capabilities) adapter.Capabilities {
+	if c != nil && c.MaxImageBytes > 0 && base.MaxImageBytes == 0 {
+		base.MaxImageBytes = c.MaxImageBytes
+	}
+	if c != nil && len(c.AllowedMediaTypes) > 0 && len(base.AllowedMediaTypes) == 0 {
+		base.AllowedMediaTypes = make([]string, len(c.AllowedMediaTypes))
+		copy(base.AllowedMediaTypes, c.AllowedMediaTypes)
+	}
 	if c != nil && c.ProviderOverrides != nil {
 		if o, ok := c.ProviderOverrides[providerID]; ok {
 			return ApplyOverrides(base, &o)
@@ -222,7 +260,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 		unsupported = append(unsupported, ParamParallelToolCalls)
 	}
 
-	if hasImages(req) && !caps.Images {
+	if hasUnsupportedImages(req, caps.Images) {
 		unsupported = append(unsupported, ParamImages)
 	}
 
@@ -239,6 +277,9 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 	}
 
 	if len(unsupported) == 0 {
+		if err := validateImages(req, caps.MaxImageBytes, caps.AllowedMediaTypes); err != nil {
+			return nil, err
+		}
 		return &Result{}, nil
 	}
 
@@ -279,7 +320,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 			}
 			dropped = append(dropped, ParamParallelToolCalls)
 		case ParamImages:
-			if err := dropImages(req); err != nil {
+			if err := dropUnsupportedImages(req, caps.Images); err != nil {
 				return nil, err
 			}
 			dropped = append(dropped, ParamImages)
@@ -307,6 +348,9 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 
 	sort.Strings(dropped)
 	log.Printf("[gateway] dropped unsupported parameters: %s", strings.Join(dropped, ", "))
+	if err := validateImages(req, caps.MaxImageBytes, caps.AllowedMediaTypes); err != nil {
+		return nil, err
+	}
 	return &Result{DroppedParams: dropped}, nil
 }
 
@@ -367,35 +411,99 @@ func hasNMultiple(req *ir.Request) bool {
 	return false
 }
 
-func hasImages(req *ir.Request) bool {
+func isImageSupported(img *ir.Image, imgCap adapter.ImageCapability) bool {
+	if img == nil {
+		return true
+	}
+	if !imgCap.Enabled() {
+		return false
+	}
+	if img.IsBase64() && !imgCap.SupportsBase64() {
+		return false
+	}
+	if img.IsURL() && !imgCap.SupportsURL() {
+		return false
+	}
+	return true
+}
+
+func hasUnsupportedImages(req *ir.Request, imgCap adapter.ImageCapability) bool {
 	if req == nil {
 		return false
 	}
+	var found bool
+	walkImages(req, func(img *ir.Image) bool {
+		if !isImageSupported(img, imgCap) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func walkImages(req *ir.Request, fn func(img *ir.Image) bool) {
+	if req == nil {
+		return
+	}
 	for _, msg := range req.Messages {
 		for _, b := range msg.Content {
-			if b.Type == ir.BlockImage || b.Image != nil {
-				return true
+			if (b.Type == ir.BlockImage || b.Image != nil) && b.Image != nil {
+				if !fn(b.Image) {
+					return
+				}
+			}
+			if b.Type == ir.BlockToolResult && b.ToolResult != nil {
+				for _, tb := range b.ToolResult.Content {
+					if (tb.Type == ir.BlockImage || tb.Image != nil) && tb.Image != nil {
+						if !fn(tb.Image) {
+							return
+						}
+					}
+				}
 			}
 		}
 	}
 	for _, inst := range req.Instructions {
 		for _, b := range inst.Content {
-			if b.Type == ir.BlockImage || b.Image != nil {
-				return true
+			if (b.Type == ir.BlockImage || b.Image != nil) && b.Image != nil {
+				if !fn(b.Image) {
+					return
+				}
 			}
 		}
 	}
-	return false
 }
 
-func dropImages(req *ir.Request) error {
+func dropUnsupportedImages(req *ir.Request, imgCap adapter.ImageCapability) error {
 	if req == nil {
 		return nil
 	}
 	for i := range req.Messages {
 		var filtered []ir.Block
 		for _, b := range req.Messages[i].Content {
-			if b.Type != ir.BlockImage && b.Image == nil {
+			switch {
+			case b.Type == ir.BlockImage || b.Image != nil:
+				if isImageSupported(b.Image, imgCap) {
+					filtered = append(filtered, b)
+				}
+			case b.Type == ir.BlockToolResult && b.ToolResult != nil:
+				var toolFiltered []ir.Block
+				for _, tb := range b.ToolResult.Content {
+					if tb.Type == ir.BlockImage || tb.Image != nil {
+						if isImageSupported(tb.Image, imgCap) {
+							toolFiltered = append(toolFiltered, tb)
+						}
+					} else {
+						toolFiltered = append(toolFiltered, tb)
+					}
+				}
+				bCopy := b
+				trCopy := *b.ToolResult
+				trCopy.Content = toolFiltered
+				bCopy.ToolResult = &trCopy
+				filtered = append(filtered, bCopy)
+			default:
 				filtered = append(filtered, b)
 			}
 		}
@@ -411,7 +519,11 @@ func dropImages(req *ir.Request) error {
 	for i := range req.Instructions {
 		var filtered []ir.Block
 		for _, b := range req.Instructions[i].Content {
-			if b.Type != ir.BlockImage && b.Image == nil {
+			if b.Type == ir.BlockImage || b.Image != nil {
+				if isImageSupported(b.Image, imgCap) {
+					filtered = append(filtered, b)
+				}
+			} else {
 				filtered = append(filtered, b)
 			}
 		}
@@ -425,4 +537,121 @@ func dropImages(req *ir.Request) error {
 		req.Instructions[i].Content = filtered
 	}
 	return nil
+}
+
+func validateImages(req *ir.Request, maxBytes int64, allowedTypes []string) error {
+	if req == nil {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxImageBytes
+	}
+	var allowedMap map[string]bool
+	if len(allowedTypes) > 0 {
+		allowedMap = make(map[string]bool, len(allowedTypes))
+		for _, t := range allowedTypes {
+			norm := strings.ToLower(strings.TrimSpace(t))
+			if norm == "image/jpg" {
+				norm = "image/jpeg"
+			}
+			allowedMap[norm] = true
+		}
+	} else {
+		allowedMap = DefaultAllowedMediaTypes
+	}
+
+	var validationErr error
+	walkImages(req, func(img *ir.Image) bool {
+		if img == nil {
+			return true
+		}
+		if err := validateSingleImage(img, maxBytes, allowedMap); err != nil {
+			validationErr = err
+			return false
+		}
+		return true
+	})
+	return validationErr
+}
+
+func validateSingleImage(img *ir.Image, maxBytes int64, allowedMap map[string]bool) error {
+	if img.IsBase64() {
+		mediaType := img.MediaType
+		data := img.Base64Data()
+		if strings.HasPrefix(img.URL, "data:") {
+			parsedType, parsedData, ok := ir.ParseDataURL(img.URL)
+			if !ok {
+				return &gwerr.Error{
+					Kind:    gwerr.KindInvalidRequest,
+					Status:  http.StatusBadRequest,
+					Message: "inline image is not a valid base64 data URL",
+				}
+			}
+			if mediaType == "" {
+				mediaType = parsedType
+			}
+			if data == "" {
+				data = parsedData
+			}
+		}
+
+		mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+		if mediaType == "image/jpg" {
+			mediaType = "image/jpeg"
+		}
+		if !strings.HasPrefix(mediaType, "image/") || !allowedMap[mediaType] {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: fmt.Sprintf("invalid or unsupported image media type %q", mediaType),
+			}
+		}
+
+		if data == "" {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: "base64 image payload must not be empty",
+			}
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(data)
+		if err != nil {
+			decoded, err = base64.RawStdEncoding.DecodeString(data)
+			if err != nil {
+				return &gwerr.Error{
+					Kind:    gwerr.KindInvalidRequest,
+					Status:  http.StatusBadRequest,
+					Message: "image data is not valid base64",
+				}
+			}
+		}
+
+		if int64(len(decoded)) > maxBytes {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: fmt.Sprintf("image size (%d bytes) exceeds maximum allowed size (%d bytes)", len(decoded), maxBytes),
+			}
+		}
+		return nil
+	}
+
+	if img.IsURL() {
+		parsed, err := url.Parse(img.URL)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return &gwerr.Error{
+				Kind:    gwerr.KindInvalidRequest,
+				Status:  http.StatusBadRequest,
+				Message: fmt.Sprintf("image URL %q must be an absolute HTTP or HTTPS URL", img.URL),
+			}
+		}
+		return nil
+	}
+
+	return &gwerr.Error{
+		Kind:    gwerr.KindInvalidRequest,
+		Status:  http.StatusBadRequest,
+		Message: "image must contain either URL or base64 data",
+	}
 }

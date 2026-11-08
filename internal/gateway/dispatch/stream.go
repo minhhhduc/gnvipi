@@ -18,6 +18,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
@@ -117,6 +118,14 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 		outgoing = outgoing.WithContext(ctx)
 	}
 	if err := h.policy.ValidateRequest(outgoing); err != nil {
+		if outgoing.Body != nil {
+			err = errors.Join(err, outgoing.Body.Close())
+		}
+		terminal = err
+		writeTranslationError(c, request.InboundProtocol, err)
+		return
+	}
+	if err := reliability.MakeReplayable(outgoing); err != nil {
 		if outgoing.Body != nil {
 			err = errors.Join(err, outgoing.Body.Close())
 		}

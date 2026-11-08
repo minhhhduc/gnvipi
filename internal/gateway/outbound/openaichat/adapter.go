@@ -29,7 +29,7 @@ func (*Adapter) Protocol() ir.Protocol { return ir.ProtocolOpenAIChat }
 func (*Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
 		Streaming:        true,
-		Images:           true,
+		Images:           adapter.ImageCapabilityBoth,
 		Reasoning:        true,
 		StructuredOutput: true,
 		TopK:             true,

@@ -191,11 +191,12 @@ func encodeImage(image *ir.Image) (map[string]any, error) {
 	if image == nil {
 		return nil, invalid("image payload is required")
 	}
+	base64Data := image.Base64Data()
 	switch {
-	case image.URL != "" && image.Base64 == "":
+	case image.URL != "" && base64Data == "":
 		return map[string]any{"type": "input_image", "image_url": image.URL}, nil
-	case image.URL == "" && image.Base64 != "" && strings.HasPrefix(image.MediaType, "image/"):
-		return map[string]any{"type": "input_image", "image_url": "data:" + image.MediaType + ";base64," + image.Base64}, nil
+	case image.URL == "" && base64Data != "" && strings.HasPrefix(image.MediaType, "image/"):
+		return map[string]any{"type": "input_image", "image_url": "data:" + image.MediaType + ";base64," + base64Data}, nil
 	default:
 		return nil, invalid("image must contain either one URL or base64 data with an image media type")
 	}

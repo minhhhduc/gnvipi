@@ -28,6 +28,7 @@ func TestCycleCrossProtocol_AnthropicToOpenAIChat(t *testing.T) {
 			t.Errorf("p1 expected path /v1/messages, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "10")
 		w.WriteHeader(http.StatusTooManyRequests)
 		if _, err := w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}`)); err != nil {
 			t.Errorf("write p1 response: %v", err)
@@ -208,6 +209,7 @@ func TestCycleCrossProtocol_CountTokensSingleAttempt(t *testing.T) {
 	s1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&p1Calls, 1)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "10")
 		w.WriteHeader(http.StatusTooManyRequests)
 		if _, err := w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}`)); err != nil {
 			t.Errorf("write p1 response: %v", err)
