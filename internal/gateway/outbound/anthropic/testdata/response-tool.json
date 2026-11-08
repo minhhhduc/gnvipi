@@ -1,0 +1,36 @@
+{
+  "id": "msg_tool_resp",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet",
+  "content": [
+    {
+      "type": "text",
+      "text": "I will lookup the weather and item."
+    },
+    {
+      "type": "tool_use",
+      "id": "call-1",
+      "name": "lookup",
+      "input": {
+        "id": 123
+      }
+    },
+    {
+      "type": "tool_use",
+      "id": "call-2",
+      "name": "weather",
+      "input": {
+        "city": "Hanoi"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 15,
+    "output_tokens": 25,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}

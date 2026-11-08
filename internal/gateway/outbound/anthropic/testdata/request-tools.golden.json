@@ -1,0 +1,103 @@
+{
+  "method": "POST",
+  "url": "https://upstream.invalid/prefix/v1/messages",
+  "headers": {
+    "Content-Type": ["application/json"]
+  },
+  "body": {
+    "model": "claude-tool-resolved",
+    "max_tokens": 4096,
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Find value",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      {
+        "name": "weather",
+        "description": "Get weather",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "auto",
+      "disable_parallel_tool_use": false
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Lookup item and check weather"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "lookup",
+            "input": {
+              "id": 123
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "call-2",
+            "name": "weather",
+            "input": {
+              "city": "Hanoi"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-1",
+            "content": "Item found"
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-2",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "image/png",
+                  "data": "AA=="
+                }
+              }
+            ]
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-3",
+            "content": "Failed to fetch",
+            "is_error": true
+          }
+        ]
+      }
+    ]
+  }
+}
