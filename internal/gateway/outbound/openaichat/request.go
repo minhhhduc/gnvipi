@@ -203,15 +203,7 @@ func encodeMessages(request *ir.Request, instructionRole ir.InstructionRole) ([]
 			if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" && enc.Role == "assistant" {
 				prev := &messages[len(messages)-1]
 				prev.ToolCalls = append(prev.ToolCalls, enc.ToolCalls...)
-				if prev.Content == nil {
-					prev.Content = enc.Content
-				} else if enc.Content != nil {
-					prevStr, ok1 := prev.Content.(string)
-					encStr, ok2 := enc.Content.(string)
-					if ok1 && ok2 {
-						prev.Content = prevStr + "\n" + encStr
-					}
-				}
+				prev.Content = coalesceContent(prev.Content, enc.Content)
 				if enc.ReasoningContent != "" {
 					if prev.ReasoningContent != "" {
 						prev.ReasoningContent += "\n" + enc.ReasoningContent
@@ -255,7 +247,10 @@ func encodeMessage(message *ir.Message) ([]chatMessage, error) {
 				if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
 					return nil, fmt.Errorf("tool use requires an ID and name")
 				}
-				arguments := encodeToolArguments(block.ToolUse.Input)
+				arguments, err := encodeToolArguments(block.ToolUse.Input)
+				if err != nil {
+					return nil, err
+				}
 				encoded.ToolCalls = append(encoded.ToolCalls, chatToolCall{ID: block.ToolUse.ID, Type: "function", Function: chatToolFunction{Name: block.ToolUse.Name, Arguments: arguments}})
 			default:
 				return nil, fmt.Errorf("block type %q is not valid assistant content", block.Type)
@@ -342,18 +337,53 @@ func encodeVisibleContent(blocks []ir.Block, allowImages bool) (any, error) {
 	return parts, nil
 }
 
-func encodeToolArguments(input json.RawMessage) string {
+func encodeToolArguments(input json.RawMessage) (string, error) {
 	input = bytes.TrimSpace(input)
 	if len(input) == 0 {
-		return "{}"
+		return "{}", nil
+	}
+	if !json.Valid(input) {
+		return "", fmt.Errorf("tool arguments contain invalid JSON")
 	}
 	if input[0] == '"' {
 		var text string
 		if err := json.Unmarshal(input, &text); err == nil {
-			return text
+			return text, nil
 		}
 	}
-	return string(input)
+	return string(input), nil
+}
+
+func coalesceContent(prev, enc any) any {
+	if prev == nil {
+		return enc
+	}
+	if enc == nil {
+		return prev
+	}
+	prevStr, ok1 := prev.(string)
+	encStr, ok2 := enc.(string)
+	if ok1 && ok2 {
+		return prevStr + "\n" + encStr
+	}
+	prevParts := toContentParts(prev)
+	encParts := toContentParts(enc)
+	merged := make([]chatContentPart, 0, len(prevParts)+len(encParts))
+	merged = append(merged, prevParts...)
+	merged = append(merged, encParts...)
+	return merged
+}
+
+func toContentParts(content any) []chatContentPart {
+	switch c := content.(type) {
+	case string:
+		s := c
+		return []chatContentPart{{Type: "text", Text: &s}}
+	case []chatContentPart:
+		return c
+	default:
+		return nil
+	}
 }
 
 func encodeResponseFormat(format *ir.ResponseFormat) (any, error) {

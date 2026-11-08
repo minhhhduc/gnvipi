@@ -508,3 +508,92 @@ func TestBuildRequestParallelToolResultsInSingleMessageAndCoalesceAssistant(t *t
 		t.Fatalf("tool message 2 mismatch: %+v", wire.Messages[3])
 	}
 }
+
+func TestBuildRequestRejectsInvalidJSONToolArguments(t *testing.T) {
+	out := openaichat.New()
+	req := &ir.Request{
+		Model: "test-model",
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi")),
+			ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock("call_1", "lookup", json.RawMessage(`{invalid: json`))),
+		},
+	}
+	_, err := out.BuildRequest(t.Context(), req, adapter.Target{BaseURL: "https://api.openai.com/v1", Model: "gpt-4o"})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON tool arguments, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool arguments contain invalid JSON") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestBuildRequestCoalesceAssistantMultipartContent(t *testing.T) {
+	out := openaichat.New()
+	req := &ir.Request{
+		Model: "test-model",
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("run")),
+			// msg 1: multipart (2 text blocks)
+			ir.NewMessage(ir.RoleAssistant, ir.NewTextBlock("part 1"), ir.NewTextBlock("part 2")),
+			// msg 2: single string (1 text block)
+			ir.NewMessage(ir.RoleAssistant, ir.NewTextBlock("part 3")),
+			// msg 3: multipart (2 text blocks) + tool call
+			ir.NewMessage(ir.RoleAssistant,
+				ir.NewTextBlock("part 4"),
+				ir.NewTextBlock("part 5"),
+				ir.NewToolUseBlock("call_1", "lookup", []byte(`{"q":"test"}`)),
+			),
+		},
+	}
+	httpReq, err := out.BuildRequest(t.Context(), req, adapter.Target{BaseURL: "https://api.openai.com/v1", Model: "gpt-4o"})
+	if err != nil {
+		t.Fatalf("BuildRequest failed: %v", err)
+	}
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if closeErr := httpReq.Body.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wire struct {
+		Messages []struct {
+			Role      string          `json:"role"`
+			Content   json.RawMessage `json:"content"`
+			ToolCalls []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("failed to unmarshal request body: %v\nbody: %s", err, string(bodyBytes))
+	}
+
+	if len(wire.Messages) != 2 {
+		t.Fatalf("expected 2 messages (1 user, 1 coalesced assistant), got %d", len(wire.Messages))
+	}
+	asst := wire.Messages[1]
+	if asst.Role != "assistant" {
+		t.Fatalf("expected assistant role, got %s", asst.Role)
+	}
+	if len(asst.ToolCalls) != 1 || asst.ToolCalls[0].ID != "call_1" {
+		t.Fatalf("expected tool call preserved, got %+v", asst.ToolCalls)
+	}
+
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(asst.Content, &parts); err != nil {
+		t.Fatalf("failed to unmarshal assistant content parts: %v\ncontent: %s", err, string(asst.Content))
+	}
+	if len(parts) != 5 {
+		t.Fatalf("expected 5 content parts, got %d: %+v", len(parts), parts)
+	}
+	for i, want := range []string{"part 1", "part 2", "part 3", "part 4", "part 5"} {
+		if parts[i].Type != "text" || parts[i].Text != want {
+			t.Fatalf("part %d mismatch: got %+v, want text %q", i, parts[i], want)
+		}
+	}
+}

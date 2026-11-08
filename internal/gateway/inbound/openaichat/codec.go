@@ -74,7 +74,10 @@ type chatFunction struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Arguments   json.RawMessage `json:"arguments,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
+	// Strict represents OpenAI's Structured Outputs flag for function calling.
+	// Because canonical ir.Tool does not define a Strict field, strictness is preserved
+	// in request Extensions["tools"] via the unmarshaled raw tool payload.
+	Strict *bool `json:"strict,omitempty"`
 }
 
 type chatTool struct {
@@ -165,11 +168,13 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 	if wire.MaxCompletionTokens != nil {
 		result.Sampling.MaxOutputTokens = wire.MaxCompletionTokens
 	}
-	for _, field := range []string{"model", "max_completion_tokens", "temperature", "top_p", "seed", "n", "stream", "reasoning_effort", "user"} {
+	for _, field := range []string{"model", "max_completion_tokens", "temperature", "top_p", "seed", "n", "stream", "reasoning_effort", "user", "functions", "function_call"} {
 		if !absentJSON(extensions[field]) {
 			delete(extensions, field)
 		}
 	}
+	delete(extensions, "functions")
+	delete(extensions, "function_call")
 	if wire.MaxCompletionTokens == nil && !absentJSON(extensions["max_tokens"]) {
 		delete(extensions, "max_tokens")
 	}
@@ -285,7 +290,6 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		result.Tools = append(result.Tools, ir.Tool{Name: tool.Function.Name, Description: tool.Function.Description, Schema: tool.Function.Parameters})
 	}
 	if len(result.Tools) == 0 && len(wire.Functions) > 0 {
-		delete(extensions, "functions")
 		for _, fn := range wire.Functions {
 			if fn.Name == "" || (!absentJSON(fn.Parameters) && !jsonObject(fn.Parameters)) {
 				return nil, invalidChat("functions requires a name and object parameters")
@@ -320,7 +324,6 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 			}
 		}
 	} else if !absentJSON(wire.FunctionCall) {
-		delete(extensions, "function_call")
 		var mode string
 		if err := json.Unmarshal(wire.FunctionCall, &mode); err == nil {
 			result.ToolChoice = &ir.ToolChoice{}
