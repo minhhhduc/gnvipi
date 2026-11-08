@@ -126,6 +126,9 @@ func (h *translation) ServeStream(c *gin.Context, body []byte, inbound adapter.I
 
 	upstreamStream, err := h.outbound.ParseStream(ctx, response)
 	if err != nil {
+		if response.Body != nil {
+			err = errors.Join(err, response.Body.Close())
+		}
 		terminal = err
 		writeTranslationError(c, request.InboundProtocol, err)
 		return
@@ -217,8 +220,13 @@ func (s *usageObservingStream) Next(ctx context.Context) (ir.StreamEvent, error)
 			s.onUsage(*ev.Usage)
 		}
 	case ir.EventError:
-		if ev.Error != nil && s.onError != nil {
-			s.onError(ev.Error)
+		if ev.Error != nil {
+			redacted := *ev.Error
+			redacted.Message = redact.Default.Text(redacted.Message)
+			ev.Error = &redacted
+			if s.onError != nil {
+				s.onError(ev.Error)
+			}
 		}
 	}
 	return ev, nil

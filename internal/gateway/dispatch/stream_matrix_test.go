@@ -1,24 +1,49 @@
 package dispatch_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/dispatch"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gatewaytest"
+	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
+	inboundchat "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openaichat"
+	inboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	outboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/outbound/anthropic"
+	outboundchat "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openaichat"
+	outboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/outbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 )
+
+func setupStreamMatrixRegistry() *adapter.Registry {
+	r := adapter.NewRegistry()
+	r.RegisterInbound(inboundanthropic.New())
+	chatIn := inboundchat.New()
+	chatIn.Created = 1700000000
+	r.RegisterInbound(chatIn)
+	respIn := inboundresponses.New()
+	respIn.Created = 1700000000
+	r.RegisterInbound(respIn)
+	r.RegisterOutbound(outboundanthropic.New())
+	r.RegisterOutbound(outboundchat.New())
+	r.RegisterOutbound(outboundresponses.New())
+	return r
+}
 
 type streamMatrixRecorder struct {
 	mu          sync.Mutex
@@ -63,6 +88,7 @@ func (r *streamMatrixRecorder) waitCompletion(t *testing.T) *core.Completion {
 
 type streamMatrixPair struct {
 	name                 string
+	goldenFile           string
 	inboundProto         ir.Protocol
 	inboundPath          string
 	upstreamProto        ir.Protocol
@@ -212,6 +238,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 	pairs := []streamMatrixPair{
 		{
 			name:                 "Chat->Anthropic",
+			goldenFile:           "chat_from_anthropic.golden.sse",
 			inboundProto:         ir.ProtocolOpenAIChat,
 			inboundPath:          gatewaytest.RouteChat,
 			upstreamProto:        ir.ProtocolAnthropicMessages,
@@ -223,6 +250,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 		},
 		{
 			name:                 "Chat->Responses",
+			goldenFile:           "chat_from_responses.golden.sse",
 			inboundProto:         ir.ProtocolOpenAIChat,
 			inboundPath:          gatewaytest.RouteChat,
 			upstreamProto:        ir.ProtocolOpenAIResponses,
@@ -234,6 +262,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 		},
 		{
 			name:                 "Anthropic->Chat",
+			goldenFile:           "anthropic_from_chat.golden.sse",
 			inboundProto:         ir.ProtocolAnthropicMessages,
 			inboundPath:          gatewaytest.RouteMessages,
 			upstreamProto:        ir.ProtocolOpenAIChat,
@@ -245,6 +274,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 		},
 		{
 			name:                 "Anthropic->Responses",
+			goldenFile:           "anthropic_from_responses.golden.sse",
 			inboundProto:         ir.ProtocolAnthropicMessages,
 			inboundPath:          gatewaytest.RouteMessages,
 			upstreamProto:        ir.ProtocolOpenAIResponses,
@@ -256,6 +286,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 		},
 		{
 			name:                 "Responses->Chat",
+			goldenFile:           "responses_from_chat.golden.sse",
 			inboundProto:         ir.ProtocolOpenAIResponses,
 			inboundPath:          gatewaytest.RouteResponses,
 			upstreamProto:        ir.ProtocolOpenAIChat,
@@ -267,6 +298,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 		},
 		{
 			name:                 "Responses->Anthropic",
+			goldenFile:           "responses_from_anthropic.golden.sse",
 			inboundProto:         ir.ProtocolOpenAIResponses,
 			inboundPath:          gatewaytest.RouteResponses,
 			upstreamProto:        ir.ProtocolAnthropicMessages,
@@ -306,7 +338,7 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 
 			recorder := newStreamMatrixRecorder()
 			dispatcher := dispatch.New(resolver, &relay.Options{Recorder: recorder})
-			dispatcher.Registry = setupMatrixRegistry()
+			dispatcher.Registry = setupStreamMatrixRegistry()
 
 			engine := gin.New()
 			engine.Use(dispatcher.Handle)
@@ -325,7 +357,18 @@ func TestCrossProtocolStreamingMatrix(t *testing.T) {
 				t.Errorf("content-type = %q, want text/event-stream", ct)
 			}
 
-			p.checkClientSSE(t, w.Body.String())
+			gotSSE := w.Body.String()
+			p.checkClientSSE(t, gotSSE)
+
+			goldenPath := filepath.Join("testdata", "stream", p.goldenFile)
+			wantBytes, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("read golden SSE %s: %v", goldenPath, err)
+			}
+			wantSSE := strings.ReplaceAll(string(wantBytes), "\r\n", "\n")
+			if gotSSE != wantSSE {
+				t.Errorf("client SSE mismatch against %s:\ngot:\n%s\nwant:\n%s", goldenPath, gotSSE, wantSSE)
+			}
 
 			if p.checkUpstreamRequest != nil {
 				reqs := upstream.Requests()
@@ -468,22 +511,24 @@ func TestCrossProtocolStreamingStopReasons(t *testing.T) {
 func TestCrossProtocolStreamingErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	const secretKey = "sk-midstream-secret-key-12345"
+
 	chatErrSSE := []string{
 		"data: " + `{"id":"chatcmpl_err","object":"chat.completion.chunk","model":"upstream-model","choices":[{"index":0,"delta":{"role":"assistant","content":"First chunk"},"finish_reason":null}]}` + "\n\n",
-		"data: " + `{"error":{"message":"midstream rate limit exceeded","type":"rate_limit_exceeded"}}` + "\n\n",
+		"data: " + `{"error":{"message":"midstream rate limit exceeded: ` + secretKey + `","type":"rate_limit_exceeded"}}` + "\n\n",
 	}
 
 	anthropicErrSSE := []string{
 		"event: message_start\ndata: " + `{"type":"message_start","message":{"id":"msg_err","type":"message","role":"assistant","model":"upstream-model","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}` + "\n\n",
 		"event: content_block_start\ndata: " + `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"First chunk"}}` + "\n\n",
-		"event: error\ndata: " + `{"type":"error","error":{"type":"rate_limit_error","message":"midstream rate limit exceeded"}}` + "\n\n",
+		"event: error\ndata: " + `{"type":"error","error":{"type":"rate_limit_error","message":"midstream rate limit exceeded: ` + secretKey + `"}}` + "\n\n",
 	}
 
 	responsesErrSSE := []string{
 		"event: response.created\ndata: " + `{"type":"response.created","response":{"id":"resp_err","object":"response","status":"in_progress","model":"upstream-model"}}` + "\n\n",
 		"event: response.output_item.added\ndata: " + `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_0","type":"message","status":"in_progress","role":"assistant"}}` + "\n\n",
 		"event: response.output_text.delta\ndata: " + `{"type":"response.output_text.delta","output_index":0,"delta":"First chunk"}` + "\n\n",
-		"event: response.failed\ndata: " + `{"type":"response.failed","response":{"id":"resp_err","status":"failed","error":{"code":"rate_limit_exceeded","message":"midstream rate limit exceeded"}}}` + "\n\n",
+		"event: response.failed\ndata: " + `{"type":"response.failed","response":{"id":"resp_err","status":"failed","error":{"code":"rate_limit_exceeded","message":"midstream rate limit exceeded: ` + secretKey + `"}}}` + "\n\n",
 	}
 
 	chatPayload := `{"model":"client-stream-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`
@@ -518,7 +563,7 @@ func TestCrossProtocolStreamingErrors(t *testing.T) {
 				Name:     "Err Provider",
 				Protocol: tc.upstreamProto,
 				BaseURL:  upstream.URL(),
-				Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "key"},
+				Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: secretKey},
 			}
 
 			resolver := staticResolver{
@@ -534,7 +579,7 @@ func TestCrossProtocolStreamingErrors(t *testing.T) {
 
 			recorder := newStreamMatrixRecorder()
 			dispatcher := dispatch.New(resolver, &relay.Options{Recorder: recorder})
-			dispatcher.Registry = setupMatrixRegistry()
+			dispatcher.Registry = setupStreamMatrixRegistry()
 
 			engine := gin.New()
 			engine.Use(dispatcher.Handle)
@@ -545,15 +590,142 @@ func TestCrossProtocolStreamingErrors(t *testing.T) {
 
 			engine.ServeHTTP(w, req)
 
-			if !strings.Contains(w.Body.String(), "midstream rate limit exceeded") {
-				t.Fatalf("expected error message in stream body, got:\n%s", w.Body.String())
+			clientBody := w.Body.String()
+			if !strings.Contains(clientBody, "midstream rate limit exceeded: [redacted]") {
+				t.Fatalf("expected redacted error message in stream body, got:\n%s", clientBody)
+			}
+			if strings.Contains(clientBody, secretKey) {
+				t.Fatalf("secret key leaked in client stream body:\n%s", clientBody)
 			}
 
 			completion := recorder.waitCompletion(t)
 			if completion.Err == nil {
 				t.Fatal("expected completion error for mid-stream error")
 			}
+			if strings.Contains(completion.Err.Error(), secretKey) {
+				t.Fatalf("secret key leaked in completion error: %v", completion.Err)
+			}
 		})
+	}
+}
+
+type flushObservingRecorder struct {
+	*httptest.ResponseRecorder
+	mu                 sync.Mutex
+	buf                bytes.Buffer
+	targetSubstring    string
+	firstDeltaObserved chan struct{}
+	once               sync.Once
+}
+
+func (r *flushObservingRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.buf.Write(p)
+	hasTarget := strings.Contains(r.buf.String(), r.targetSubstring)
+	r.mu.Unlock()
+	n, err := r.ResponseRecorder.Write(p)
+	if hasTarget {
+		r.once.Do(func() {
+			close(r.firstDeltaObserved)
+		})
+	}
+	return n, err
+}
+
+func TestCrossProtocolStreamingImmediateFirstDeltaFlush(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	releaseUpstream := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+
+		firstFrames := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m_flush\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"upstream-model\",\"content\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":0}}}\n\n" +
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n"
+		if _, err := w.Write([]byte(firstFrames)); err != nil {
+			t.Errorf("write first frames: %v", err)
+			return
+		}
+		flusher.Flush()
+
+		select {
+		case <-releaseUpstream:
+		case <-r.Context().Done():
+			return
+		}
+
+		restFrames := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n" +
+			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+		if _, err := w.Write([]byte(restFrames)); err != nil {
+			t.Errorf("write rest frames: %v", err)
+			return
+		}
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	prov := provider.Provider{
+		ID:       "flush-provider",
+		Name:     "Flush Provider",
+		Protocol: ir.ProtocolAnthropicMessages,
+		BaseURL:  server.URL,
+		Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "key"},
+	}
+
+	resolver := staticResolver{
+		routes: map[string]routing.Route{
+			"client-stream-model": {
+				Kind:             routing.Custom,
+				Provider:         &prov,
+				UpstreamModel:    "upstream-model",
+				UpstreamProtocol: ir.ProtocolAnthropicMessages,
+			},
+		},
+	}
+
+	recorder := newStreamMatrixRecorder()
+	dispatcher := dispatch.New(resolver, &relay.Options{Recorder: recorder})
+	dispatcher.Registry = setupStreamMatrixRegistry()
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(`{"model":"client-stream-model","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	obs := &flushObservingRecorder{
+		ResponseRecorder:   httptest.NewRecorder(),
+		targetSubstring:    `"content":"Hello "`,
+		firstDeltaObserved: make(chan struct{}),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		engine.ServeHTTP(obs, req)
+		close(done)
+	}()
+
+	// Prove the first translated delta reached the client BEFORE the upstream finished.
+	select {
+	case <-obs.firstDeltaObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first delta to flush to client while upstream was still open")
+	}
+
+	close(releaseUpstream)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream completion after releasing upstream")
+	}
+
+	if !strings.Contains(obs.Body.String(), `"content":"world"`) {
+		t.Errorf("expected second delta in completed response, got:\n%s", obs.Body.String())
 	}
 }
 

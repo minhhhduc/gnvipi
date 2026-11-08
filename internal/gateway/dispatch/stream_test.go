@@ -72,9 +72,10 @@ func (fakeStreamInbound) EncodeStream(ctx context.Context, events adapter.Stream
 }
 
 type fakeStreamOutbound struct {
-	protocol  ir.Protocol
-	events    []ir.StreamEvent
-	streamErr error
+	protocol      ir.Protocol
+	events        []ir.StreamEvent
+	streamErr     error
+	onParseStream func(*http.Response)
 }
 
 func (f fakeStreamOutbound) Protocol() ir.Protocol { return f.protocol }
@@ -97,10 +98,10 @@ func (fakeStreamOutbound) ParseResponse(*http.Response) (*ir.Response, error) {
 }
 
 func (f fakeStreamOutbound) ParseStream(_ context.Context, resp *http.Response) (adapter.Stream, error) {
+	if f.onParseStream != nil {
+		f.onParseStream(resp)
+	}
 	if f.streamErr != nil {
-		if err := resp.Body.Close(); err != nil {
-			return nil, err
-		}
 		return nil, f.streamErr
 	}
 	return &fakeStreamIterator{events: f.events, body: resp.Body}, nil
@@ -399,5 +400,61 @@ func TestStreamTranslationIdleTimeout(t *testing.T) {
 	completion := receiveTranslationCompletion(t, recorder)
 	if !errors.Is(completion.Err, context.DeadlineExceeded) && !errors.Is(completion.Err, context.Canceled) {
 		t.Fatalf("expected timeout error in completion, got: %v", completion.Err)
+	}
+}
+
+type closeTrackingBody struct {
+	io.ReadCloser
+	closed bool
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed = true
+	return b.ReadCloser.Close()
+}
+
+func TestStreamTranslationParseStreamErrorClosesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("not-sse\n\n")); err != nil {
+			t.Errorf("write body: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	var trackedBody *closeTrackingBody
+	prov := translationProvider(t, server.URL)
+	inbound := fakeStreamInbound{protocol: ir.ProtocolOpenAIChat}
+	outbound := fakeStreamOutbound{
+		protocol:  prov.Protocol,
+		streamErr: &gwerr.Error{Kind: gwerr.KindInternal, Message: "invalid stream header"},
+		onParseStream: func(resp *http.Response) {
+			trackedBody = &closeTrackingBody{ReadCloser: resp.Body}
+			resp.Body = trackedBody
+		},
+	}
+
+	registry := adapter.NewRegistry()
+	registry.RegisterInbound(inbound)
+	registry.RegisterOutbound(outbound)
+
+	recorder := newTranslationRecorder()
+	dispatcher := translationDispatcher(t, &prov, registry, recorder)
+
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"client-alias","stream":true}`))
+	out := httptest.NewRecorder()
+
+	engine.ServeHTTP(out, req)
+
+	if trackedBody == nil || !trackedBody.closed {
+		t.Fatal("expected response.Body to be closed when ParseStream returns an error")
+	}
+	completion := receiveTranslationCompletion(t, recorder)
+	if completion.Err == nil {
+		t.Fatal("expected completion error when ParseStream fails")
 	}
 }
