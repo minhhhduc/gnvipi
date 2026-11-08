@@ -362,6 +362,10 @@ func compatProviders(list []gatewayprovider.Provider) []config.OpenAICompatibili
 
 // adminRoutes serves the manager page and its actions.
 func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo) {
+	if strings.HasPrefix(c.Request.URL.Path, "/admin/api/") {
+		handleAdminAPIDispatch(c, prefs)
+		return
+	}
 	switch c.Request.URL.Path {
 	case "/admin":
 		handleAdminDashboard(c, catalog)

@@ -380,6 +380,7 @@ func run() (err error) {
 				engine.POST("/admin/providers", adminHandler)
 				engine.POST("/admin/delete", adminHandler)
 				engine.POST("/admin/retry-failed", adminHandler)
+				registerAdminAPIRoutes(engine, prefs)
 
 				// Dummy endpoint for Claude Code ping/connection check
 				engine.HEAD("/v1/api/hello", func(c *gin.Context) { c.Status(http.StatusOK) })
