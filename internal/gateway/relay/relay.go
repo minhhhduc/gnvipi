@@ -20,6 +20,7 @@ import (
 	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
+	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
 
@@ -126,6 +127,9 @@ func New(p *provider.Provider, upstreamModel string, options *Options) (*Relay, 
 	if err != nil {
 		return nil, err
 	}
+	relayClient := *client
+	relayClient.Transport = reliability.ForProvider(&snapshot, client.Transport)
+	client = &relayClient
 	redact.Default.Update(snapshot.Auth.Key)
 	return &Relay{provider: snapshot, model: upstreamModel, path: "/v1" + suffix,
 		target: target, policy: policy, client: client, recorder: options.Recorder}, nil
@@ -241,6 +245,12 @@ func (h *Relay) serveHTTP(w http.ResponseWriter, r *http.Request, body []byte, b
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err == nil {
+		if req.GetBody == nil {
+			bodyBytes := body
+			req.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+			}
+		}
 		req.Header.Set("Content-Type", "application/json")
 		err = core.ApplyHeaders(req, r, &h.provider)
 	}
