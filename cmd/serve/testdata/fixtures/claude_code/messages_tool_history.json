@@ -1,0 +1,127 @@
+{
+  "model": "claude-3-7-sonnet-20250219",
+  "max_tokens": 4096,
+  "system": [
+    {
+      "type": "text",
+      "text": "You are Claude Code, Anthropic's official CLI for agentic coding. You have access to bash, glob, grep, and file edit tools.",
+      "cache_control": {
+        "type": "ephemeral"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "name": "Bash",
+      "description": "Execute a bash command in the working directory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The command to run"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "description": "Optional timeout in milliseconds"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    },
+    {
+      "name": "GlobTool",
+      "description": "Find files matching a glob pattern",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Glob pattern"
+          },
+          "path": {
+            "type": "string",
+            "description": "Directory to search within"
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "FileEdit",
+      "description": "Edit an existing file by replacing old text with new text",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Absolute or relative file path"
+          },
+          "old_string": {
+            "type": "string",
+            "description": "Text to be replaced"
+          },
+          "new_string": {
+            "type": "string",
+            "description": "Replacement text"
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Please check git status and list all files in cmd/serve."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I will check the git status first."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01A2B3C4D5E6F7",
+          "name": "Bash",
+          "input": {
+            "command": "git status"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01A2B3C4D5E6F7",
+          "content": "On branch feat/58-client-fixtures\nnothing to commit, working tree clean",
+          "is_error": false,
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "Now please find all go files in cmd/serve."
+        }
+      ]
+    }
+  ]
+}

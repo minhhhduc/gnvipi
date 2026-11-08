@@ -1,0 +1,14 @@
+{
+  "model": "opencode-chat-model",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are OpenCode assistant."
+    },
+    {
+      "role": "user",
+      "content": "Help me optimize this Go code."
+    }
+  ],
+  "temperature": 0.3
+}
