@@ -300,6 +300,9 @@ func handleAdminAPICreateProvider(c *gin.Context, p *modelPrefs) {
 		})
 		return
 	}
+	if pv.Auth.Scheme == "api-key" {
+		pv.Auth.Scheme = gatewayprovider.AuthAPIKey
+	}
 	if err := pv.Validate(); err != nil {
 		validationErrorResponse(c, err)
 		return
@@ -343,6 +346,9 @@ func handleAdminAPIUpdateProvider(c *gin.Context, p *modelPrefs) {
 	}
 
 	preserveSecretIfNeeded(&pv, &existing)
+	if pv.Auth.Scheme == "api-key" {
+		pv.Auth.Scheme = gatewayprovider.AuthAPIKey
+	}
 	if err := pv.Validate(); err != nil {
 		validationErrorResponse(c, err)
 		return
@@ -383,6 +389,9 @@ func handleAdminAPITestProviderDirect(c *gin.Context, _ *modelPrefs) {
 	}
 	if target.Name == "" {
 		target.Name = "Test Provider"
+	}
+	if target.Auth.Scheme == "api-key" {
+		target.Auth.Scheme = gatewayprovider.AuthAPIKey
 	}
 	if err := target.Validate(); err != nil {
 		validationErrorResponse(c, err)
@@ -444,6 +453,9 @@ func handleAdminAPITestProvider(c *gin.Context, p *modelPrefs) {
 		}
 	}
 
+	if target.Auth.Scheme == "api-key" {
+		target.Auth.Scheme = gatewayprovider.AuthAPIKey
+	}
 	if err := target.Validate(); err != nil {
 		validationErrorResponse(c, err)
 		return

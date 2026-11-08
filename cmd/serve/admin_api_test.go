@@ -1067,3 +1067,91 @@ func TestAdminAPI_RedirectAndSSRFGuards(t *testing.T) {
 		t.Fatalf("expected error mentioning private/local address, got: %s", denyRes.Error)
 	}
 }
+
+func TestAdminAPI_ProviderV2EditorFeaturesAndDirectTesting(t *testing.T) {
+	p := setupTestPrefs(t)
+	oldPrefs := prefs
+	prefs = p
+	t.Cleanup(func() { prefs = oldPrefs })
+
+	engine := testAdminEngine(t, p, "", 0)
+
+	// 1. Create provider with "api-key" scheme (alias for x-api-key) and advanced options
+	provPayload := map[string]any{
+		"id":       "v2-full-featured",
+		"name":     "Full Featured V2",
+		"base_url": "https://api.v2provider.example/v1",
+		"protocol": "openai-chat",
+		"auth": map[string]any{
+			"scheme": "api-key", // alias tested here
+			"key":    "sk-test-secret-key-12345",
+		},
+		"headers": map[string]string{
+			"HTTP-Referer": "https://myapp.example",
+			"X-Title":      "Gateway Admin",
+		},
+		"models": []map[string]any{
+			{"alias": "fast-model", "upstream_model": "vendor/fast-v1"},
+			{"alias": "backup-model", "upstream_model": "vendor/backup-v1", "hidden": true, "fallbacks": []string{"fallback-1"}},
+		},
+		"max_concurrency": 16,
+		"timeouts": map[string]any{
+			"connect": 10000000000, // 10s
+			"idle":    30000000000, // 30s
+		},
+		"queue_timeout": 5000000000, // 5s
+		"tls":           "chrome",
+		"enabled":       true,
+	}
+
+	res := makeRequest(t, engine, http.MethodPost, "/admin/api/providers", provPayload, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("POST /admin/api/providers = %d, want 201: %s", res.Code, res.Body.String())
+	}
+	var created gatewayprovider.Provider
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created: %v", err)
+	}
+	if created.Auth.Scheme != gatewayprovider.AuthAPIKey {
+		t.Fatalf("expected auth.scheme normalized to %q, got %q", gatewayprovider.AuthAPIKey, created.Auth.Scheme)
+	}
+	if created.MaxConcurrency != 16 {
+		t.Fatalf("expected MaxConcurrency 16, got %d", created.MaxConcurrency)
+	}
+	if created.TLS != gatewayprovider.TLSChrome {
+		t.Fatalf("expected TLS chrome, got %s", created.TLS)
+	}
+
+	// 2. Direct test connection endpoint for unsaved provider
+	directPayload := map[string]any{
+		"base_url": "https://api.v2provider.example/v1",
+		"protocol": "openai-chat",
+		"auth": map[string]any{
+			"scheme": "api-key",
+			"key":    "sk-direct-test-key",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/test", directPayload, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /admin/api/providers/test = %d, want 200: %s", res.Code, res.Body.String())
+	}
+	var directResult ConnectionTestResult
+	if err := json.Unmarshal(res.Body.Bytes(), &directResult); err != nil {
+		t.Fatalf("unmarshal directResult: %v", err)
+	}
+	if directResult.Status == "" {
+		t.Fatalf("expected non-empty status in direct test result")
+	}
+
+	// 3. Test connection on existing provider with overlay
+	overlayPayload := map[string]any{
+		"auth": map[string]any{
+			"scheme": "api-key",
+			"key":    "sk-overlay-test-key",
+		},
+	}
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/providers/v2-full-featured/test", overlayPayload, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("POST /admin/api/providers/v2-full-featured/test with overlay = %d: %s", res.Code, res.Body.String())
+	}
+}

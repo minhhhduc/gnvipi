@@ -1,6 +1,6 @@
 package main
 
-const adminScript = adminBaseScript + adminCycleScript + adminStatsScript + adminChromeScript
+const adminScript = adminBaseScript + adminProviderScript + adminCycleScript + adminStatsScript + adminChromeScript
 
 // adminScript keeps the page and the mask file in sync: every toggle saves.
 const adminBaseScript = `
