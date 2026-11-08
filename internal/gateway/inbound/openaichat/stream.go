@@ -35,6 +35,9 @@ type StreamEncoder struct {
 // emit an error frame before returning their cause; cancellation and writer
 // failures return without recovery writes or a successful finish.
 func (e StreamEncoder) EncodeStream(ctx context.Context, events adapter.Stream, w *sse.Writer) error {
+	if opts := adapter.StreamOptionsFrom(ctx); opts.IncludeUsage {
+		e.IncludeUsage = true
+	}
 	created := e.Created
 	if created == 0 {
 		created = time.Now().Unix()
