@@ -83,6 +83,8 @@ func TestValidateRejects(t *testing.T) {
 		{"negative timeout", func(p *Provider) { p.Timeouts.Connect = -time.Second }, "timeouts.connect"},
 		{"negative tls timeout", func(p *Provider) { p.Timeouts.TLS = -time.Second }, "timeouts.tls"},
 		{"negative total timeout", func(p *Provider) { p.Timeouts.Total = -time.Second }, "timeouts.total"},
+		{"negative max concurrency", func(p *Provider) { p.MaxConcurrency = -1 }, "max_concurrency"},
+		{"negative queue timeout", func(p *Provider) { p.QueueTimeout = -time.Second }, "queue_timeout"},
 		{"proxy without host", func(p *Provider) { p.ProxyURL = "http://" }, "proxy_url"},
 		{"proxy with path", func(p *Provider) { p.ProxyURL = "https://proxy.invalid/secret" }, "proxy_url"},
 		{"unknown proxy scheme", func(p *Provider) { p.ProxyURL = "ftp://proxy.invalid" }, "proxy_url"},
