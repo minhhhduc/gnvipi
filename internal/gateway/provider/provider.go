@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/textproto"
 	"net/url"
 	"sort"
@@ -90,6 +91,69 @@ type Timeouts struct {
 	Total          time.Duration `json:"total,omitempty"`           // non-stream request, including body
 }
 
+func parseDurationJSON(v any) (time.Duration, error) {
+	if v == nil {
+		return 0, nil
+	}
+	switch val := v.(type) {
+	case float64:
+		return time.Duration(val), nil
+	case string:
+		val = strings.TrimSpace(val)
+		if val == "" {
+			return 0, nil
+		}
+		return time.ParseDuration(val)
+	default:
+		return 0, errors.New("must be a duration string (e.g. \"5s\") or nanoseconds")
+	}
+}
+
+// UnmarshalJSON supports unmarshaling durations from both strings (e.g. "5s") and nanoseconds.
+func (t *Timeouts) UnmarshalJSON(data []byte) error {
+	type rawTimeouts Timeouts
+	if err := json.Unmarshal(data, (*rawTimeouts)(t)); err == nil {
+		return nil
+	}
+	var raw struct {
+		Connect        any `json:"connect,omitempty"`
+		TLS            any `json:"tls,omitempty"`
+		ResponseHeader any `json:"response_header,omitempty"`
+		Idle           any `json:"idle,omitempty"`
+		Total          any `json:"total,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var err error
+	if raw.Connect != nil {
+		if t.Connect, err = parseDurationJSON(raw.Connect); err != nil {
+			return fmt.Errorf("timeouts.connect: %w", err)
+		}
+	}
+	if raw.TLS != nil {
+		if t.TLS, err = parseDurationJSON(raw.TLS); err != nil {
+			return fmt.Errorf("timeouts.tls: %w", err)
+		}
+	}
+	if raw.ResponseHeader != nil {
+		if t.ResponseHeader, err = parseDurationJSON(raw.ResponseHeader); err != nil {
+			return fmt.Errorf("timeouts.response_header: %w", err)
+		}
+	}
+	if raw.Idle != nil {
+		if t.Idle, err = parseDurationJSON(raw.Idle); err != nil {
+			return fmt.Errorf("timeouts.idle: %w", err)
+		}
+	}
+	if raw.Total != nil {
+		if t.Total, err = parseDurationJSON(raw.Total); err != nil {
+			return fmt.Errorf("timeouts.total: %w", err)
+		}
+	}
+	return nil
+}
+
 // Provider is one upstream endpoint.
 type Provider struct {
 	ID             string            `json:"id"`
@@ -121,6 +185,41 @@ type Provider struct {
 	// concurrency token before returning a 503 Overloaded error. A value <= 0
 	// rejects immediately when all concurrency slots are full.
 	QueueTimeout time.Duration `json:"queue_timeout,omitempty"`
+}
+
+// UnmarshalJSON supports unmarshaling queue_timeout from both duration strings (e.g. "5s") and nanoseconds.
+func (p *Provider) UnmarshalJSON(data []byte) error {
+	type rawProvider Provider
+	if err := json.Unmarshal(data, (*rawProvider)(p)); err == nil {
+		return nil
+	}
+	var raw struct {
+		QueueTimeout any `json:"queue_timeout,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	// Re-unmarshal into rawProvider by temporarily clearing queue_timeout in JSON or removing it.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	delete(fields, "queue_timeout")
+	withoutQueue, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(withoutQueue, (*rawProvider)(p)); err != nil {
+		return err
+	}
+	if raw.QueueTimeout != nil {
+		d, err := parseDurationJSON(raw.QueueTimeout)
+		if err != nil {
+			return fmt.Errorf("queue_timeout: %w", err)
+		}
+		p.QueueTimeout = d
+	}
+	return nil
 }
 
 // FieldError reports one invalid field of one provider.
