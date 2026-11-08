@@ -72,7 +72,7 @@ func resolveProviderCapabilities(p *gatewayprovider.Provider, registry *adapter.
 			caps = outbound.Capabilities()
 		}
 	}
-	if caps == (adapter.Capabilities{}) {
+	if caps.IsZero() {
 		switch p.Protocol {
 		case ir.ProtocolAnthropicMessages:
 			caps = adapter.Capabilities{

@@ -168,6 +168,22 @@ type Capabilities struct {
 	StatefulResponses bool            `json:"stateful_responses"`  // server-side conversation state
 	CountTokens       bool            `json:"count_tokens"`        // an exact token-count endpoint
 	MaxImageBytes     int64           `json:"max_image_bytes,omitempty"`
+	AllowedMediaTypes []string        `json:"allowed_media_types,omitempty"`
+}
+
+// IsZero reports whether all capability flags are unset.
+func (c Capabilities) IsZero() bool {
+	return !c.Streaming &&
+		!c.Tools &&
+		!c.ParallelToolCalls &&
+		(c.Images == "" || c.Images == ImageCapabilityNone) &&
+		!c.Reasoning &&
+		!c.StructuredOutput &&
+		!c.TopK &&
+		!c.StatefulResponses &&
+		!c.CountTokens &&
+		c.MaxImageBytes == 0 &&
+		len(c.AllowedMediaTypes) == 0
 }
 
 // Target is the resolved upstream endpoint for one request.

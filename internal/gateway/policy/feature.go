@@ -114,6 +114,13 @@ func ApplyOverrides(base adapter.Capabilities, overrides *CapabilityOverrides) a
 	if overrides.MaxImageBytes != nil {
 		caps.MaxImageBytes = *overrides.MaxImageBytes
 	}
+	if overrides.AllowedMediaTypes != nil {
+		caps.AllowedMediaTypes = make([]string, len(overrides.AllowedMediaTypes))
+		copy(caps.AllowedMediaTypes, overrides.AllowedMediaTypes)
+	} else if base.AllowedMediaTypes != nil {
+		caps.AllowedMediaTypes = make([]string, len(base.AllowedMediaTypes))
+		copy(caps.AllowedMediaTypes, base.AllowedMediaTypes)
+	}
 	return caps
 }
 
@@ -155,6 +162,10 @@ func (c *Config) ModeForProvider(providerID string) Mode {
 func (c *Config) CapabilitiesForProvider(providerID string, base adapter.Capabilities) adapter.Capabilities {
 	if c != nil && c.MaxImageBytes > 0 && base.MaxImageBytes == 0 {
 		base.MaxImageBytes = c.MaxImageBytes
+	}
+	if c != nil && len(c.AllowedMediaTypes) > 0 && len(base.AllowedMediaTypes) == 0 {
+		base.AllowedMediaTypes = make([]string, len(c.AllowedMediaTypes))
+		copy(base.AllowedMediaTypes, c.AllowedMediaTypes)
 	}
 	if c != nil && c.ProviderOverrides != nil {
 		if o, ok := c.ProviderOverrides[providerID]; ok {
@@ -266,7 +277,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 	}
 
 	if len(unsupported) == 0 {
-		if err := validateImages(req, caps.MaxImageBytes, nil); err != nil {
+		if err := validateImages(req, caps.MaxImageBytes, caps.AllowedMediaTypes); err != nil {
 			return nil, err
 		}
 		return &Result{}, nil
@@ -337,7 +348,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 
 	sort.Strings(dropped)
 	log.Printf("[gateway] dropped unsupported parameters: %s", strings.Join(dropped, ", "))
-	if err := validateImages(req, caps.MaxImageBytes, nil); err != nil {
+	if err := validateImages(req, caps.MaxImageBytes, caps.AllowedMediaTypes); err != nil {
 		return nil, err
 	}
 	return &Result{DroppedParams: dropped}, nil
@@ -539,7 +550,11 @@ func validateImages(req *ir.Request, maxBytes int64, allowedTypes []string) erro
 	if len(allowedTypes) > 0 {
 		allowedMap = make(map[string]bool, len(allowedTypes))
 		for _, t := range allowedTypes {
-			allowedMap[strings.ToLower(strings.TrimSpace(t))] = true
+			norm := strings.ToLower(strings.TrimSpace(t))
+			if norm == "image/jpg" {
+				norm = "image/jpeg"
+			}
+			allowedMap[norm] = true
 		}
 	} else {
 		allowedMap = DefaultAllowedMediaTypes

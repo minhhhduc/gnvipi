@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -496,6 +497,41 @@ func TestFeatureValidationTable(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 			wantKind:   gwerr.KindInvalidRequest,
 		},
+		{
+			name: "image with allowed media types override permits matching type",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.AllowedMediaTypes = []string{"image/png"}
+				return c
+			}(),
+			mode: policy.ModeLenient,
+		},
+		{
+			name: "image with allowed media types override rejects unlisted type",
+			reqFunc: func() *ir.Request {
+				return &ir.Request{
+					Messages: []ir.Message{
+						ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/jpeg", "aGVsbG8=")),
+					},
+				}
+			},
+			caps: func() adapter.Capabilities {
+				c := allCapabilities()
+				c.AllowedMediaTypes = []string{"image/png"}
+				return c
+			}(),
+			mode:       policy.ModeLenient,
+			wantErr:    true,
+			wantStatus: http.StatusBadRequest,
+			wantKind:   gwerr.KindInvalidRequest,
+		},
 
 		// --- Reasoning ---
 		{
@@ -861,6 +897,80 @@ func TestCapabilityOverridesAndConfig(t *testing.T) {
 	}
 	if resolved := policy.ResolveMode("", ""); resolved != policy.ModeLenient {
 		t.Errorf("ResolveMode = %v, want lenient", resolved)
+	}
+}
+
+func TestAllowedMediaTypesOverride(t *testing.T) {
+	base := adapter.Capabilities{
+		Streaming: true,
+		Images:    adapter.ImageCapabilityBoth,
+	}
+
+	// 1. Verify ApplyOverrides copies AllowedMediaTypes and does not alias the slice
+	types := []string{"image/png", "image/jpeg"}
+	overrides := &policy.CapabilityOverrides{
+		AllowedMediaTypes: types,
+	}
+	merged := policy.ApplyOverrides(base, overrides)
+	if !slices.Equal(merged.AllowedMediaTypes, types) {
+		t.Fatalf("ApplyOverrides AllowedMediaTypes = %v, want %v", merged.AllowedMediaTypes, types)
+	}
+	// Mutation check
+	types[0] = "mutated"
+	if merged.AllowedMediaTypes[0] == "mutated" {
+		t.Fatal("expected ApplyOverrides to clone AllowedMediaTypes slice")
+	}
+
+	// 2. Verify Config.CapabilitiesForProvider propagates cfg.AllowedMediaTypes into caps
+	cfg := &policy.Config{
+		AllowedMediaTypes: []string{"image/png"},
+		ProviderOverrides: map[string]policy.CapabilityOverrides{
+			"custom-provider": {
+				AllowedMediaTypes: []string{"image/webp"},
+			},
+		},
+	}
+
+	// Provider without specific override inherits cfg.AllowedMediaTypes
+	defaultCaps := cfg.CapabilitiesForProvider("default-provider", base)
+	if want := []string{"image/png"}; !slices.Equal(defaultCaps.AllowedMediaTypes, want) {
+		t.Errorf("defaultCaps.AllowedMediaTypes = %v, want %v", defaultCaps.AllowedMediaTypes, want)
+	}
+
+	// Provider with specific override gets its own AllowedMediaTypes
+	customCaps := cfg.CapabilitiesForProvider("custom-provider", base)
+	if want := []string{"image/webp"}; !slices.Equal(customCaps.AllowedMediaTypes, want) {
+		t.Errorf("customCaps.AllowedMediaTypes = %v, want %v", customCaps.AllowedMediaTypes, want)
+	}
+
+	// Base already defining AllowedMediaTypes is preserved when cfg.AllowedMediaTypes is set
+	baseWithTypes := base
+	baseWithTypes.AllowedMediaTypes = []string{"image/gif"}
+	preservedCaps := cfg.CapabilitiesForProvider("default-provider", baseWithTypes)
+	if want := []string{"image/gif"}; !slices.Equal(preservedCaps.AllowedMediaTypes, want) {
+		t.Errorf("preservedCaps.AllowedMediaTypes = %v, want %v", preservedCaps.AllowedMediaTypes, want)
+	}
+
+	// 3. Verify Validate enforces the effective AllowedMediaTypes
+	req := &ir.Request{
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewImageBlockBase64("image/png", "aGVsbG8=")),
+		},
+	}
+
+	// Should succeed when image/png is allowed
+	if _, err := policy.Validate(req, defaultCaps, policy.ModeLenient); err != nil {
+		t.Fatalf("Validate failed unexpectedly for allowed type: %v", err)
+	}
+
+	// Should fail with 400 when image/png is not in AllowedMediaTypes (customCaps only allows image/webp)
+	_, err := policy.Validate(req, customCaps, policy.ModeLenient)
+	if err == nil {
+		t.Fatal("expected Validate to reject image/png when only image/webp is allowed")
+	}
+	var gwErr *gwerr.Error
+	if !errors.As(err, &gwErr) || gwErr.Status != http.StatusBadRequest {
+		t.Fatalf("expected 400 gwerr.Error, got %v", err)
 	}
 }
 
