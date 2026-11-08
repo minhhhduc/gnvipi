@@ -56,9 +56,10 @@ func overloadedError(providerID string, maxConcurrency int) *gwerr.Error {
 		msg = fmt.Sprintf("provider %q max concurrency reached (%d)", providerID, maxConcurrency)
 	}
 	return &gwerr.Error{
-		Kind:    gwerr.KindOverloaded,
-		Status:  http.StatusServiceUnavailable,
-		Message: msg,
+		Kind:       gwerr.KindOverloaded,
+		Status:     http.StatusServiceUnavailable,
+		Message:    msg,
+		RetryAfter: time.Second,
 	}
 }
 
@@ -77,6 +78,7 @@ func (l *Limiter) getOrCreate(providerID string, capacity int) *semaphore {
 // If p.MaxConcurrency is <= 0, the provider is unbounded; Acquire returns a
 // no-op release function and nil error immediately.
 // When all concurrency slots are saturated, Acquire waits up to p.QueueTimeout.
+// If p.QueueTimeout <= 0, it rejects immediately when all slots are full.
 // If QueueTimeout expires before a slot is freed, a 503 Overloaded error is returned.
 // If ctx cancels while waiting or immediately after acquiring, Acquire aborts and
 // releases any held slot. The returned release function is idempotent and safe
@@ -89,6 +91,7 @@ func (l *Limiter) Acquire(ctx context.Context, p *provider.Provider) (func(), er
 }
 
 // AcquireFor acquires a concurrency slot for a specific provider ID and limit parameters.
+// If queueTimeout <= 0, it rejects immediately when all concurrency slots are full.
 func (l *Limiter) AcquireFor(ctx context.Context, providerID string, maxConcurrency int, queueTimeout time.Duration) (func(), error) {
 	if maxConcurrency <= 0 {
 		return func() {}, nil

@@ -89,8 +89,8 @@ func TestLimiter_MaxConcurrencyEnforced(t *testing.T) {
 	if !errors.As(err, &gwErr) {
 		t.Fatalf("error = %v, want *gwerr.Error", err)
 	}
-	if gwErr.Kind != gwerr.KindOverloaded || gwErr.Status != http.StatusServiceUnavailable {
-		t.Fatalf("got kind=%s status=%d, want overloaded/503", gwErr.Kind, gwErr.Status)
+	if gwErr.Kind != gwerr.KindOverloaded || gwErr.Status != http.StatusServiceUnavailable || gwErr.RetryAfter != time.Second {
+		t.Fatalf("got kind=%s status=%d retry_after=%v, want overloaded/503/1s", gwErr.Kind, gwErr.Status, gwErr.RetryAfter)
 	}
 
 	// Release one slot.
@@ -174,8 +174,8 @@ func TestLimiter_QueueTimeoutExpiresReturns503(t *testing.T) {
 	if !errors.As(err, &gwErr) {
 		t.Fatalf("error = %v, want *gwerr.Error", err)
 	}
-	if gwErr.Kind != gwerr.KindOverloaded || gwErr.Status != http.StatusServiceUnavailable {
-		t.Fatalf("got kind=%s status=%d, want overloaded/503", gwErr.Kind, gwErr.Status)
+	if gwErr.Kind != gwerr.KindOverloaded || gwErr.Status != http.StatusServiceUnavailable || gwErr.RetryAfter != time.Second {
+		t.Fatalf("got kind=%s status=%d retry_after=%v, want overloaded/503/1s", gwErr.Kind, gwErr.Status, gwErr.RetryAfter)
 	}
 }
 
@@ -352,9 +352,10 @@ func TestLimiter_ResetAndInvalidate(t *testing.T) {
 
 func TestLimiter_OverloadedErrorProtocolEncoding(t *testing.T) {
 	err := &gwerr.Error{
-		Kind:    gwerr.KindOverloaded,
-		Status:  http.StatusServiceUnavailable,
-		Message: `provider "p-test" max concurrency reached (4)`,
+		Kind:       gwerr.KindOverloaded,
+		Status:     http.StatusServiceUnavailable,
+		Message:    `provider "p-test" max concurrency reached (4)`,
+		RetryAfter: time.Second,
 	}
 
 	for _, tc := range []struct {
@@ -389,6 +390,9 @@ func TestLimiter_OverloadedErrorProtocolEncoding(t *testing.T) {
 			}
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("HTTP code = %d, want 503", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After header = %q, want \"1\"", got)
 			}
 		})
 	}
@@ -611,6 +615,9 @@ func TestDispatch_LimiterEnforcement_EndToEnd(t *testing.T) {
 	if rec2.Code != http.StatusServiceUnavailable {
 		t.Fatalf("request 2 code = %d, want 503", rec2.Code)
 	}
+	if got := rec2.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("request 2 Retry-After header = %q, want \"1\"", got)
+	}
 
 	// Verify Anthropic protocol error shape.
 	var anthropicErr struct {
@@ -713,5 +720,95 @@ func TestDispatch_ClientCancellationReleasesToken_Integration(t *testing.T) {
 	// Verify that provider slot was freed and is not held.
 	if inFlight := dispatcher.Limiter.InFlight("prov-cancel-test"); inFlight != 0 {
 		t.Fatalf("expected 0 in-flight after cancellation, got %d", inFlight)
+	}
+}
+
+// TestDispatch_ResetPreservesLimiterStateWhenCapacityUnchanged verifies that calling
+// Dispatcher.Reset() does not clear semaphores when a provider's MaxConcurrency is unchanged,
+// preventing concurrent requests right after a config save from exceeding MaxConcurrency.
+func TestDispatch_ResetPreservesLimiterStateWhenCapacityUnchanged(t *testing.T) {
+	requestStarted := make(chan struct{})
+	allowFinish := make(chan struct{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		<-allowFinish
+		w.Header().Set("Content-Type", "application/json")
+		if _, writeErr := w.Write([]byte(`{"result":"ok"}`)); writeErr != nil {
+			t.Errorf("write response error: %v", writeErr)
+		}
+	}))
+	defer upstream.Close()
+
+	p := provider.Provider{
+		ID:             "prov-reset-test",
+		Name:           "prov-reset-test",
+		BaseURL:        upstream.URL,
+		Protocol:       ir.ProtocolOpenAIChat,
+		Models:         []provider.ModelMapping{{Alias: "gpt-reset", UpstreamModel: "gpt-4"}},
+		MaxConcurrency: 1,
+		QueueTimeout:   0, // reject immediately when full
+		Enabled:        true,
+	}
+
+	resolver := &routing.LegacyResolver{}
+	if err := resolver.UpdateProviders([]provider.Provider{p}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	dispatcher := dispatch.New(resolver, nil)
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	// Launch request 1 (occupies the single concurrency slot).
+	req1Done := make(chan struct{})
+	go func() {
+		defer close(req1Done)
+		req1 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-reset"}`))
+		req1.Header.Set("Content-Type", "application/json")
+		rec1 := httptest.NewRecorder()
+		engine.ServeHTTP(rec1, req1)
+		if rec1.Code != http.StatusOK {
+			t.Errorf("request 1 code = %d, want 200", rec1.Code)
+		}
+	}()
+
+	<-requestStarted
+
+	// Call Reset on dispatcher (simulating config reload).
+	dispatcher.Reset()
+
+	// Verify semaphore in-flight count was preserved.
+	if inFlight := dispatcher.Limiter.InFlight("prov-reset-test"); inFlight != 1 {
+		t.Fatalf("expected 1 in-flight after Reset, got %d", inFlight)
+	}
+
+	// While request 1 is still in-flight, request 2 must be rejected with 503.
+	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-reset"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	engine.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("request 2 code = %d, want 503 Overloaded after Reset()", rec2.Code)
+	}
+	if got := rec2.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("request 2 Retry-After = %q, want \"1\"", got)
+	}
+
+	// Complete request 1.
+	close(allowFinish)
+	<-req1Done
+
+	// Request 3 now succeeds.
+	req3 := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-reset"}`))
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	engine.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("request 3 code = %d, want 200: %s", rec3.Code, rec3.Body.String())
 	}
 }

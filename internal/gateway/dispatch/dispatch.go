@@ -80,9 +80,6 @@ func (d *Dispatcher) Reset() {
 	}
 	clear(d.handlers)
 	clear(d.translations)
-	if d.Limiter != nil {
-		d.Limiter.Reset()
-	}
 }
 
 func routeProtocol(path string) ir.Protocol {

@@ -94,7 +94,8 @@ type Provider struct {
 	// Zero or negative means unbounded concurrency.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
 	// QueueTimeout is the longest duration a request will wait for an available
-	// concurrency token before returning a 503 Overloaded error.
+	// concurrency token before returning a 503 Overloaded error. A value <= 0
+	// rejects immediately when all concurrency slots are full.
 	QueueTimeout time.Duration `json:"queue_timeout,omitempty"`
 }
 
