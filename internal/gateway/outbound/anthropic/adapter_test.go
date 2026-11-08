@@ -265,6 +265,62 @@ func TestAnthropicJSONModePrompt(t *testing.T) {
 	if !found {
 		t.Fatalf("expected system prompt to contain JSON instruction, got %+v", reqBody.System)
 	}
+
+	// Test JSONModePrompt with ResponseFormatJSONSchema
+	schemaReq := &ir.Request{
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("get schema data"))},
+		ResponseFormat: &ir.ResponseFormat{
+			Type: ir.ResponseFormatJSONSchema,
+			JSONSchema: &ir.JSONSchema{
+				Name:   "item_schema",
+				Schema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"}}}`),
+			},
+		},
+	}
+	sReq, err := a.BuildRequest(t.Context(), schemaReq, adapter.Target{
+		BaseURL: "https://upstream.invalid", Model: "claude-test",
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest with JSONSchema: %v", err)
+	}
+	defer func() {
+		if err := sReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var sReqBody struct {
+		System []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"system"`
+		Tools []any `json:"tools"`
+	}
+	if err := json.NewDecoder(sReq.Body).Decode(&sReqBody); err != nil {
+		t.Fatalf("decode schema request body: %v", err)
+	}
+	if len(sReqBody.Tools) > 0 {
+		t.Errorf("expected no tools in JSONModePrompt mode, got %+v", sReqBody.Tools)
+	}
+	schemaFound := false
+	for _, sys := range sReqBody.System {
+		if strings.Contains(sys.Text, "matching the following schema") && strings.Contains(sys.Text, `"id"`) {
+			schemaFound = true
+			break
+		}
+	}
+	if !schemaFound {
+		t.Fatalf("expected system prompt to contain schema instruction, got %+v", sReqBody.System)
+	}
+
+	// Test default adapter without JSONModePrompt or ToolEmulation fails on JSONSchema
+	defaultAdapter := anthropic.New()
+	_, err = defaultAdapter.BuildRequest(t.Context(), schemaReq, adapter.Target{
+		BaseURL: "https://upstream.invalid", Model: "claude-test",
+	})
+	if err == nil {
+		t.Fatal("expected unsupported error on default adapter for JSONSchema, got nil")
+	}
 }
 
 func TestAnthropicWithProvider(t *testing.T) {

@@ -20,7 +20,7 @@ const defaultMaxTokens = 4096
 // the protocol default of 4096.
 // ToolEmulation enables structured output (Option A per issue #49) by forcing
 // a single tool call with the schema and unwrapping the tool input as text.
-// JSONModePrompt enables prompting for valid JSON on json_object format.
+// JSONModePrompt enables prompting for valid JSON on json_object and json_schema formats.
 type Adapter struct {
 	DefaultMaxTokens int
 	ToolEmulation    bool

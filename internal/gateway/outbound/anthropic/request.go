@@ -34,9 +34,6 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		case ir.ResponseFormatText:
 			// Plain text requires no emulation.
 		case ir.ResponseFormatJSONSchema:
-			if !a.ToolEmulation {
-				return nil, unsupported("Anthropic structured output is not supported by this adapter")
-			}
 			if request.ResponseFormat.JSONSchema == nil {
 				return nil, invalidRequest("JSON schema format requires a schema")
 			}
@@ -44,18 +41,22 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 			if len(bytes.TrimSpace(schema)) == 0 || !gatewayoutbound.JSONObject(schema) {
 				return nil, invalidRequest("JSON schema format requires an object schema")
 			}
-			toolName := request.ResponseFormat.JSONSchema.Name
-			if toolName == "" {
-				toolName = "structured_output"
-			}
-			tool := map[string]any{
-				"name":         toolName,
-				"input_schema": schema,
-			}
-			emulatedTools = []any{tool}
-			emulatedToolChoice = map[string]any{
-				"type": "tool",
-				"name": toolName,
+			if a.ToolEmulation {
+				toolName := request.ResponseFormat.JSONSchema.Name
+				if toolName == "" {
+					toolName = "structured_output"
+				}
+				tool := map[string]any{
+					"name":         toolName,
+					"input_schema": schema,
+				}
+				emulatedTools = []any{tool}
+				emulatedToolChoice = map[string]any{
+					"type": "tool",
+					"name": toolName,
+				}
+			} else if !a.JSONModePrompt {
+				return nil, unsupported("Anthropic structured output is not supported by this adapter")
 			}
 		case ir.ResponseFormatJSONObject:
 			switch {
@@ -90,8 +91,14 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if err != nil {
 		return nil, err
 	}
-	if request.ResponseFormat != nil && request.ResponseFormat.Type == ir.ResponseFormatJSONObject && a.JSONModePrompt && !a.ToolEmulation {
-		system = append(system, wireTextBlock{Type: "text", Text: "Respond with valid JSON only."})
+	if request.ResponseFormat != nil && a.JSONModePrompt && !a.ToolEmulation {
+		switch request.ResponseFormat.Type {
+		case ir.ResponseFormatJSONObject:
+			system = append(system, wireTextBlock{Type: "text", Text: "Respond with valid JSON only."})
+		case ir.ResponseFormatJSONSchema:
+			prompt := fmt.Sprintf("Respond with valid JSON matching the following schema:\n%s", string(request.ResponseFormat.JSONSchema.Schema))
+			system = append(system, wireTextBlock{Type: "text", Text: prompt})
+		}
 	}
 	messages, err := encodeMessages(request.Messages)
 	if err != nil {

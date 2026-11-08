@@ -1481,4 +1481,112 @@ func TestStructuredOutputLosslessMatrix(t *testing.T) {
 			t.Errorf("expected response_format mentioned in error, got: %s", w.Body.String())
 		}
 	})
+
+	t.Run("AnthropicOutbound_JSONModePrompt_JSONSchema_Lenient", func(t *testing.T) {
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteMessages, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body: `{
+				"id": "msg_prompt_json",
+				"type": "message",
+				"role": "assistant",
+				"model": "claude-3-5-sonnet",
+				"content": [{"type": "text", "text": "{\"name\":\"Alice\",\"age\":30}"}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 20, "output_tokens": 10}
+			}`,
+		})
+
+		prov := provider.Provider{
+			ID:       "anthropic-prompt-prov",
+			Name:     "Anthropic Prompt Provider",
+			Protocol: ir.ProtocolAnthropicMessages,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+			Extensions: map[string]json.RawMessage{
+				"anthropic": json.RawMessage(`{"json_mode_prompt": true}`),
+			},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolAnthropicMessages,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {
+				"type": "json_schema",
+				"json_schema": {
+					"name": "person",
+					"schema": {"type": "object", "properties": {"name": {"type": "string"}}}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 OK; body: %s", w.Code, w.Body.String())
+		}
+
+		// Verify upstream request has system prompt with schema
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+		var upstreamBody struct {
+			System []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"system"`
+			Tools []any `json:"tools"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if len(upstreamBody.Tools) > 0 {
+			t.Errorf("expected no tools in JSONModePrompt mode, got %+v", upstreamBody.Tools)
+		}
+		schemaPromptFound := false
+		for _, sys := range upstreamBody.System {
+			if strings.Contains(sys.Text, "matching the following schema") && strings.Contains(sys.Text, "name") {
+				schemaPromptFound = true
+				break
+			}
+		}
+		if !schemaPromptFound {
+			t.Fatalf("expected schema instruction in system prompt, got %+v", upstreamBody.System)
+		}
+
+		// Verify client got chat completion with JSON text
+		var clientResp struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &clientResp); err != nil {
+			t.Fatalf("decode client response: %v", err)
+		}
+		if len(clientResp.Choices) == 0 || !strings.Contains(clientResp.Choices[0].Message.Content, "Alice") {
+			t.Fatalf("unexpected client response: %+v", clientResp)
+		}
+	})
 }
