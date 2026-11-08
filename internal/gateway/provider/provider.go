@@ -57,7 +57,8 @@ type ModelMapping struct {
 	UpstreamModel string `json:"upstream_model"`
 	Hidden        bool   `json:"hidden,omitempty"`
 	// LegacyPosition preserves flat legacy routing precedence; zero uses v2 list order.
-	LegacyPosition int `json:"legacy_position,omitempty"`
+	LegacyPosition int  `json:"legacy_position,omitempty"`
+	AllowShadow    bool `json:"allow_shadow,omitempty"`
 }
 
 // Timeouts bounds one upstream call. Zero means "use the client default".
