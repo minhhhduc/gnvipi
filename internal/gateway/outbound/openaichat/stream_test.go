@@ -155,3 +155,137 @@ func TestStreamIdleTimeout(t *testing.T) {
 		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
+
+func TestStreamToolCallsSingleAndParallel(t *testing.T) {
+	out := openaichat.New()
+	sseData := "data: {\"id\":\"cmpl_stream_tools\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"cmpl_stream_tools\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_weather\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"\"}},{\"index\":1,\"id\":\"call_clock\",\"type\":\"function\",\"function\":{\"name\":\"clock\",\"arguments\":\"\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_stream_tools\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\\\"\"}},{\"index\":1,\"function\":{\"arguments\":\"{\\\"format\\\":\\\"\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_stream_tools\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"Paris\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"24h\\\"}\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_stream_tools\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(sseData))}
+	stream, err := out.ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, ev)
+	}
+
+	if len(events) < 7 {
+		t.Fatalf("expected at least 7 events, got %d: %+v", len(events), events)
+	}
+	if events[0].Type != ir.EventMessageStart || events[0].Message.ID != "cmpl_stream_tools" {
+		t.Fatalf("event 0 mismatch: %+v", events[0])
+	}
+
+	// Find block starts
+	var toolStarts []ir.StreamEvent
+	var toolDeltas []ir.StreamEvent
+	var toolStops []ir.StreamEvent
+	var messageStop *ir.StreamEvent
+	for _, ev := range events {
+		switch ev.Type {
+		case ir.EventBlockStart:
+			toolStarts = append(toolStarts, ev)
+		case ir.EventBlockDelta:
+			toolDeltas = append(toolDeltas, ev)
+		case ir.EventBlockStop:
+			toolStops = append(toolStops, ev)
+		case ir.EventMessageStop:
+			evCopy := ev
+			messageStop = &evCopy
+		}
+	}
+
+	if len(toolStarts) != 2 {
+		t.Fatalf("expected 2 tool block starts, got %d", len(toolStarts))
+	}
+	if toolStarts[0].Block.ToolUse.ID != "call_weather" || toolStarts[0].Block.ToolUse.Name != "weather" {
+		t.Fatalf("tool 0 mismatch: %+v", toolStarts[0].Block.ToolUse)
+	}
+	if toolStarts[1].Block.ToolUse.ID != "call_clock" || toolStarts[1].Block.ToolUse.Name != "clock" {
+		t.Fatalf("tool 1 mismatch: %+v", toolStarts[1].Block.ToolUse)
+	}
+
+	if len(toolDeltas) != 4 {
+		t.Fatalf("expected 4 tool deltas, got %d", len(toolDeltas))
+	}
+	// Verify deltas carry the correct tool IDs and concatenated arguments
+	argsByBlock := make(map[int]string)
+	for _, d := range toolDeltas {
+		if d.Delta.Type != ir.DeltaToolArguments {
+			t.Fatalf("delta type = %s, want DeltaToolArguments", d.Delta.Type)
+		}
+		argsByBlock[d.Index] += d.Delta.PartialJSON
+	}
+	if argsByBlock[toolStarts[0].Index] != `{"city":"Paris"}` {
+		t.Fatalf("tool 0 accumulated args = %q, want {\"city\":\"Paris\"}", argsByBlock[toolStarts[0].Index])
+	}
+	if argsByBlock[toolStarts[1].Index] != `{"format":"24h"}` {
+		t.Fatalf("tool 1 accumulated args = %q, want {\"format\":\"24h\"}", argsByBlock[toolStarts[1].Index])
+	}
+
+	if len(toolStops) != 2 {
+		t.Fatalf("expected 2 tool block stops, got %d", len(toolStops))
+	}
+	if messageStop == nil || messageStop.StopReason != ir.StopToolUse {
+		t.Fatalf("message stop mismatch: %+v", messageStop)
+	}
+}
+
+func TestStreamInvalidJSONArgumentsPreservedVerbatim(t *testing.T) {
+	out := openaichat.New()
+	sseData := "data: {\"id\":\"cmpl_inv\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n" +
+		"data: {\"id\":\"cmpl_inv\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_inv\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_inv\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{invalid: json\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_inv\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\", unclosed\"}}]}}]}\n\n" +
+		"data: {\"id\":\"cmpl_inv\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(sseData))}
+	stream, err := out.ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var accumulated string
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == ir.EventBlockDelta && ev.Delta.Type == ir.DeltaToolArguments {
+			accumulated += ev.Delta.PartialJSON
+		}
+	}
+
+	want := "{invalid: json, unclosed"
+	if accumulated != want {
+		t.Fatalf("accumulated invalid arguments = %q, want %q", accumulated, want)
+	}
+}

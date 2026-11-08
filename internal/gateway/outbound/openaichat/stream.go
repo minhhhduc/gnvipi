@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -37,8 +38,15 @@ func parseStream(_ context.Context, resp *http.Response) (adapter.Stream, error)
 	return &chatStream{
 		reader:     reader,
 		body:       resp.Body,
-		toolBlocks: make(map[int]int),
+		toolBlocks: make(map[int]*chatToolBlock),
 	}, nil
+}
+
+type chatToolBlock struct {
+	blockIndex  int
+	id          string
+	name        string
+	nameEmitted bool
 }
 
 type chatStream struct {
@@ -51,7 +59,7 @@ type chatStream struct {
 	openBlock         bool
 	currentBlockIndex int
 	currentBlockType  ir.BlockType
-	toolBlocks        map[int]int
+	toolBlocks        map[int]*chatToolBlock
 	nextBlockIndex    int
 
 	savedStopReason ir.StopReason
@@ -99,10 +107,17 @@ func (s *chatStream) closeOpenBlocks() {
 		s.pending = append(s.pending, ir.NewBlockStop(s.currentBlockIndex))
 		s.openBlock = false
 	}
-	for _, bIdx := range s.toolBlocks {
-		s.pending = append(s.pending, ir.NewBlockStop(bIdx))
+	if len(s.toolBlocks) > 0 {
+		indices := make([]int, 0, len(s.toolBlocks))
+		for _, tb := range s.toolBlocks {
+			indices = append(indices, tb.blockIndex)
+		}
+		sort.Ints(indices)
+		for _, bIdx := range indices {
+			s.pending = append(s.pending, ir.NewBlockStop(bIdx))
+		}
+		s.toolBlocks = make(map[int]*chatToolBlock)
 	}
-	s.toolBlocks = make(map[int]int)
 }
 
 func (s *chatStream) handleEOF() {
@@ -282,11 +297,16 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 				s.openBlock = false
 			}
 			for _, tc := range choice.Delta.ToolCalls {
-				bIdx, exists := s.toolBlocks[tc.Index]
+				tb, exists := s.toolBlocks[tc.Index]
 				if !exists {
-					bIdx = s.nextBlockIndex
+					bIdx := s.nextBlockIndex
 					s.nextBlockIndex++
-					s.toolBlocks[tc.Index] = bIdx
+					tb = &chatToolBlock{
+						blockIndex: bIdx,
+						id:         tc.ID,
+						name:       tc.Function.Name,
+					}
+					s.toolBlocks[tc.Index] = tb
 					s.pending = append(s.pending, ir.NewBlockStart(bIdx, ir.Block{
 						Type:  ir.BlockToolUse,
 						Index: bIdx,
@@ -296,7 +316,20 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 						},
 					}))
 				}
-				s.pending = append(s.pending, ir.NewToolArgumentsDelta(bIdx, tc.ID, tc.Function.Arguments))
+				if tb.id == "" && tc.ID != "" {
+					tb.id = tc.ID
+				}
+				if tb.name == "" && tc.Function.Name != "" {
+					tb.name = tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					ev := ir.NewToolArgumentsDelta(tb.blockIndex, tb.id, tc.Function.Arguments)
+					if !tb.nameEmitted && tb.name != "" {
+						ev.Delta.ToolCallName = tb.name
+						tb.nameEmitted = true
+					}
+					s.pending = append(s.pending, ev)
+				}
 			}
 		}
 
@@ -307,7 +340,7 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 				s.savedStopReason = ir.StopEndTurn
 			case "length":
 				s.savedStopReason = ir.StopMaxTokens
-			case "tool_calls":
+			case "tool_calls", "function_call":
 				s.savedStopReason = ir.StopToolUse
 			case "content_filter":
 				s.savedStopReason = ir.StopContentFilter
