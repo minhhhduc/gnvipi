@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -136,6 +138,7 @@ func buildCatalog(prefs *modelPrefs, getNvidiaModels func() []*cliproxy.ModelInf
 
 	out := make([]gatewayModel, 0, 64)
 	seen := make(map[string]int) // alias -> index in out
+	fromNvidia := make(map[string]bool)
 
 	// 1. Virtual models
 	virtualModels := []string{"automode", "cycle"}
@@ -168,6 +171,7 @@ func buildCatalog(prefs *modelPrefs, getNvidiaModels func() []*cliproxy.ModelInf
 			}
 			caps := resolveNvidiaCapabilities(m.ID)
 			seen[m.ID] = len(out)
+			fromNvidia[m.ID] = true
 			out = append(out, gatewayModel{
 				Type:             "model",
 				Object:           "model",
@@ -186,48 +190,89 @@ func buildCatalog(prefs *modelPrefs, getNvidiaModels func() []*cliproxy.ModelInf
 	if prefs != nil {
 		providers, err := prefs.listProvidersV2()
 		if err == nil {
+			type row struct {
+				provider *gatewayprovider.Provider
+				mapping  *gatewayprovider.ModelMapping
+				index    int
+			}
+			var rows []row
+			rowIndex := 0
 			for i := range providers {
 				p := &providers[i]
 				if !p.Enabled {
 					continue
 				}
+				for j := range p.Models {
+					rows = append(rows, row{
+						provider: p,
+						mapping:  &p.Models[j],
+						index:    rowIndex,
+					})
+					rowIndex++
+				}
+			}
+
+			slices.SortStableFunc(rows, func(a, b row) int {
+				first, second := a.mapping.LegacyPosition, b.mapping.LegacyPosition
+				if first == 0 && second != 0 {
+					return 1
+				}
+				if second == 0 && first != 0 {
+					return -1
+				}
+				if first != 0 && second != 0 {
+					if c := cmp.Compare(first, second); c != 0 {
+						return c
+					}
+				}
+				return cmp.Compare(a.index, b.index)
+			})
+
+			for _, current := range rows {
+				p := current.provider
+				m := current.mapping
+				alias := m.Alias
+				if alias == "" || m.Hidden || prefs.isHidden(alias) {
+					continue
+				}
+				if m.UpstreamModel != "" && !strings.Contains(m.UpstreamModel, "*") && prefs.isHidden(m.UpstreamModel) {
+					if !m.AllowShadow || !fromNvidia[alias] {
+						continue
+					}
+				}
+				isWildcard := strings.HasSuffix(alias, "/*")
+				if isWildcard && cfg.WildcardPolicy == WildcardPolicyOmit {
+					continue
+				}
+
 				pCaps := resolveProviderCapabilities(p, cfg.Registry)
 				ownedBy := p.Name
 				if ownedBy == "" {
 					ownedBy = p.ID
 				}
-				for _, m := range p.Models {
-					alias := m.Alias
-					if alias == "" || m.Hidden || prefs.isHidden(alias) {
-						continue
-					}
-					isWildcard := strings.HasSuffix(alias, "/*")
-					if isWildcard && cfg.WildcardPolicy == WildcardPolicyOmit {
-						continue
-					}
 
-					capsCopy := pCaps
-					entry := gatewayModel{
-						Type:             "model",
-						Object:           "model",
-						ID:               alias,
-						Name:             alias,
-						DisplayName:      alias,
-						OwnedBy:          ownedBy,
-						UpstreamProtocol: string(p.Protocol),
-						Capabilities:     &capsCopy,
-					}
-
-					if idx, exists := seen[alias]; exists {
-						if m.AllowShadow {
-							out[idx] = entry
-						}
-						continue
-					}
-
-					seen[alias] = len(out)
-					out = append(out, entry)
+				capsCopy := pCaps
+				entry := gatewayModel{
+					Type:             "model",
+					Object:           "model",
+					ID:               alias,
+					Name:             alias,
+					DisplayName:      alias,
+					OwnedBy:          ownedBy,
+					UpstreamProtocol: string(p.Protocol),
+					Capabilities:     &capsCopy,
 				}
+
+				if idx, exists := seen[alias]; exists {
+					if m.AllowShadow && fromNvidia[alias] {
+						out[idx] = entry
+						fromNvidia[alias] = false
+					}
+					continue
+				}
+
+				seen[alias] = len(out)
+				out = append(out, entry)
 			}
 		}
 	}

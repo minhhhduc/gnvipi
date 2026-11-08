@@ -352,6 +352,252 @@ func TestBuildCatalogAllowShadow(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogAllowShadowFirstWins(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "models.json")
+	store, err := gatewayprovider.OpenStore(storePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &modelPrefs{
+		path:          storePath,
+		providerStore: store,
+		hidden:        map[string]struct{}{},
+		deleted:       map[string]struct{}{},
+	}
+
+	fakeNvidiaModels := []*cliproxy.ModelInfo{
+		{ID: "nvidia/shadowed-model", OwnedBy: "nvidia", Created: 100},
+	}
+	getNvidia := func() []*cliproxy.ModelInfo { return fakeNvidiaModels }
+
+	// Provider 1 comes first in list order, Provider 2 second.
+	// Both have AllowShadow: true on "nvidia/shadowed-model" and on a custom duplicate "custom/duplicate".
+	providers := []gatewayprovider.Provider{
+		{
+			ID:       "prov-1",
+			Name:     "Provider First",
+			BaseURL:  "https://first.example.com",
+			Protocol: ir.ProtocolOpenAIChat,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "nvidia/shadowed-model", UpstreamModel: "first-upstream-1", AllowShadow: true},
+				{Alias: "custom/duplicate", UpstreamModel: "dup-upstream-1", AllowShadow: true},
+			},
+		},
+		{
+			ID:       "prov-2",
+			Name:     "Provider Second",
+			BaseURL:  "https://second.example.com",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "nvidia/shadowed-model", UpstreamModel: "second-upstream-1", AllowShadow: true},
+				{Alias: "custom/duplicate", UpstreamModel: "dup-upstream-2", AllowShadow: true},
+			},
+		},
+	}
+
+	err = store.Update(func(doc *gatewayprovider.Document) error {
+		doc.Providers = providers
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := buildCatalog(p, getNvidia)
+	byID := make(map[string]gatewayModel)
+	for _, m := range catalog {
+		byID[m.ID] = m
+	}
+
+	// 1. Both providers have AllowShadow on NVIDIA model; first provider wins
+	shadowed, ok := byID["nvidia/shadowed-model"]
+	if !ok {
+		t.Fatalf("expected 'nvidia/shadowed-model' in catalog")
+	}
+	if shadowed.OwnedBy != "Provider First" {
+		t.Errorf("expected Provider First to win shadow collision, got owned_by=%q", shadowed.OwnedBy)
+	}
+	if shadowed.UpstreamProtocol != string(ir.ProtocolOpenAIChat) {
+		t.Errorf("expected openai-chat protocol from first provider, got %q", shadowed.UpstreamProtocol)
+	}
+
+	// 2. Both providers have AllowShadow on custom alias; first provider wins
+	dup, ok := byID["custom/duplicate"]
+	if !ok {
+		t.Fatalf("expected 'custom/duplicate' in catalog")
+	}
+	if dup.OwnedBy != "Provider First" {
+		t.Errorf("expected Provider First to win duplicate collision, got owned_by=%q", dup.OwnedBy)
+	}
+}
+
+func TestBuildCatalogLegacyPositionPrecedence(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "models.json")
+	store, err := gatewayprovider.OpenStore(storePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &modelPrefs{
+		path:          storePath,
+		providerStore: store,
+		hidden:        map[string]struct{}{},
+		deleted:       map[string]struct{}{},
+	}
+
+	fakeNvidiaModels := []*cliproxy.ModelInfo{
+		{ID: "nvidia/shadow-test", OwnedBy: "nvidia", Created: 100},
+	}
+	getNvidia := func() []*cliproxy.ModelInfo { return fakeNvidiaModels }
+
+	// Provider A is declared first, but has LegacyPosition: 2 (or 0).
+	// Provider B is declared second, but has LegacyPosition: 1.
+	// LegacyPosition 1..N has precedence over higher numbers and over 0.
+	providers := []gatewayprovider.Provider{
+		{
+			ID:       "prov-low-prio",
+			Name:     "Provider Low Priority",
+			BaseURL:  "https://low.example.com",
+			Protocol: ir.ProtocolOpenAIChat,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "nvidia/shadow-test", UpstreamModel: "target-low", AllowShadow: true, LegacyPosition: 2},
+				{Alias: "custom/pos-test", UpstreamModel: "target-zero", LegacyPosition: 0},
+			},
+		},
+		{
+			ID:       "prov-high-prio",
+			Name:     "Provider High Priority",
+			BaseURL:  "https://high.example.com",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "nvidia/shadow-test", UpstreamModel: "target-high", AllowShadow: true, LegacyPosition: 1},
+				{Alias: "custom/pos-test", UpstreamModel: "target-pos3", LegacyPosition: 3},
+			},
+		},
+	}
+
+	err = store.Update(func(doc *gatewayprovider.Document) error {
+		doc.Providers = providers
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := buildCatalog(p, getNvidia)
+	byID := make(map[string]gatewayModel)
+	for _, m := range catalog {
+		byID[m.ID] = m
+	}
+
+	// LegacyPosition 1 wins over LegacyPosition 2 despite being declared second
+	shadowed, ok := byID["nvidia/shadow-test"]
+	if !ok {
+		t.Fatalf("expected 'nvidia/shadow-test' in catalog")
+	}
+	if shadowed.OwnedBy != "Provider High Priority" {
+		t.Errorf("expected Provider High Priority to win due to LegacyPosition: 1, got owned_by=%q", shadowed.OwnedBy)
+	}
+
+	// LegacyPosition 3 (non-zero) wins over LegacyPosition 0 despite being declared second
+	posTest, ok := byID["custom/pos-test"]
+	if !ok {
+		t.Fatalf("expected 'custom/pos-test' in catalog")
+	}
+	if posTest.OwnedBy != "Provider High Priority" {
+		t.Errorf("expected Provider High Priority to win due to LegacyPosition: 3 > 0, got owned_by=%q", posTest.OwnedBy)
+	}
+}
+
+func TestBuildCatalogHiddenUpstreamModel(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "models.json")
+	store, err := gatewayprovider.OpenStore(storePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeNvidiaModels := []*cliproxy.ModelInfo{
+		{ID: "nvidia/base-model", OwnedBy: "nvidia", Created: 100},
+	}
+	getNvidia := func() []*cliproxy.ModelInfo { return fakeNvidiaModels }
+
+	p := &modelPrefs{
+		path:          storePath,
+		providerStore: store,
+		hidden: map[string]struct{}{
+			"upstream-secret-model": {},
+			"nvidia/hidden-alias":   {},
+		},
+		deleted: map[string]struct{}{},
+	}
+
+	providers := []gatewayprovider.Provider{
+		{
+			ID:       "custom-provider",
+			Name:     "CustomOwner",
+			BaseURL:  "https://custom.example.com",
+			Protocol: ir.ProtocolOpenAIChat,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				// 1. Non-wildcard mapping whose upstream model is hidden -> excluded
+				{Alias: "custom/visible-alias", UpstreamModel: "upstream-secret-model"},
+				// 2. Wildcard mapping whose upstream contains * -> NOT excluded by hidden upstream check
+				{Alias: "wildcard/*", UpstreamModel: "upstream-secret-model/*"},
+				// 3. Shadowing NVIDIA model with AllowShadow: true where upstream model is hidden, but alias is visible -> included
+				{Alias: "nvidia/base-model", UpstreamModel: "upstream-secret-model", AllowShadow: true},
+				// 4. Shadowing NVIDIA model with AllowShadow: true where alias itself is hidden -> excluded
+				{Alias: "nvidia/hidden-alias", UpstreamModel: "upstream-secret-model", AllowShadow: true},
+			},
+		},
+	}
+
+	err = store.Update(func(doc *gatewayprovider.Document) error {
+		doc.Providers = providers
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := buildCatalog(p, getNvidia)
+	byID := make(map[string]gatewayModel)
+	for _, m := range catalog {
+		byID[m.ID] = m
+	}
+
+	// 1. Non-wildcard mapping with hidden UpstreamModel must be excluded
+	if _, ok := byID["custom/visible-alias"]; ok {
+		t.Errorf("expected 'custom/visible-alias' to be excluded because upstream model is hidden")
+	}
+
+	// 2. Wildcard mapping should be included as placeholder
+	if _, ok := byID["wildcard/*"]; !ok {
+		t.Errorf("expected 'wildcard/*' placeholder to remain in catalog")
+	}
+
+	// 3. Shadowed NVIDIA model whose alias is visible should be included even if upstream model is in hidden map
+	shadowed, ok := byID["nvidia/base-model"]
+	if !ok {
+		t.Fatalf("expected 'nvidia/base-model' to be present via shadowing")
+	}
+	if shadowed.OwnedBy != "CustomOwner" {
+		t.Errorf("expected shadowed model owned_by=%q, got %q", "CustomOwner", shadowed.OwnedBy)
+	}
+
+	// 4. Shadowed model whose alias itself is hidden must be excluded
+	if _, ok := byID["nvidia/hidden-alias"]; ok {
+		t.Errorf("expected 'nvidia/hidden-alias' to be excluded because alias itself is hidden")
+	}
+}
+
 func TestModelsAndHealthMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
