@@ -53,6 +53,11 @@ func Configure(base adapter.Outbound, p *provider.Provider) (adapter.Outbound, e
 	if err := provider.ValidateAuthHeaderName(p.Auth.Scheme, p.Auth.HeaderName); err != nil {
 		return nil, fmt.Errorf("outbound: auth.header_name: %w", err)
 	}
+	if configurator, ok := base.(interface {
+		WithProvider(*provider.Provider) adapter.Outbound
+	}); ok {
+		base = configurator.WithProvider(p)
+	}
 	path := p.EndpointPaths[wireProtocol(base)]
 	if path == "" && len(extra) == 0 && p.Auth.HeaderName == "" {
 		return base, nil

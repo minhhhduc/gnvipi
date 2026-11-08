@@ -363,6 +363,30 @@ type ResponseFormat struct {
 	JSONSchema *JSONSchema        `json:"json_schema,omitempty"`
 }
 
+// Schema returns the underlying schema bytes if present.
+func (f *ResponseFormat) Schema() *json.RawMessage {
+	if f != nil && f.JSONSchema != nil && len(f.JSONSchema.Schema) > 0 {
+		return &f.JSONSchema.Schema
+	}
+	return nil
+}
+
+// Name returns the schema name if present.
+func (f *ResponseFormat) Name() string {
+	if f != nil && f.JSONSchema != nil {
+		return f.JSONSchema.Name
+	}
+	return ""
+}
+
+// Strict returns the schema strict setting if present.
+func (f *ResponseFormat) Strict() bool {
+	if f != nil && f.JSONSchema != nil {
+		return f.JSONSchema.Strict
+	}
+	return false
+}
+
 // ReasoningEffort is the thinking budget level a protocol may request.
 type ReasoningEffort string
 

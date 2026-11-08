@@ -908,3 +908,696 @@ func TestCrossProtocolMultiTurnMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestStructuredOutputLosslessMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	chatUpstreamResponse := `{
+		"id": "chatcmpl_test",
+		"object": "chat.completion",
+		"model": "upstream-model",
+		"choices": [{
+			"index": 0,
+			"message": {"role": "assistant", "content": "{\"name\":\"Alice\",\"age\":30}"},
+			"finish_reason": "stop"
+		}],
+		"usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18}
+	}`
+
+	responsesUpstreamResponse := `{
+		"id": "resp_test",
+		"object": "response",
+		"status": "completed",
+		"model": "upstream-model",
+		"output": [{
+			"id": "msg_0",
+			"type": "message",
+			"status": "completed",
+			"role": "assistant",
+			"content": [{"type": "output_text", "text": "{\"name\":\"Alice\",\"age\":30}"}]
+		}],
+		"usage": {"input_tokens": 12, "output_tokens": 6, "total_tokens": 18}
+	}`
+
+	t.Run("ChatToResponses_JSONSchema_Lossless", func(t *testing.T) {
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteResponses, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body:   responsesUpstreamResponse,
+		})
+
+		prov := provider.Provider{
+			ID:       "responses-prov",
+			Name:     "Responses Provider",
+			Protocol: ir.ProtocolOpenAIResponses,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolOpenAIResponses,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {
+				"type": "json_schema",
+				"json_schema": {
+					"name": "person",
+					"strict": true,
+					"schema": {
+						"type": "object",
+						"properties": {
+							"name": {"type": "string"},
+							"age": {"type": "integer"}
+						},
+						"required": ["name", "age"],
+						"additionalProperties": false
+					}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+
+		var upstreamBody struct {
+			Text struct {
+				Format struct {
+					Type   string          `json:"type"`
+					Name   string          `json:"name"`
+					Strict bool            `json:"strict"`
+					Schema json.RawMessage `json:"schema"`
+				} `json:"format"`
+			} `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v\n%s", err, reqs[0].Body)
+		}
+		if upstreamBody.Text.Format.Type != "json_schema" {
+			t.Errorf("type = %q, want json_schema", upstreamBody.Text.Format.Type)
+		}
+		if upstreamBody.Text.Format.Name != "person" {
+			t.Errorf("name = %q, want person", upstreamBody.Text.Format.Name)
+		}
+		if !upstreamBody.Text.Format.Strict {
+			t.Errorf("strict = %v, want true", upstreamBody.Text.Format.Strict)
+		}
+		if !strings.Contains(string(upstreamBody.Text.Format.Schema), `"additionalProperties":false`) {
+			t.Errorf("schema = %s, want additionalProperties: false", upstreamBody.Text.Format.Schema)
+		}
+	})
+
+	t.Run("ChatToResponses_JSONObject_Lossless", func(t *testing.T) {
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteResponses, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body:   responsesUpstreamResponse,
+		})
+
+		prov := provider.Provider{
+			ID:       "responses-prov",
+			Name:     "Responses Provider",
+			Protocol: ir.ProtocolOpenAIResponses,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolOpenAIResponses,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {"type": "json_object"}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+
+		var upstreamBody struct {
+			Text struct {
+				Format struct {
+					Type string `json:"type"`
+				} `json:"format"`
+			} `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v\n%s", err, reqs[0].Body)
+		}
+		if upstreamBody.Text.Format.Type != "json_object" {
+			t.Errorf("type = %q, want json_object", upstreamBody.Text.Format.Type)
+		}
+	})
+
+	t.Run("ResponsesToChat_JSONSchema_Lossless", func(t *testing.T) {
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteChat, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body:   chatUpstreamResponse,
+		})
+
+		prov := provider.Provider{
+			ID:       "chat-prov",
+			Name:     "Chat Provider",
+			Protocol: ir.ProtocolOpenAIChat,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolOpenAIChat,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		responsesPayload := `{
+			"model": "test-model",
+			"input": [{"role": "user", "content": "Extract person"}],
+			"text": {
+				"format": {
+					"type": "json_schema",
+					"name": "person",
+					"strict": true,
+					"schema": {
+						"type": "object",
+						"properties": {
+							"name": {"type": "string"},
+							"age": {"type": "integer"}
+						},
+						"required": ["name", "age"]
+					}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteResponses, strings.NewReader(responsesPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+
+		var upstreamBody struct {
+			ResponseFormat struct {
+				Type       string `json:"type"`
+				JSONSchema struct {
+					Name   string          `json:"name"`
+					Strict bool            `json:"strict"`
+					Schema json.RawMessage `json:"schema"`
+				} `json:"json_schema"`
+			} `json:"response_format"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v\n%s", err, reqs[0].Body)
+		}
+		if upstreamBody.ResponseFormat.Type != "json_schema" {
+			t.Errorf("type = %q, want json_schema", upstreamBody.ResponseFormat.Type)
+		}
+		if upstreamBody.ResponseFormat.JSONSchema.Name != "person" {
+			t.Errorf("name = %q, want person", upstreamBody.ResponseFormat.JSONSchema.Name)
+		}
+		if !upstreamBody.ResponseFormat.JSONSchema.Strict {
+			t.Errorf("strict = %v, want true", upstreamBody.ResponseFormat.JSONSchema.Strict)
+		}
+		if !strings.Contains(string(upstreamBody.ResponseFormat.JSONSchema.Schema), `"required":["name","age"]`) {
+			t.Errorf("schema = %s, want required name, age", upstreamBody.ResponseFormat.JSONSchema.Schema)
+		}
+	})
+
+	t.Run("AnthropicOutbound_ToolEmulation", func(t *testing.T) {
+		anthropicUpstreamResponse := `{
+			"id": "msg_emul_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "upstream-model",
+			"content": [{
+				"type": "tool_use",
+				"id": "call_123",
+				"name": "person",
+				"input": {"name": "Alice", "age": 30}
+			}],
+			"stop_reason": "tool_use",
+			"usage": {"input_tokens": 20, "output_tokens": 10}
+		}`
+
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteMessages, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body:   anthropicUpstreamResponse,
+		})
+
+		prov := provider.Provider{
+			ID:       "anthropic-emulated",
+			Name:     "Anthropic Emulated",
+			Protocol: ir.ProtocolAnthropicMessages,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+			Extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+			},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolAnthropicMessages,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {
+				"type": "json_schema",
+				"json_schema": {
+					"name": "person",
+					"strict": true,
+					"schema": {
+						"type": "object",
+						"properties": {
+							"name": {"type": "string"},
+							"age": {"type": "integer"}
+						}
+					}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+
+		// Verify Anthropic upstream received forced single tool with schema and tool_choice
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+
+		var upstreamBody struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				InputSchema json.RawMessage `json:"input_schema"`
+			} `json:"tools"`
+			ToolChoice struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"tool_choice"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v\n%s", err, reqs[0].Body)
+		}
+		if len(upstreamBody.Tools) != 1 || upstreamBody.Tools[0].Name != "person" {
+			t.Fatalf("expected 1 tool 'person', got %+v", upstreamBody.Tools)
+		}
+		if upstreamBody.ToolChoice.Type != "tool" || upstreamBody.ToolChoice.Name != "person" {
+			t.Fatalf("expected forced tool 'person', got %+v", upstreamBody.ToolChoice)
+		}
+
+		// Verify client received Chat response with unwrapped text and stop finish_reason
+		var clientResp struct {
+			Choices []struct {
+				Message struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &clientResp); err != nil {
+			t.Fatalf("decode client response: %v\n%s", err, w.Body.String())
+		}
+		if len(clientResp.Choices) == 0 {
+			t.Fatal("expected at least 1 choice")
+		}
+		if clientResp.Choices[0].FinishReason != "stop" {
+			t.Errorf("finish_reason = %q, want stop", clientResp.Choices[0].FinishReason)
+		}
+		if !strings.Contains(clientResp.Choices[0].Message.Content, `"Alice"`) {
+			t.Errorf("content = %q, want JSON containing Alice", clientResp.Choices[0].Message.Content)
+		}
+	})
+
+	t.Run("ResponsesToAnthropic_ToolEmulation", func(t *testing.T) {
+		anthropicUpstreamResponse := `{
+			"id": "msg_emul_test2",
+			"type": "message",
+			"role": "assistant",
+			"model": "upstream-model",
+			"content": [{
+				"type": "tool_use",
+				"id": "call_456",
+				"name": "person",
+				"input": {"name": "Bob", "age": 25}
+			}],
+			"stop_reason": "tool_use",
+			"usage": {"input_tokens": 20, "output_tokens": 10}
+		}`
+
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteMessages, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body:   anthropicUpstreamResponse,
+		})
+
+		prov := provider.Provider{
+			ID:       "anthropic-emulated-resp",
+			Name:     "Anthropic Emulated Resp",
+			Protocol: ir.ProtocolAnthropicMessages,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+			Extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+			},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolAnthropicMessages,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		responsesPayload := `{
+			"model": "test-model",
+			"input": [{"role": "user", "content": "Extract person"}],
+			"text": {
+				"format": {
+					"type": "json_schema",
+					"name": "person",
+					"strict": true,
+					"schema": {
+						"type": "object",
+						"properties": {
+							"name": {"type": "string"},
+							"age": {"type": "integer"}
+						}
+					}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteResponses, strings.NewReader(responsesPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+
+		// Verify Anthropic upstream received forced single tool with schema and tool_choice
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+
+		var upstreamBody struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+			ToolChoice struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"tool_choice"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v\n%s", err, reqs[0].Body)
+		}
+		if len(upstreamBody.Tools) != 1 || upstreamBody.Tools[0].Name != "person" {
+			t.Fatalf("expected 1 tool 'person', got %+v", upstreamBody.Tools)
+		}
+
+		// Verify client received Responses completed response with unwrapped text
+		var clientResp struct {
+			Status string `json:"status"`
+			Output []struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &clientResp); err != nil {
+			t.Fatalf("decode client response: %v\n%s", err, w.Body.String())
+		}
+		if clientResp.Status != "completed" {
+			t.Errorf("status = %q, want completed", clientResp.Status)
+		}
+		if len(clientResp.Output) == 0 || len(clientResp.Output[0].Content) == 0 {
+			t.Fatal("expected output with content")
+		}
+		if !strings.Contains(clientResp.Output[0].Content[0].Text, `"Bob"`) {
+			t.Errorf("text = %q, want JSON containing Bob", clientResp.Output[0].Content[0].Text)
+		}
+	})
+
+	t.Run("AnthropicOutbound_DefaultUnsupported", func(t *testing.T) {
+		prov := provider.Provider{
+			ID:       "anthropic-default",
+			Name:     "Anthropic Default",
+			Protocol: ir.ProtocolAnthropicMessages,
+			BaseURL:  "https://upstream.invalid",
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+			Extensions: map[string]json.RawMessage{
+				"feature_policy": json.RawMessage(`"strict"`),
+			},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolAnthropicMessages,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {
+				"type": "json_schema",
+				"json_schema": {
+					"name": "person",
+					"schema": {"type": "object"}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 Bad Request; body: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "response_format") {
+			t.Errorf("expected response_format mentioned in error, got: %s", w.Body.String())
+		}
+	})
+
+	t.Run("AnthropicOutbound_JSONModePrompt_JSONSchema_Lenient", func(t *testing.T) {
+		upstream := gatewaytest.New(t)
+		upstream.Script(gatewaytest.RouteMessages, gatewaytest.Step{
+			Status: http.StatusOK,
+			Body: `{
+				"id": "msg_prompt_json",
+				"type": "message",
+				"role": "assistant",
+				"model": "claude-3-5-sonnet",
+				"content": [{"type": "text", "text": "{\"name\":\"Alice\",\"age\":30}"}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 20, "output_tokens": 10}
+			}`,
+		})
+
+		prov := provider.Provider{
+			ID:       "anthropic-prompt-prov",
+			Name:     "Anthropic Prompt Provider",
+			Protocol: ir.ProtocolAnthropicMessages,
+			BaseURL:  upstream.URL(),
+			Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret"},
+			Extensions: map[string]json.RawMessage{
+				"anthropic": json.RawMessage(`{"json_mode_prompt": true}`),
+			},
+		}
+
+		resolver := staticResolver{
+			routes: map[string]routing.Route{
+				"test-model": {
+					Kind:             routing.Custom,
+					Provider:         &prov,
+					UpstreamModel:    "upstream-model",
+					UpstreamProtocol: ir.ProtocolAnthropicMessages,
+				},
+			},
+		}
+
+		dispatcher := dispatch.New(resolver, &relay.Options{})
+		dispatcher.Registry = setupMatrixRegistry()
+		engine := gin.New()
+		engine.Use(dispatcher.Handle)
+
+		chatPayload := `{
+			"model": "test-model",
+			"messages": [{"role": "user", "content": "Extract person"}],
+			"response_format": {
+				"type": "json_schema",
+				"json_schema": {
+					"name": "person",
+					"schema": {"type": "object", "properties": {"name": {"type": "string"}}}
+				}
+			}
+		}`
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(chatPayload))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 OK; body: %s", w.Code, w.Body.String())
+		}
+
+		// Verify upstream request has system prompt with schema
+		reqs := upstream.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("expected upstream request")
+		}
+		var upstreamBody struct {
+			System []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"system"`
+			Tools []any `json:"tools"`
+		}
+		if err := json.Unmarshal([]byte(reqs[0].Body), &upstreamBody); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		if len(upstreamBody.Tools) > 0 {
+			t.Errorf("expected no tools in JSONModePrompt mode, got %+v", upstreamBody.Tools)
+		}
+		schemaPromptFound := false
+		for _, sys := range upstreamBody.System {
+			if strings.Contains(sys.Text, "matching the following schema") && strings.Contains(sys.Text, "name") {
+				schemaPromptFound = true
+				break
+			}
+		}
+		if !schemaPromptFound {
+			t.Fatalf("expected schema instruction in system prompt, got %+v", upstreamBody.System)
+		}
+
+		// Verify client got chat completion with JSON text
+		var clientResp struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &clientResp); err != nil {
+			t.Fatalf("decode client response: %v", err)
+		}
+		if len(clientResp.Choices) == 0 || !strings.Contains(clientResp.Choices[0].Message.Content, "Alice") {
+			t.Fatalf("unexpected client response: %+v", clientResp)
+		}
+	})
+}

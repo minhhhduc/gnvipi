@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	outboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/outbound/anthropic"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
@@ -789,5 +790,188 @@ func TestClaudeCacheRefreshedOnPrefsOnChange(t *testing.T) {
 	}
 	if !foundTestModel {
 		t.Fatalf("expected test/model-1 in refreshed Claude model cache, got: %+v", parsed.Models)
+	}
+}
+
+func TestResolveProviderCapabilities_Extensions(t *testing.T) {
+	registry := adapter.NewRegistry()
+	registry.RegisterOutbound(outboundanthropic.New())
+
+	tests := []struct {
+		name       string
+		registry   *adapter.Registry
+		extensions map[string]json.RawMessage
+		wantSO     bool
+	}{
+		{
+			name:       "registry - default anthropic has no structured output",
+			registry:   registry,
+			extensions: nil,
+			wantSO:     false,
+		},
+		{
+			name:     "registry - tool_emulation enabled",
+			registry: registry,
+			extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+			},
+			wantSO: true,
+		},
+		{
+			name:     "registry - anthropic json_mode_prompt enabled",
+			registry: registry,
+			extensions: map[string]json.RawMessage{
+				"anthropic": json.RawMessage(`{"json_mode_prompt": true}`),
+			},
+			wantSO: true,
+		},
+		{
+			name:     "registry - structured_output prompt mode enabled",
+			registry: registry,
+			extensions: map[string]json.RawMessage{
+				"structured_output": json.RawMessage(`"prompt"`),
+			},
+			wantSO: true,
+		},
+		{
+			name:     "registry - structured_output tool mode enabled",
+			registry: registry,
+			extensions: map[string]json.RawMessage{
+				"structured_output": json.RawMessage(`"tool"`),
+			},
+			wantSO: true,
+		},
+		{
+			name:     "registry - override structured_output false wins over tool_emulation",
+			registry: registry,
+			extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+				"capabilities":   json.RawMessage(`{"structured_output": false}`),
+			},
+			wantSO: false,
+		},
+		{
+			name:       "nil registry - fallback default anthropic has no structured output",
+			registry:   nil,
+			extensions: nil,
+			wantSO:     false,
+		},
+		{
+			name:     "nil registry - fallback tool_emulation enabled",
+			registry: nil,
+			extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+			},
+			wantSO: true,
+		},
+		{
+			name:     "nil registry - fallback anthropic json_mode_prompt enabled",
+			registry: nil,
+			extensions: map[string]json.RawMessage{
+				"anthropic": json.RawMessage(`{"json_mode_prompt": true}`),
+			},
+			wantSO: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &gatewayprovider.Provider{
+				ID:         "test-anthropic",
+				Protocol:   ir.ProtocolAnthropicMessages,
+				Extensions: tc.extensions,
+			}
+			caps := resolveProviderCapabilities(p, tc.registry)
+			if caps.StructuredOutput != tc.wantSO {
+				t.Errorf("StructuredOutput = %v, want %v", caps.StructuredOutput, tc.wantSO)
+			}
+		})
+	}
+}
+
+func TestBuildCatalog_StructuredOutputAdvertised(t *testing.T) {
+	tempDir := t.TempDir()
+	storePath := filepath.Join(tempDir, "models.json")
+	store, err := gatewayprovider.OpenStore(storePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &modelPrefs{
+		path:          storePath,
+		providerStore: store,
+		hidden:        map[string]struct{}{},
+		deleted:       map[string]struct{}{},
+	}
+
+	providers := []gatewayprovider.Provider{
+		{
+			ID:       "anthropic-emulated",
+			Name:     "Anthropic Emulated",
+			BaseURL:  "https://api.anthropic.com",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Extensions: map[string]json.RawMessage{
+				"tool_emulation": json.RawMessage(`true`),
+			},
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "claude-emulated", UpstreamModel: "claude-3-5-sonnet"},
+			},
+		},
+		{
+			ID:       "anthropic-prompt",
+			Name:     "Anthropic Prompt",
+			BaseURL:  "https://api.anthropic.com",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Extensions: map[string]json.RawMessage{
+				"anthropic": json.RawMessage(`{"json_mode_prompt": true}`),
+			},
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "claude-prompt", UpstreamModel: "claude-3-5-sonnet"},
+			},
+		},
+		{
+			ID:       "anthropic-plain",
+			Name:     "Anthropic Plain",
+			BaseURL:  "https://api.anthropic.com",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Models: []gatewayprovider.ModelMapping{
+				{Alias: "claude-plain", UpstreamModel: "claude-3-5-sonnet"},
+			},
+		},
+	}
+
+	err = store.Update(func(doc *gatewayprovider.Document) error {
+		doc.Providers = providers
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registry := adapter.NewRegistry()
+	registry.RegisterOutbound(outboundanthropic.New())
+
+	catalog := buildCatalog(p, nil, WithAdapterRegistry(registry))
+	byID := make(map[string]gatewayModel)
+	for _, m := range catalog {
+		byID[m.ID] = m
+	}
+
+	emulated, ok := byID["claude-emulated"]
+	if !ok || emulated.Capabilities == nil || !emulated.Capabilities.StructuredOutput {
+		t.Errorf("expected claude-emulated to advertise structured_output: true, got %+v", emulated.Capabilities)
+	}
+
+	promptModel, ok := byID["claude-prompt"]
+	if !ok || promptModel.Capabilities == nil || !promptModel.Capabilities.StructuredOutput {
+		t.Errorf("expected claude-prompt to advertise structured_output: true, got %+v", promptModel.Capabilities)
+	}
+
+	plainModel, ok := byID["claude-plain"]
+	if !ok || plainModel.Capabilities == nil || plainModel.Capabilities.StructuredOutput {
+		t.Errorf("expected claude-plain to advertise structured_output: false, got %+v", plainModel.Capabilities)
 	}
 }

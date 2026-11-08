@@ -16,7 +16,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
-func parseStream(_ context.Context, resp *http.Response) (adapter.Stream, error) {
+func parseStream(_ context.Context, resp *http.Response, toolEmulation bool) (adapter.Stream, error) {
 	if resp == nil || resp.Body == nil {
 		return nil, invalidRequest("Anthropic response is required")
 	}
@@ -35,9 +35,10 @@ func parseStream(_ context.Context, resp *http.Response) (adapter.Stream, error)
 	}
 	reader := sse.NewReader(resp.Body)
 	return &anthropicStream{
-		reader: reader,
-		body:   resp.Body,
-		blocks: make(map[int]*streamBlock),
+		reader:        reader,
+		body:          resp.Body,
+		blocks:        make(map[int]*streamBlock),
+		toolEmulation: toolEmulation,
 	}, nil
 }
 
@@ -53,13 +54,14 @@ type anthropicStream struct {
 	reader *sse.Reader
 	body   io.Closer
 
-	pending      []ir.StreamEvent
-	started      bool
-	terminated   bool
-	blocks       map[int]*streamBlock
-	openBlocks   map[int]bool
-	mergedUsage  ir.Usage
-	usageEmitted bool
+	pending       []ir.StreamEvent
+	started       bool
+	terminated    bool
+	blocks        map[int]*streamBlock
+	openBlocks    map[int]bool
+	mergedUsage   ir.Usage
+	usageEmitted  bool
+	toolEmulation bool
 
 	savedStopReason ir.StopReason
 }
@@ -219,13 +221,18 @@ func (s *anthropicStream) handleSSEEvent(event sse.Event) error {
 			prototype.Type = ir.BlockReasoning
 			prototype.Reasoning = &ir.ReasoningBlock{Content: frame.ContentBlock.Thinking}
 		case "tool_use":
-			sb.kind = ir.BlockToolUse
-			sb.toolID = frame.ContentBlock.ID
-			sb.toolName = frame.ContentBlock.Name
-			prototype.Type = ir.BlockToolUse
-			prototype.ToolUse = &ir.ToolUse{
-				ID:   frame.ContentBlock.ID,
-				Name: frame.ContentBlock.Name,
+			if s.toolEmulation {
+				sb.kind = ir.BlockText
+				prototype.Type = ir.BlockText
+			} else {
+				sb.kind = ir.BlockToolUse
+				sb.toolID = frame.ContentBlock.ID
+				sb.toolName = frame.ContentBlock.Name
+				prototype.Type = ir.BlockToolUse
+				prototype.ToolUse = &ir.ToolUse{
+					ID:   frame.ContentBlock.ID,
+					Name: frame.ContentBlock.Name,
+				}
 			}
 		default:
 			sb.kind = ir.BlockType(frame.ContentBlock.Type)
@@ -255,11 +262,15 @@ func (s *anthropicStream) handleSSEEvent(event sse.Event) error {
 			}
 			s.pending = append(s.pending, ir.NewSignatureDelta(idx, frame.Delta.Signature))
 		case "input_json_delta":
-			toolID := ""
-			if sb != nil {
-				toolID = sb.toolID
+			if s.toolEmulation {
+				s.pending = append(s.pending, ir.NewTextDelta(idx, frame.Delta.PartialJSON))
+			} else {
+				toolID := ""
+				if sb != nil {
+					toolID = sb.toolID
+				}
+				s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, toolID, frame.Delta.PartialJSON))
 			}
-			s.pending = append(s.pending, ir.NewToolArgumentsDelta(idx, toolID, frame.Delta.PartialJSON))
 		}
 
 	case "content_block_stop":
@@ -282,7 +293,11 @@ func (s *anthropicStream) handleSSEEvent(event sse.Event) error {
 			case "stop_sequence":
 				s.savedStopReason = ir.StopSequence
 			case "tool_use":
-				s.savedStopReason = ir.StopToolUse
+				if s.toolEmulation {
+					s.savedStopReason = ir.StopEndTurn
+				} else {
+					s.savedStopReason = ir.StopToolUse
+				}
 			default:
 				s.savedStopReason = ir.StopReason(frame.Delta.StopReason)
 			}

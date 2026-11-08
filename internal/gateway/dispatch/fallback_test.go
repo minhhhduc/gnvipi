@@ -67,6 +67,9 @@ func TestFallbackTriggersOnUpstreamErrors(t *testing.T) {
 				Protocol: ir.ProtocolOpenAIChat,
 				Auth:     provider.Auth{Scheme: provider.AuthNone},
 				Enabled:  true,
+				Extensions: map[string]json.RawMessage{
+					"retry": json.RawMessage(`{"max_attempts":1}`),
+				},
 				Models: []provider.ModelMapping{
 					{
 						Alias:         "chat-primary",
@@ -411,6 +414,9 @@ func TestCrossProtocolFallback(t *testing.T) {
 		Protocol: ir.ProtocolAnthropicMessages,
 		Auth:     provider.Auth{Scheme: provider.AuthAPIKey, Key: "anthropic-key"},
 		Enabled:  true,
+		Extensions: map[string]json.RawMessage{
+			"retry": json.RawMessage(`{"max_attempts":1}`),
+		},
 		Models: []provider.ModelMapping{
 			{
 				Alias:         "claude-primary",
@@ -572,6 +578,9 @@ func TestCrossProtocolStreamingFallback(t *testing.T) {
 		Protocol: ir.ProtocolAnthropicMessages,
 		Auth:     provider.Auth{Scheme: provider.AuthAPIKey, Key: "k1"},
 		Enabled:  true,
+		Extensions: map[string]json.RawMessage{
+			"retry": json.RawMessage(`{"max_attempts":1}`),
+		},
 		Models: []provider.ModelMapping{
 			{
 				Alias:         "claude-stream",
@@ -1102,6 +1111,9 @@ func TestFallbackMultiHopDispatch(t *testing.T) {
 		Protocol: ir.ProtocolOpenAIChat,
 		Auth:     provider.Auth{Scheme: provider.AuthNone},
 		Enabled:  true,
+		Extensions: map[string]json.RawMessage{
+			"retry": json.RawMessage(`{"max_attempts":1}`),
+		},
 		Models: []provider.ModelMapping{
 			{
 				Alias:         "model-b",
