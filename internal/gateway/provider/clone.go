@@ -10,7 +10,13 @@ import (
 func Clone(p *Provider) Provider {
 	out := *p
 	out.Headers = maps.Clone(p.Headers)
-	out.Models = slices.Clone(p.Models)
+	if p.Models != nil {
+		out.Models = make([]ModelMapping, len(p.Models))
+		for i, m := range p.Models {
+			out.Models[i] = m
+			out.Models[i].Fallbacks = slices.Clone(m.Fallbacks)
+		}
+	}
 	out.ForwardHeaders = slices.Clone(p.ForwardHeaders)
 	out.EndpointPaths = maps.Clone(p.EndpointPaths)
 	out.ExtraBody = slices.Clone(p.ExtraBody)

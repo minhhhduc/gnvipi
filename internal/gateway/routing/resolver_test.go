@@ -927,3 +927,51 @@ func TestRegistryResolverConcurrentPublicationAndResolve(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestResolverFallbacksResolution(t *testing.T) {
+	p1 := makeTestProvider("prov-1", "prov-1", "https://p1.example.com/v1", []provider.ModelMapping{
+		{
+			Alias:         "primary-model",
+			UpstreamModel: "m1",
+			Fallbacks:     []string{"backup-model", "tertiary-model", "hidden-model"},
+		},
+		{
+			Alias:         "backup-model",
+			UpstreamModel: "m2",
+		},
+	})
+	p2 := makeTestProvider("prov-2", "prov-2", "https://p2.example.com/v1", []provider.ModelMapping{
+		{
+			Alias:         "tertiary-model",
+			UpstreamModel: "m3",
+			Fallbacks:     []string{"primary-model"}, // cycle test
+		},
+		{
+			Alias:         "hidden-model",
+			UpstreamModel: "m-hidden",
+			Hidden:        true,
+		},
+	})
+
+	r, err := NewRegistryResolver([]provider.Provider{p1, p2}, nil)
+	if err != nil {
+		t.Fatalf("NewRegistryResolver failed: %v", err)
+	}
+
+	route, err := r.Resolve(t.Context(), "primary-model", ir.ProtocolOpenAIChat)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if route.Kind != Custom || route.Provider.ID != "prov-1" || route.UpstreamModel != "m1" {
+		t.Fatalf("unexpected primary route: %+v", route)
+	}
+	if len(route.Fallbacks) != 2 {
+		t.Fatalf("expected 2 fallbacks (backup, tertiary), got %d: %+v", len(route.Fallbacks), route.Fallbacks)
+	}
+	if route.Fallbacks[0].Alias != "backup-model" || route.Fallbacks[0].UpstreamModel != "m2" || route.Fallbacks[0].Provider.ID != "prov-1" {
+		t.Errorf("unexpected fallback 0: %+v", route.Fallbacks[0])
+	}
+	if route.Fallbacks[1].Alias != "tertiary-model" || route.Fallbacks[1].UpstreamModel != "m3" || route.Fallbacks[1].Provider.ID != "prov-2" {
+		t.Errorf("unexpected fallback 1: %+v", route.Fallbacks[1])
+	}
+}
