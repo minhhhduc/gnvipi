@@ -4,6 +4,7 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,12 +17,14 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
+	inboundanthropic "github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gwpolicy "github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/relay"
 	"github.com/minhhhduc/gnvipi/internal/gateway/reliability"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
+	"github.com/minhhhduc/gnvipi/internal/gateway/tokencount"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
 
@@ -233,7 +236,11 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		handler.ServeBuffered(c.Writer, c.Request, body)
 		return
 	}
-	if c.Request.URL.Path == "/v1/messages/count_tokens" || d.Registry == nil {
+	if c.Request.URL.Path == "/v1/messages/count_tokens" {
+		d.serveCountTokensEstimate(c, body, route, rc)
+		return
+	}
+	if d.Registry == nil {
 		restoreAndContinue(c, body)
 		return
 	}
@@ -258,4 +265,57 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		return
 	}
 	handler.Serve(c, body, inbound, rc)
+}
+
+func (d *Dispatcher) serveCountTokensEstimate(c *gin.Context, body []byte, route routing.Route, rc *core.RequestContext) {
+	c.Abort()
+	protocol := rc.InboundProtocol
+	rc.ResolvedProvider = route.Provider.ID
+	rc.UpstreamModel = route.UpstreamModel
+	rc.UpstreamProtocol = route.Provider.Protocol
+	rc.Stream = false
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	rc.BeginRecording(ctx, d.options.Recorder)
+	var usage ir.Usage
+	var terminal error
+	defer func() {
+		rc.Complete(usage, completionError(terminal))
+		cancel()
+	}()
+
+	var inbound adapter.Inbound
+	if d.Registry != nil {
+		if registered, ok := d.Registry.Inbound(protocol); ok {
+			inbound = registered
+		}
+	}
+	if inbound == nil {
+		inbound = inboundanthropic.New()
+	}
+
+	decodedRequest := c.Request.Clone(ctx)
+	decodedRequest.Body = io.NopCloser(bytes.NewReader(body))
+	decodedRequest.ContentLength = int64(len(body))
+	normalized, err := inbound.DecodeRequest(decodedRequest)
+	if err != nil {
+		terminal = err
+		writeTranslationError(c, protocol, err)
+		return
+	}
+	if normalized == nil {
+		terminal = errors.New("dispatch: inbound adapter returned a nil request")
+		writeTranslationError(c, protocol, terminal)
+		return
+	}
+
+	tokens, err := tokencount.EstimateRequest(body)
+	if err != nil {
+		terminal = err
+		writeTranslationError(c, protocol, &gwerr.Error{Kind: gwerr.KindInvalidRequest, Status: http.StatusBadRequest, Message: "invalid json body"})
+		return
+	}
+
+	usage.InputTokens = tokens
+	c.Header("X-Gateway-Token-Estimate", "true")
+	c.JSON(http.StatusOK, gin.H{"input_tokens": tokens})
 }
