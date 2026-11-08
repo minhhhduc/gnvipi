@@ -67,7 +67,8 @@ func handleAdminModels(c *gin.Context) {
 
 func handleAdminAutomode(c *gin.Context) {
 	var payload struct {
-		Model string `json:"model"`
+		Model         string `json:"model"`
+		ChatResponses *bool  `json:"chat_responses,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -88,10 +89,36 @@ func handleAdminAutomode(c *gin.Context) {
 				}
 			}
 		}
+		if !valid && prefs.providerStore != nil {
+			storeList := prefs.providerStore.List()
+			for i := range storeList {
+				p := &storeList[i]
+				for _, m := range p.Models {
+					if m.Alias == id || m.UpstreamModel == id {
+						valid = true
+						break
+					}
+				}
+				if valid {
+					break
+				}
+			}
+		}
+		if !valid && prefs.resolver != nil {
+			if route, err := prefs.resolver.Resolve(c.Request.Context(), id, ""); err == nil && route.Kind == "custom" {
+				valid = true
+			}
+		}
 	}
 	if !valid {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "choose an enabled gateway model"})
 		return
+	}
+	if payload.ChatResponses != nil {
+		if err := prefs.setAutoModelChatResponses(*payload.ChatResponses); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	if err := prefs.setAutoModel(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

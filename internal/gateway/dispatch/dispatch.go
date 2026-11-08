@@ -133,7 +133,7 @@ func (d *Dispatcher) featurePolicyConfig() gwpolicy.Config {
 	return cfg
 }
 
-func (d *Dispatcher) handler(model string, route routing.Route) (*relay.Relay, error) {
+func (d *Dispatcher) handler(model string, route *routing.Route) (*relay.Relay, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if cached, found := d.handlers[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
@@ -207,7 +207,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, err)
 		return
 	}
-	if route.Kind == routing.Fallthrough {
+	if route.Kind == routing.Fallthrough || payload.Model == routing.VirtualAutoMode || payload.Model == routing.VirtualCycle {
 		restoreAndContinue(c, body)
 		return
 	}
@@ -224,7 +224,7 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		defer release()
 	}
 	if route.UpstreamProtocol == protocol {
-		handler, err := d.handler(payload.Model, route)
+		handler, err := d.handler(payload.Model, &route)
 		if err != nil {
 			writeDispatchError(c, protocol, err)
 			return
@@ -248,9 +248,9 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		restoreAndContinue(c, body)
 		return
 	}
-	handler, err := d.translator(payload.Model, route, base)
+	handler, err := d.translator(payload.Model, &route, base)
 	if err != nil {
-		d.failTranslation(c, protocol, route, rc, isStream, err)
+		d.failTranslation(c, protocol, &route, rc, isStream, err)
 		return
 	}
 	if isStream {

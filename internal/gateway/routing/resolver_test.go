@@ -127,6 +127,263 @@ func TestLegacyResolverConcurrentPublication(t *testing.T) {
 	wg.Wait()
 }
 
+func TestVirtualModelsAutomode(t *testing.T) {
+	provList := []provider.Provider{
+		{
+			ID:       "custom-provider",
+			Name:     "custom",
+			BaseURL:  "https://custom.example/v1",
+			Protocol: ir.ProtocolOpenAIChat,
+			Enabled:  true,
+			Models: []provider.ModelMapping{
+				{Alias: "local/verifier", UpstreamModel: "verifier-model"},
+				{Alias: "hidden/model", UpstreamModel: "hidden-upstream", Hidden: true},
+			},
+		},
+	}
+
+	// 1. Automode pointing to custom provider
+	r, err := NewRegistryResolver(provList, nil, WithVirtualOptions(VirtualOptions{
+		AutoModel: "local/verifier",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	route, err := r.Resolve(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil {
+		t.Fatalf("resolve automode: %v", err)
+	}
+	if route.Kind != Custom || route.UpstreamModel != "verifier-model" || route.Provider.ID != "custom-provider" {
+		t.Fatalf("unexpected route: %+v", route)
+	}
+	candidates, err := r.ResolveCandidates(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 1 || candidates[0].UpstreamModel != "verifier-model" {
+		t.Fatalf("unexpected candidates: %+v %v", candidates, err)
+	}
+
+	// 2. Automode pointing to NVIDIA model
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel: "meta/llama-3.1-70b-instruct",
+	})
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil {
+		t.Fatalf("resolve automode: %v", err)
+	}
+	if route.Kind != Fallthrough || route.UpstreamModel != "meta/llama-3.1-70b-instruct" {
+		t.Fatalf("unexpected route for nvidia target: %+v", route)
+	}
+
+	// 3. Automode pointing to hidden model returns 404
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel: "hidden/model",
+	})
+	_, err = r.Resolve(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	var gwErr *gwerr.Error
+	if !errors.As(err, &gwErr) || gwErr.Kind != gwerr.KindNotFound || !strings.Contains(gwErr.Message, "automode target is hidden") {
+		t.Fatalf("expected hidden error, got: %v", err)
+	}
+
+	// 4. Automode on Chat/Responses disabled by default
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel:              "local/verifier",
+		AutoModelChatResponses: false,
+	})
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolOpenAIChat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Kind != Fallthrough || route.UpstreamModel != "automode" {
+		t.Fatalf("expected fallthrough for chat when disabled, got: %+v", route)
+	}
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolOpenAIResponses)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Kind != Fallthrough || route.UpstreamModel != "automode" {
+		t.Fatalf("expected fallthrough for responses when disabled, got: %+v", route)
+	}
+
+	// 5. Automode on Chat/Responses enabled via config option
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel:              "local/verifier",
+		AutoModelChatResponses: true,
+	})
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolOpenAIChat)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "verifier-model" {
+		t.Fatalf("expected custom route when chat enabled, got: %+v err=%v", route, err)
+	}
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolOpenAIResponses)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "verifier-model" {
+		t.Fatalf("expected custom route when responses enabled, got: %+v err=%v", route, err)
+	}
+}
+
+func TestVirtualModelsCycle(t *testing.T) {
+	provList := []provider.Provider{
+		{
+			ID:       "prov-1",
+			Name:     "p1",
+			BaseURL:  "https://p1.example/v1",
+			Protocol: ir.ProtocolAnthropicMessages,
+			Enabled:  true,
+			Models: []provider.ModelMapping{
+				{Alias: "custom/one", UpstreamModel: "upstream-1"},
+				{Alias: "custom/hidden", UpstreamModel: "upstream-h", Hidden: true},
+			},
+		},
+		{
+			ID:       "prov-2",
+			Name:     "p2",
+			BaseURL:  "https://p2.example/v1",
+			Protocol: ir.ProtocolOpenAIChat,
+			Enabled:  true,
+			Models: []provider.ModelMapping{
+				{Alias: "custom/two", UpstreamModel: "upstream-2"},
+			},
+		},
+	}
+
+	cycleModels := []string{"custom/one", "meta/llama-3.1-70b-instruct", "custom/two"}
+	r, err := NewRegistryResolver(provList, nil, WithVirtualOptions(VirtualOptions{
+		CycleModels: cycleModels,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First attempt starts at index 0: custom/one
+	route, err := r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "upstream-1" {
+		t.Fatalf("initial resolve: %+v err=%v", route, err)
+	}
+	candidates, err := r.ResolveCandidates(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 3 {
+		t.Fatalf("candidates len=%d err=%v", len(candidates), err)
+	}
+	if candidates[0].UpstreamModel != "upstream-1" || candidates[1].UpstreamModel != "meta/llama-3.1-70b-instruct" || candidates[2].UpstreamModel != "upstream-2" {
+		t.Fatalf("unexpected candidates order: %+v", candidates)
+	}
+
+	// Advance cycle on failure of custom/one
+	r.AdvanceCycle("custom/one")
+
+	// Sticky index should now point to candidate 1: meta/llama-3.1-70b-instruct (Fallthrough)
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.Kind != Fallthrough || route.UpstreamModel != "meta/llama-3.1-70b-instruct" {
+		t.Fatalf("after advance 1: %+v err=%v", route, err)
+	}
+	candidates, err = r.ResolveCandidates(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 3 || candidates[0].UpstreamModel != "meta/llama-3.1-70b-instruct" {
+		t.Fatalf("candidates after advance 1: %+v", candidates)
+	}
+
+	// Non-matching model fails to advance
+	r.AdvanceCycle("wrong-model")
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.UpstreamModel != "meta/llama-3.1-70b-instruct" {
+		t.Fatalf("advance on wrong model mutated index: %+v err=%v", route, err)
+	}
+
+	// Advance past candidate 1 -> candidate 2: custom/two
+	r.AdvanceCycle("meta/llama-3.1-70b-instruct")
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "upstream-2" {
+		t.Fatalf("after advance 2: %+v err=%v", route, err)
+	}
+
+	// Advance past candidate 2 -> wraps around to candidate 0: custom/one
+	r.AdvanceCycle("custom/two")
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "upstream-1" {
+		t.Fatalf("after wrap: %+v err=%v", route, err)
+	}
+
+	// Config change resets cycle index to 0
+	r.AdvanceCycle("custom/one") // advance to 1
+	r.UpdateVirtual(VirtualOptions{
+		CycleModels: []string{"custom/two", "custom/one"},
+	})
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.UpstreamModel != "upstream-2" {
+		t.Fatalf("config change should reset to index 0, got: %+v", route)
+	}
+
+	// Hidden models in cycle are skipped
+	r.UpdateVirtual(VirtualOptions{
+		CycleModels: []string{"custom/hidden", "custom/one"},
+	})
+	candidates, err = r.ResolveCandidates(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 1 || candidates[0].UpstreamModel != "upstream-1" {
+		t.Fatalf("hidden candidate should be skipped, got: %+v err=%v", candidates, err)
+	}
+
+	// Empty cycle returns service unavailable
+	r.UpdateVirtual(VirtualOptions{
+		CycleModels: nil,
+	})
+	_, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	var gwErr *gwerr.Error
+	if !errors.As(err, &gwErr) || gwErr.Kind != gwerr.KindOverloaded {
+		t.Fatalf("expected overloaded (503), got: %v", err)
+	}
+
+	// Automode mapped to cycle
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel:   "cycle",
+		CycleModels: []string{"custom/one", "custom/two"},
+	})
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil || route.UpstreamModel != "upstream-1" {
+		t.Fatalf("automode mapped to cycle resolve: %+v err=%v", route, err)
+	}
+	candidates, err = r.ResolveCandidates(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("automode mapped to cycle candidates: %+v err=%v", candidates, err)
+	}
+}
+
+func TestLegacyResolverVirtualModels(t *testing.T) {
+	legacyList := []provider.LegacyProvider{
+		{Name: "p1", BaseURL: "https://p1.example/v1", Model: "upstream-1", Alias: "custom/one", MessagesOnly: true},
+		{Name: "p2", BaseURL: "https://p2.example/v1", Model: "upstream-2", Alias: "custom/two"},
+	}
+	r, err := NewLegacyResolver(legacyList, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.UpdateVirtual(VirtualOptions{
+		AutoModel:              "custom/one",
+		AutoModelChatResponses: false,
+		CycleModels:            []string{"custom/one", "custom/two"},
+	})
+
+	// Automode Anthropic
+	route, err := r.Resolve(t.Context(), "automode", ir.ProtocolAnthropicMessages)
+	if err != nil || route.Kind != Custom || route.UpstreamModel != "upstream-1" {
+		t.Fatalf("legacy automode: %+v err=%v", route, err)
+	}
+
+	// Automode Chat disabled
+	route, err = r.Resolve(t.Context(), "automode", ir.ProtocolOpenAIChat)
+	if err != nil || route.Kind != Fallthrough {
+		t.Fatalf("legacy automode chat should fallthrough: %+v", route)
+	}
+
+	// Cycle
+	candidates, err := r.ResolveCandidates(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("legacy cycle candidates: %+v err=%v", candidates, err)
+	}
+
+	r.AdvanceCycle("custom/one")
+	route, err = r.Resolve(t.Context(), "cycle", ir.ProtocolAnthropicMessages)
+	if err != nil || route.UpstreamModel != "upstream-2" {
+		t.Fatalf("legacy cycle advance: %+v err=%v", route, err)
+	}
+}
+
 func makeTestProvider(id, name, baseURL string, models []provider.ModelMapping) provider.Provider {
 	return provider.Provider{
 		ID:       id,

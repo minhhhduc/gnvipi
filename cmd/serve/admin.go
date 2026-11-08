@@ -46,34 +46,36 @@ type gatewayModel struct {
 var prefs = &modelPrefs{}
 
 type modelPrefs struct {
-	mu            sync.RWMutex
-	changeMu      sync.Mutex // serializes mutations, persistence, and reload callbacks
-	path          string
-	hidden        map[string]struct{}
-	deleted       map[string]struct{}
-	providers     []customProvider
-	providerStore *gatewayprovider.Store
-	loadErr       error // refuses mutation after an unreadable or unsupported models file
-	autoModel     string
-	searchURL     string
-	cycle         *cycleConfig
-	cycleIndex    int
-	onChange      func([]customProvider) // rewrites config.yaml so cliproxy reloads
-	onMaskChange  func()                 // triggers re-registration of models in cliproxy
-	resolver      *routing.RegistryResolver
+	mu                     sync.RWMutex
+	changeMu               sync.Mutex // serializes mutations, persistence, and reload callbacks
+	path                   string
+	hidden                 map[string]struct{}
+	deleted                map[string]struct{}
+	providers              []customProvider
+	providerStore          *gatewayprovider.Store
+	loadErr                error // refuses mutation after an unreadable or unsupported models file
+	autoModel              string
+	autoModelChatResponses bool
+	searchURL              string
+	cycle                  *cycleConfig
+	cycleIndex             int
+	onChange               func([]customProvider) // rewrites config.yaml so cliproxy reloads
+	onMaskChange           func()                 // triggers re-registration of models in cliproxy
+	resolver               *routing.RegistryResolver
 }
 
 type prefsFile struct {
-	Meta          map[string]any             `json:"_meta,omitempty"`
-	Groups        []ModelGroup               `json:"groups"`
-	MasksID       []string                   `json:"masks_id"`
-	DeletedID     []string                   `json:"deleted_id"`
-	Providers     []customProvider           `json:"providers,omitempty"` // kept for admin UI custom providers
-	ProvidersV2   []gatewayprovider.Provider `json:"providers_v2"`
-	SchemaVersion int                        `json:"schema_version"`
-	AutoModel     string                     `json:"auto_model,omitempty"`
-	SearchURL     string                     `json:"search_url,omitempty"`
-	Cycle         *cycleConfig               `json:"cycle,omitempty"`
+	Meta                   map[string]any             `json:"_meta,omitempty"`
+	Groups                 []ModelGroup               `json:"groups"`
+	MasksID                []string                   `json:"masks_id"`
+	DeletedID              []string                   `json:"deleted_id"`
+	Providers              []customProvider           `json:"providers,omitempty"` // kept for admin UI custom providers
+	ProvidersV2            []gatewayprovider.Provider `json:"providers_v2"`
+	SchemaVersion          int                        `json:"schema_version"`
+	AutoModel              string                     `json:"auto_model,omitempty"`
+	AutoModelChatResponses bool                       `json:"auto_model_chat_responses,omitempty"`
+	SearchURL              string                     `json:"search_url,omitempty"`
+	Cycle                  *cycleConfig               `json:"cycle,omitempty"`
 }
 
 type ModelGroup struct {
@@ -254,19 +256,29 @@ func (p *modelPrefs) listProviders() []customProvider {
 	return append([]customProvider(nil), p.providers...)
 }
 
-func (p *modelPrefs) autoModelID() string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+func (p *modelPrefs) autoModelIDLocked() string {
 	if p.autoModel != "" {
 		return p.autoModel
 	}
 	return models.DefaultModel
 }
 
+func (p *modelPrefs) autoModelID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoModelIDLocked()
+}
+
 func (p *modelPrefs) setAutoModel(id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
 	return p.commitPrefs(func(file *prefsFile) error { file.AutoModel = id; return nil }, false)
+}
+
+func (p *modelPrefs) setAutoModelChatResponses(enabled bool) error {
+	p.changeMu.Lock()
+	defer p.changeMu.Unlock()
+	return p.commitPrefs(func(file *prefsFile) error { file.AutoModelChatResponses = enabled; return nil }, false)
 }
 
 func (p *modelPrefs) searchTemplate() string {

@@ -54,6 +54,26 @@ func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 				break
 			}
 		}
+		if !found && p.providerStore != nil {
+			storeList := p.providerStore.List()
+			for i := range storeList {
+				provider := &storeList[i]
+				for _, m := range provider.Models {
+					if m.Alias == id || m.UpstreamModel == id {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+		}
+		if !found && p.resolver != nil {
+			if route, err := p.resolver.Resolve(context.Background(), id, ""); err == nil && route.Kind == "custom" {
+				found = true
+			}
+		}
 		if !found {
 			return fmt.Errorf("unknown cycle model %q", id)
 		}

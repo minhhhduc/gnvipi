@@ -50,7 +50,7 @@ func (p *modelPrefs) applyPrefsLocked(file *prefsFile) {
 		p.deleted[id] = struct{}{}
 	}
 	p.providers = fromLegacyProviders(gatewayprovider.LegacyView(file.ProvidersV2))
-	p.autoModel, p.searchURL = file.AutoModel, file.SearchURL
+	p.autoModel, p.autoModelChatResponses, p.searchURL = file.AutoModel, file.AutoModelChatResponses, file.SearchURL
 	var cycleModels []string
 	if file.Cycle != nil {
 		cycleModels = file.Cycle.Models
@@ -119,7 +119,7 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 		for id := range p.deleted {
 			file.DeletedID = append(file.DeletedID, id)
 		}
-		file.AutoModel, file.SearchURL = p.autoModel, p.searchURL
+		file.AutoModel, file.AutoModelChatResponses, file.SearchURL = p.autoModel, p.autoModelChatResponses, p.searchURL
 		file.Cycle = &cycleConfig{Name: "cycle"}
 		if p.cycle != nil {
 			file.Cycle.Models = append([]string(nil), p.cycle.Models...)
@@ -144,7 +144,7 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 		sort.Strings(file.MasksID)
 		sort.Strings(file.DeletedID)
 		doc.Providers = file.ProvidersV2
-		values := map[string]any{"masks_id": file.MasksID, "deleted_id": file.DeletedID, "auto_model": file.AutoModel, "search_url": file.SearchURL, "cycle": file.Cycle}
+		values := map[string]any{"masks_id": file.MasksID, "deleted_id": file.DeletedID, "auto_model": file.AutoModel, "auto_model_chat_responses": file.AutoModelChatResponses, "search_url": file.SearchURL, "cycle": file.Cycle}
 		if _, exists := doc.Fields["groups"]; !exists {
 			groups, meta := initialCatalog()
 			values["groups"] = groups
