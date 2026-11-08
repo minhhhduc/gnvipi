@@ -226,7 +226,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 		unsupported = append(unsupported, ParamImages)
 	}
 
-	if req.Reasoning != nil && !caps.Reasoning {
+	if (req.Reasoning != nil || req.ReasoningEffort != "" || req.BudgetTokens != nil) && !caps.Reasoning {
 		unsupported = append(unsupported, ParamReasoning)
 	}
 
@@ -285,6 +285,8 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 			dropped = append(dropped, ParamImages)
 		case ParamReasoning:
 			req.Reasoning = nil
+			req.ReasoningEffort = ""
+			req.BudgetTokens = nil
 			if req.Extensions != nil {
 				delete(req.Extensions, "reasoning")
 				delete(req.Extensions, "reasoning_effort")

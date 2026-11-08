@@ -21,7 +21,8 @@ import (
 // the Unix creation timestamp; zero captures the current time once per stream.
 // All generation state is local, so an encoder can serve concurrent requests.
 type StreamEncoder struct {
-	Created int64
+	Created          int64
+	DisableReasoning bool
 }
 
 // EncodeStream consumes events through the first terminal event. The caller
@@ -29,7 +30,8 @@ type StreamEncoder struct {
 // wire; transport, cancellation and client write errors are also returned.
 func (e StreamEncoder) EncodeStream(ctx context.Context, events adapter.Stream, w *sse.Writer) error {
 	state := responseStream{
-		ctx: ctx, writer: w, blocks: make(map[int]*responseStreamBlock),
+		encoder: e,
+		ctx:     ctx, writer: w, blocks: make(map[int]*responseStreamBlock),
 		response: responseStreamResponse{Object: "response", CreatedAt: e.Created, Status: "in_progress", Output: []*responseStreamItem{}},
 	}
 	if state.response.CreatedAt == 0 {
@@ -220,9 +222,11 @@ type responseStreamBlock struct {
 	initialArguments string
 	argumentsStarted bool
 	closed           bool
+	disabled         bool
 }
 
 type responseStream struct {
+	encoder      StreamEncoder
 	ctx          context.Context
 	writer       *sse.Writer
 	sequence     int64
@@ -283,6 +287,12 @@ func (s *responseStream) addBlock(index int, prototype ir.Block) error {
 		prefix, item.Type, item.Role = "msg_", "message", "assistant"
 		item.Content = &[]responseStreamPart{}
 	case ir.BlockReasoning:
+		if s.encoder.DisableReasoning {
+			block.disabled = true
+			block.closed = true
+			s.blocks[index] = block
+			return nil
+		}
 		if prototype.Reasoning == nil {
 			return fmt.Errorf("openairesponses: reasoning block %d has no payload", index)
 		}
@@ -350,6 +360,9 @@ func (b *responseStreamBlock) fields() map[string]any {
 }
 
 func (s *responseStream) delta(block *responseStreamBlock, delta *ir.Delta) error {
+	if block.disabled {
+		return nil
+	}
 	fields := block.fields()
 	var typ, fragment string
 	switch {
@@ -357,7 +370,11 @@ func (s *responseStream) delta(block *responseStreamBlock, delta *ir.Delta) erro
 		typ, fragment = "response.output_text.delta", delta.Text
 		fields["content_index"], fields["logprobs"] = 0, []any{}
 	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaReasoning:
-		typ, fragment = "response.reasoning_summary_text.delta", delta.Text
+		text := delta.Text
+		if text == "" && delta.ReasoningContent != "" {
+			text = delta.ReasoningContent
+		}
+		typ, fragment = "response.reasoning_summary_text.delta", text
 		fields["summary_index"] = 0
 	case block.kind == ir.BlockReasoning && delta.Type == ir.DeltaSignature:
 		return nil
@@ -387,6 +404,10 @@ func newResponseStreamTextPart(text string) responseStreamPart {
 }
 
 func (s *responseStream) finishBlock(block *responseStreamBlock, status string) error {
+	if block.disabled {
+		block.closed = true
+		return nil
+	}
 	fields := block.fields()
 	switch block.kind {
 	case ir.BlockText:

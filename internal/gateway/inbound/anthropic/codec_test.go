@@ -374,3 +374,72 @@ func TestDecodeRequestCountTokens(t *testing.T) {
 		}
 	})
 }
+
+func TestThinkingTagsDecodeAndEncode(t *testing.T) {
+	// 1. Decode text content with <thinking> tags
+	body := `{"model":"alias","max_tokens":100,"messages":[{"role":"assistant","content":"<thinking>step 1: compute</thinking>The answer is 42."}]}`
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+	decoded, err := New().DecodeRequest(req)
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	if len(decoded.Messages) != 1 || len(decoded.Messages[0].Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %+v", decoded.Messages[0].Content)
+	}
+	if decoded.Messages[0].Content[0].Type != ir.BlockReasoning || decoded.Messages[0].Content[0].Reasoning.Content != "step 1: compute" {
+		t.Errorf("expected reasoning block 'step 1: compute', got %+v", decoded.Messages[0].Content[0])
+	}
+	if decoded.Messages[0].Content[1].Type != ir.BlockText || decoded.Messages[0].Content[1].Text != "The answer is 42." {
+		t.Errorf("expected text block 'The answer is 42.', got %+v", decoded.Messages[0].Content[1])
+	}
+
+	// 2. Encode with FormatThinkingTags
+	res := ir.Response{
+		ID:         "resp_think",
+		Model:      "model",
+		StopReason: ir.StopEndTurn,
+		Content: []ir.Block{
+			ir.NewReasoningBlock("step 1", ""),
+			ir.NewTextBlock("answer"),
+		},
+	}
+	adapterWithTags := &Adapter{
+		StreamEncoder: StreamEncoder{FormatThinkingTags: true},
+	}
+	encoded, err := adapterWithTags.EncodeResponse(&res)
+	if err != nil {
+		t.Fatalf("EncodeResponse with tags: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	content := raw["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(content))
+	}
+	firstBlock := content[0].(map[string]any)
+	if firstBlock["type"] != "text" || firstBlock["text"] != "<thinking>step 1</thinking>" {
+		t.Errorf("expected text block with <thinking> tags, got %+v", firstBlock)
+	}
+
+	// 3. Encode with DisableReasoning
+	adapterDisabled := &Adapter{
+		StreamEncoder: StreamEncoder{DisableReasoning: true},
+	}
+	encodedDisabled, err := adapterDisabled.EncodeResponse(&res)
+	if err != nil {
+		t.Fatalf("EncodeResponse with disabled reasoning: %v", err)
+	}
+	var rawDisabled map[string]any
+	if err := json.Unmarshal(encodedDisabled, &rawDisabled); err != nil {
+		t.Fatal(err)
+	}
+	contentDisabled := rawDisabled["content"].([]any)
+	if len(contentDisabled) != 1 {
+		t.Fatalf("expected 1 block (reasoning omitted), got %d", len(contentDisabled))
+	}
+	if contentDisabled[0].(map[string]any)["type"] != "text" || contentDisabled[0].(map[string]any)["text"] != "answer" {
+		t.Errorf("expected remaining text block 'answer', got %+v", contentDisabled[0])
+	}
+}

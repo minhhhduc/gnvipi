@@ -1,5 +1,7 @@
 package ir
 
+import "encoding/json"
+
 // EventType enumerates the normalized stream events of one generation.
 // Sequences follow the ordering contract documented on the package: one
 // message_start, zero or more block groups, an optional usage_update, then
@@ -38,12 +40,38 @@ const (
 // identify the tool call the fragment belongs to; the name appears on the
 // first fragment of a call and may be empty afterwards.
 type Delta struct {
-	Type         DeltaType `json:"type"`
-	Text         string    `json:"text,omitempty"`
-	PartialJSON  string    `json:"partial_json,omitempty"`
-	ToolCallID   string    `json:"tool_call_id,omitempty"`
-	ToolCallName string    `json:"tool_call_name,omitempty"`
-	Signature    string    `json:"signature,omitempty"`
+	Type              DeltaType `json:"type"`
+	Text              string    `json:"text,omitempty"`
+	PartialJSON       string    `json:"partial_json,omitempty"`
+	ToolCallID        string    `json:"tool_call_id,omitempty"`
+	ToolCallName      string    `json:"tool_call_name,omitempty"`
+	Signature         string    `json:"signature,omitempty"`
+	ReasoningContent  string    `json:"-"`
+	ThinkingSignature string    `json:"-"`
+}
+
+func (d *Delta) UnmarshalJSON(b []byte) error {
+	type deltaWire Delta
+	var wire struct {
+		deltaWire
+		ReasoningContent  string `json:"reasoning_content,omitempty"`
+		ThinkingSignature string `json:"thinking_signature,omitempty"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	*d = Delta(wire.deltaWire)
+	if wire.ReasoningContent != "" {
+		d.ReasoningContent = wire.ReasoningContent
+	} else if d.Type == DeltaReasoning {
+		d.ReasoningContent = d.Text
+	}
+	if wire.ThinkingSignature != "" {
+		d.ThinkingSignature = wire.ThinkingSignature
+	} else if d.Type == DeltaSignature {
+		d.ThinkingSignature = d.Signature
+	}
+	return nil
 }
 
 // StreamError is the protocol-neutral payload of an error event. Kind uses
@@ -117,7 +145,7 @@ func NewReasoningDelta(index int, text string) StreamEvent {
 	return StreamEvent{
 		Type:  EventBlockDelta,
 		Index: index,
-		Delta: &Delta{Type: DeltaReasoning, Text: text},
+		Delta: &Delta{Type: DeltaReasoning, Text: text, ReasoningContent: text},
 	}
 }
 
@@ -127,7 +155,7 @@ func NewSignatureDelta(index int, signature string) StreamEvent {
 	return StreamEvent{
 		Type:  EventBlockDelta,
 		Index: index,
-		Delta: &Delta{Type: DeltaSignature, Signature: signature},
+		Delta: &Delta{Type: DeltaSignature, Signature: signature, ThinkingSignature: signature},
 	}
 }
 

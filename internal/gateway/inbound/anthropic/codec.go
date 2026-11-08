@@ -338,10 +338,49 @@ func codecHasUnknown(object map[string]json.RawMessage, known ...string) bool {
 	return false
 }
 
+func parseTextOrThinking(text string) []ir.Block {
+	const openTag = "<thinking>"
+	const closeTag = "</thinking>"
+	if !strings.Contains(text, openTag) || !strings.Contains(text, closeTag) {
+		return []ir.Block{ir.NewTextBlock(text)}
+	}
+	var blocks []ir.Block
+	remaining := text
+	for {
+		start := strings.Index(remaining, openTag)
+		if start == -1 {
+			break
+		}
+		end := strings.Index(remaining[start+len(openTag):], closeTag)
+		if end == -1 {
+			break
+		}
+		end += start + len(openTag)
+		before := remaining[:start]
+		thought := remaining[start+len(openTag) : end]
+		remaining = remaining[end+len(closeTag):]
+
+		if before != "" {
+			blocks = append(blocks, ir.NewTextBlock(before))
+		}
+		blocks = append(blocks, ir.NewReasoningBlock(thought, ""))
+	}
+	if remaining != "" {
+		blocks = append(blocks, ir.NewTextBlock(remaining))
+	}
+	if len(blocks) == 0 {
+		return []ir.Block{ir.NewTextBlock(text)}
+	}
+	return blocks
+}
+
 func codecContent(raw json.RawMessage, path string, system bool, preserve *bool) ([]ir.Block, error) {
 	var text string
 	if len(raw) > 0 && bytes.TrimSpace(raw)[0] == '"' && json.Unmarshal(raw, &text) == nil {
-		return []ir.Block{ir.NewTextBlock(text)}, nil
+		if system {
+			return []ir.Block{ir.NewTextBlock(text)}, nil
+		}
+		return parseTextOrThinking(text), nil
 	}
 	var content []json.RawMessage
 	if json.Unmarshal(raw, &content) != nil || content == nil {
@@ -371,7 +410,19 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 			if _, exists := object["text"]; !exists {
 				return nil, codecInvalid(blockPath + ".text is required")
 			}
-			block = ir.NewTextBlock(text)
+			if system {
+				block = ir.NewTextBlock(text)
+			} else {
+				parsed := parseTextOrThinking(text)
+				if len(parsed) > 1 || (len(parsed) == 1 && parsed[0].Type == ir.BlockReasoning) {
+					for _, b := range parsed {
+						b.Index = len(blocks)
+						blocks = append(blocks, b)
+					}
+					continue
+				}
+				block = parsed[0]
+			}
 		case "image":
 			source, err := codecObject(object["source"], blockPath+".source")
 			if err != nil {
@@ -491,7 +542,7 @@ func codecContent(raw json.RawMessage, path string, system bool, preserve *bool)
 	return blocks, nil
 }
 
-func (*Adapter) EncodeResponse(response *ir.Response) ([]byte, error) {
+func (a *Adapter) EncodeResponse(response *ir.Response) ([]byte, error) {
 	if response == nil {
 		return nil, codecResponseError("response is required")
 	}
@@ -512,10 +563,17 @@ func (*Adapter) EncodeResponse(response *ir.Response) ([]byte, error) {
 		case ir.BlockText:
 			content = append(content, map[string]any{"type": "text", "text": block.Text})
 		case ir.BlockReasoning:
+			if a.DisableReasoning {
+				continue
+			}
 			if block.Reasoning == nil {
 				return nil, codecResponseError("reasoning block has no payload")
 			}
-			content = append(content, map[string]any{"type": "thinking", "thinking": block.Reasoning.Content, "signature": block.Reasoning.Signature})
+			if a.FormatThinkingTags {
+				content = append(content, map[string]any{"type": "text", "text": "<thinking>" + block.Reasoning.Content + "</thinking>"})
+			} else {
+				content = append(content, map[string]any{"type": "thinking", "thinking": block.Reasoning.Content, "signature": block.Reasoning.Signature})
+			}
 		case ir.BlockToolUse:
 			if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
 				return nil, codecResponseError("tool use block has no valid payload")

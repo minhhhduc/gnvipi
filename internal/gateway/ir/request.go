@@ -93,6 +93,13 @@ type ReasoningBlock struct {
 	Signature string `json:"signature,omitempty"`
 }
 
+// TextBlock is a representation of text content with optional reasoning content and thinking signature.
+type TextBlock struct {
+	Text              string `json:"text,omitempty"`
+	ReasoningContent  string `json:"reasoning_content,omitempty"`
+	ThinkingSignature string `json:"thinking_signature,omitempty"`
+}
+
 // Block is one content part of a message, response, or tool result. The
 // Type field selects which of the payload fields is meaningful; the
 // constructors below are the supported way to build a block so that the
@@ -151,10 +158,12 @@ func NewReasoningBlock(content, signature string) Block {
 // on the message a stream opens, and inbound encoders emit them on
 // message_start / response.created. Request messages leave them empty.
 type Message struct {
-	ID      string  `json:"id,omitempty"`
-	Role    Role    `json:"role"`
-	Model   string  `json:"model,omitempty"`
-	Content []Block `json:"content,omitempty"`
+	ID                string  `json:"id,omitempty"`
+	Role              Role    `json:"role"`
+	Model             string  `json:"model,omitempty"`
+	Content           []Block `json:"content,omitempty"`
+	ReasoningContent  string  `json:"reasoning_content,omitempty"`
+	ThinkingSignature string  `json:"thinking_signature,omitempty"`
 }
 
 // NewMessage builds a message from blocks. It is a convenience for the
@@ -290,10 +299,55 @@ type Request struct {
 	Sampling           Sampling                   `json:"sampling,omitempty"`
 	ResponseFormat     *ResponseFormat            `json:"response_format,omitempty"`
 	Reasoning          *ReasoningConfig           `json:"reasoning,omitempty"`
+	ReasoningEffort    ReasoningEffort            `json:"reasoning_effort,omitempty"`
+	BudgetTokens       *int                       `json:"budget_tokens,omitempty"`
 	Stream             bool                       `json:"stream,omitempty"`
 	StreamIncludeUsage bool                       `json:"stream_include_usage,omitempty"`
 	ParallelToolCalls  *bool                      `json:"parallel_tool_calls,omitempty"`
 	PreviousResponseID string                     `json:"previous_response_id,omitempty"`
 	Metadata           *Metadata                  `json:"metadata,omitempty"`
 	Extensions         map[string]json.RawMessage `json:"extensions,omitempty"`
+}
+
+// GetReasoningEffort returns the configured reasoning effort from Request.ReasoningEffort,
+// Request.Reasoning.Effort, or mapped from budget tokens.
+func (r *Request) GetReasoningEffort() ReasoningEffort {
+	if r == nil {
+		return ""
+	}
+	if r.ReasoningEffort != "" {
+		return NormalizeReasoningEffort(string(r.ReasoningEffort))
+	}
+	if r.Reasoning != nil && r.Reasoning.Effort != "" {
+		return NormalizeReasoningEffort(string(r.Reasoning.Effort))
+	}
+	if b := r.GetBudgetTokens(); b != nil {
+		return BudgetToEffort(*b)
+	}
+	return ""
+}
+
+// GetBudgetTokens returns the configured thinking budget tokens from Request.BudgetTokens,
+// Request.Reasoning.MaxTokens, or mapped from effort.
+func (r *Request) GetBudgetTokens() *int {
+	if r == nil {
+		return nil
+	}
+	if r.BudgetTokens != nil {
+		return r.BudgetTokens
+	}
+	if r.Reasoning != nil {
+		if r.Reasoning.MaxTokens != nil {
+			return r.Reasoning.MaxTokens
+		}
+		if r.Reasoning.Effort != "" {
+			b := EffortToBudget(r.Reasoning.Effort)
+			return &b
+		}
+	}
+	if r.ReasoningEffort != "" {
+		b := EffortToBudget(r.ReasoningEffort)
+		return &b
+	}
+	return nil
 }
