@@ -330,3 +330,47 @@ func TestMalformedResponsesAreNotSuccessfulMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeRequestCountTokens(t *testing.T) {
+	adapter := New()
+
+	t.Run("without max_tokens succeeds", func(t *testing.T) {
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"hello"}]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+		got, err := adapter.DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.Model != "claude-3-5-sonnet" || len(got.Messages) != 1 || got.Sampling.MaxOutputTokens != nil {
+			t.Fatalf("unexpected decoded request: %+v", got)
+		}
+	})
+
+	t.Run("with empty messages succeeds", func(t *testing.T) {
+		body := `{"model":"claude-3-5-sonnet","messages":[]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+		got, err := adapter.DecodeRequest(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.Model != "claude-3-5-sonnet" || len(got.Messages) != 0 {
+			t.Fatalf("unexpected decoded request: %+v", got)
+		}
+	})
+
+	t.Run("with negative max_tokens fails", func(t *testing.T) {
+		body := `{"model":"claude-3-5-sonnet","max_tokens":-1,"messages":[{"role":"user","content":"hello"}]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
+		if _, err := adapter.DecodeRequest(req); err == nil {
+			t.Fatal("expected error for negative max_tokens")
+		}
+	})
+
+	t.Run("standard messages path still requires max_tokens", func(t *testing.T) {
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"hello"}]}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body))
+		if _, err := adapter.DecodeRequest(req); err == nil {
+			t.Fatal("expected error for missing max_tokens on /v1/messages")
+		}
+	})
+}
