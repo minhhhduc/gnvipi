@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
@@ -93,7 +94,13 @@ func handleAdminAutomode(c *gin.Context) {
 			storeList := prefs.providerStore.List()
 			for i := range storeList {
 				p := &storeList[i]
+				if !p.Enabled {
+					continue
+				}
 				for _, m := range p.Models {
+					if m.Hidden {
+						continue
+					}
 					if m.Alias == id || m.UpstreamModel == id {
 						valid = true
 						break
@@ -104,8 +111,8 @@ func handleAdminAutomode(c *gin.Context) {
 				}
 			}
 		}
-		if !valid && prefs.resolver != nil {
-			if route, err := prefs.resolver.Resolve(c.Request.Context(), id, ""); err == nil && route.Kind == "custom" {
+		if !valid && prefs.resolver != nil && id != routing.VirtualAutoMode && id != routing.VirtualCycle {
+			if route, err := prefs.resolver.Resolve(c.Request.Context(), id, ""); err == nil && route.Kind == routing.Custom {
 				valid = true
 			}
 		}
@@ -114,13 +121,7 @@ func handleAdminAutomode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "choose an enabled gateway model"})
 		return
 	}
-	if payload.ChatResponses != nil {
-		if err := prefs.setAutoModelChatResponses(*payload.ChatResponses); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
-	if err := prefs.setAutoModel(id); err != nil {
+	if err := prefs.setAutoModelConfig(id, payload.ChatResponses); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

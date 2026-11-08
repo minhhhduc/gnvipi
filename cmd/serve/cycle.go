@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
+	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
@@ -58,7 +59,13 @@ func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 			storeList := p.providerStore.List()
 			for i := range storeList {
 				provider := &storeList[i]
+				if !provider.Enabled {
+					continue
+				}
 				for _, m := range provider.Models {
+					if m.Hidden {
+						continue
+					}
 					if m.Alias == id || m.UpstreamModel == id {
 						found = true
 						break
@@ -69,8 +76,8 @@ func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 				}
 			}
 		}
-		if !found && p.resolver != nil {
-			if route, err := p.resolver.Resolve(context.Background(), id, ""); err == nil && route.Kind == "custom" {
+		if !found && p.resolver != nil && id != routing.VirtualAutoMode && id != routing.VirtualCycle {
+			if route, err := p.resolver.Resolve(context.Background(), id, ""); err == nil && route.Kind == routing.Custom {
 				found = true
 			}
 		}
@@ -142,7 +149,7 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 				break
 			}
 			id := cfg.Models[(start+offset)%len(cfg.Models)]
-			if p.isHidden(id) {
+			if p.isModelUnavailable(id) {
 				continue
 			}
 			rewritten, _ := rewriteJSONModel(body, cfg.Name, id)

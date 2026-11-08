@@ -311,7 +311,7 @@ func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 			return
 		}
 		allowed := strings.HasPrefix(path, "/v1/messages")
-		if !allowed && p != nil && p.autoModelChatResponses && (path == "/v1/chat/completions" || path == "/v1/responses") {
+		if !allowed && p != nil && p.autoModelChatResponsesEnabled() && (path == "/v1/chat/completions" || path == "/v1/responses") {
 			allowed = true
 		}
 		if !allowed {
@@ -329,7 +329,7 @@ func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 		}
 		if json.Unmarshal(body, &payload) == nil && payload.Model == "automode" {
 			target := p.autoModelID()
-			if p.isHidden(target) {
+			if p.isModelUnavailable(target) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "automode target is hidden"})
 				c.Abort()
 				return

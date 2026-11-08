@@ -5,6 +5,8 @@ package main
 // gateway restart.
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
@@ -189,6 +192,51 @@ func (p *modelPrefs) isHidden(id string) bool {
 	return ok
 }
 
+// isModelUnavailable reports whether a model is deleted, hidden, or provided
+// by a v2 provider where the provider is disabled or the model mapping is hidden.
+func (p *modelPrefs) isModelUnavailable(id string) bool {
+	if p.isHidden(id) {
+		return true
+	}
+	p.mu.RLock()
+	store := p.providerStore
+	res := p.resolver
+	p.mu.RUnlock()
+
+	if store != nil {
+		foundInStore := false
+		storeList := store.List()
+		for i := range storeList {
+			prov := &storeList[i]
+			for _, m := range prov.Models {
+				matched := m.Alias == id || m.UpstreamModel == id
+				if !matched && strings.HasSuffix(m.Alias, "/*") {
+					matched = strings.HasPrefix(id, strings.TrimSuffix(m.Alias, "*"))
+				}
+				if matched {
+					foundInStore = true
+					if prov.Enabled && !m.Hidden {
+						return false
+					}
+				}
+			}
+		}
+		if foundInStore {
+			return true
+		}
+	}
+
+	if res != nil && id != routing.VirtualAutoMode && id != routing.VirtualCycle {
+		if _, err := res.Resolve(context.Background(), id, ""); err != nil {
+			var gwErr *gwerr.Error
+			if errors.As(err, &gwErr) && gwErr.Kind == gwerr.KindNotFound {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *modelPrefs) isDeleted(id string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -269,16 +317,26 @@ func (p *modelPrefs) autoModelID() string {
 	return p.autoModelIDLocked()
 }
 
-func (p *modelPrefs) setAutoModel(id string) error {
-	p.changeMu.Lock()
-	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error { file.AutoModel = id; return nil }, false)
+func (p *modelPrefs) autoModelChatResponsesEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoModelChatResponses
 }
 
-func (p *modelPrefs) setAutoModelChatResponses(enabled bool) error {
+func (p *modelPrefs) setAutoModelConfig(id string, chatResponses *bool) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error { file.AutoModelChatResponses = enabled; return nil }, false)
+	return p.commitPrefs(func(file *prefsFile) error {
+		file.AutoModel = id
+		if chatResponses != nil {
+			file.AutoModelChatResponses = *chatResponses
+		}
+		return nil
+	}, false)
+}
+
+func (p *modelPrefs) setAutoModel(id string) error {
+	return p.setAutoModelConfig(id, nil)
 }
 
 func (p *modelPrefs) searchTemplate() string {
