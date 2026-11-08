@@ -294,3 +294,114 @@ func TestDisabledReasoningKeepsVisibleContent(t *testing.T) {
 	}
 	assertJSONEqual(t, wire.Choices[0].Message, []byte(`{"role":"assistant","content":"visible"}`))
 }
+
+func TestDecodeLegacyFunctionsAndFunctionCall(t *testing.T) {
+	t.Run("functions and function_call auto", func(t *testing.T) {
+		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"functions":[{"name":"weather","description":"get weather","parameters":{"type":"object"}}],"function_call":"auto"}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		got, err := openaichat.New().DecodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Tools) != 1 || got.Tools[0].Name != "weather" || got.Tools[0].Description != "get weather" {
+			t.Fatalf("tools mismatch: %+v", got.Tools)
+		}
+		if got.ToolChoice == nil || got.ToolChoice.Mode != ir.ToolChoiceAuto {
+			t.Fatalf("tool_choice mismatch: %+v", got.ToolChoice)
+		}
+	})
+
+	t.Run("function_call none", func(t *testing.T) {
+		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"functions":[{"name":"weather"}],"function_call":"none"}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		got, err := openaichat.New().DecodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ToolChoice == nil || got.ToolChoice.Mode != ir.ToolChoiceNone {
+			t.Fatalf("tool_choice mismatch: %+v", got.ToolChoice)
+		}
+	})
+
+	t.Run("function_call named", func(t *testing.T) {
+		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"functions":[{"name":"weather"}],"function_call":{"name":"weather"}}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		got, err := openaichat.New().DecodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ToolChoice == nil || got.ToolChoice.Mode != ir.ToolChoiceTool || got.ToolChoice.Name != "weather" {
+			t.Fatalf("tool_choice mismatch: %+v", got.ToolChoice)
+		}
+	})
+
+	t.Run("invalid function_call string", func(t *testing.T) {
+		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"function_call":"invalid"}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		_, err := openaichat.New().DecodeRequest(req)
+		if err == nil {
+			t.Fatal("expected error for invalid function_call string")
+		}
+	})
+
+	t.Run("invalid function_call object without name", func(t *testing.T) {
+		body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"function_call":{"not_name":"weather"}}`
+		req := httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", strings.NewReader(body))
+		_, err := openaichat.New().DecodeRequest(req)
+		if err == nil {
+			t.Fatal("expected error for function_call without name")
+		}
+	})
+}
+
+func TestEncodeToolResponsePreservesInvalidJSONArguments(t *testing.T) {
+	codec := openaichat.New()
+	codec.Created = 1700000000
+	resp := &ir.Response{
+		ID:         "resp_invalid_json",
+		Model:      "test-model",
+		StopReason: ir.StopToolUse,
+		Content: []ir.Block{
+			ir.NewToolUseBlock("call_1", "broken_func", json.RawMessage(`"{bad: json"`)),
+			ir.NewToolUseBlock("call_2", "valid_func", json.RawMessage(`{"good":"json"}`)),
+		},
+	}
+	data, err := codec.EncodeResponse(resp)
+	if err != nil {
+		t.Fatalf("EncodeResponse failed: %v", err)
+	}
+	var wire struct {
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Role      string `json:"role"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatalf("failed to unmarshal encoded response: %v", err)
+	}
+	if len(wire.Choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(wire.Choices))
+	}
+	if wire.Choices[0].FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason = %q, want tool_calls", wire.Choices[0].FinishReason)
+	}
+	calls := wire.Choices[0].Message.ToolCalls
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tool_calls, got %d", len(calls))
+	}
+	if calls[0].Function.Arguments != "{bad: json" {
+		t.Fatalf("call 0 arguments = %q, want {bad: json", calls[0].Function.Arguments)
+	}
+	if calls[1].Function.Arguments != `{"good":"json"}` {
+		t.Fatalf("call 1 arguments = %q, want {\"good\":\"json\"}", calls[1].Function.Arguments)
+	}
+}

@@ -38,6 +38,8 @@ type chatRequest struct {
 	Tools               []chatTool         `json:"tools"`
 	ToolChoice          json.RawMessage    `json:"tool_choice"`
 	ParallelToolCalls   *bool              `json:"parallel_tool_calls"`
+	Functions           []chatFunction     `json:"functions"`
+	FunctionCall        json.RawMessage    `json:"function_call"`
 	MaxTokens           *int               `json:"max_tokens"`
 	MaxCompletionTokens *int               `json:"max_completion_tokens"`
 	Temperature         *float64           `json:"temperature"`
@@ -72,6 +74,7 @@ type chatFunction struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Arguments   json.RawMessage `json:"arguments,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 type chatTool struct {
@@ -281,6 +284,14 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		}
 		result.Tools = append(result.Tools, ir.Tool{Name: tool.Function.Name, Description: tool.Function.Description, Schema: tool.Function.Parameters})
 	}
+	if len(result.Tools) == 0 && len(wire.Functions) > 0 {
+		for _, fn := range wire.Functions {
+			if fn.Name == "" || (!absentJSON(fn.Parameters) && !jsonObject(fn.Parameters)) {
+				return nil, invalidChat("functions requires a name and object parameters")
+			}
+			result.Tools = append(result.Tools, ir.Tool{Name: fn.Name, Description: fn.Description, Schema: fn.Parameters})
+		}
+	}
 	if !absentJSON(wire.ToolChoice) {
 		var mode string
 		if err := json.Unmarshal(wire.ToolChoice, &mode); err == nil {
@@ -307,9 +318,30 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 				result.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: choice.Function.Name}
 			}
 		}
+	} else if !absentJSON(wire.FunctionCall) {
+		var mode string
+		if err := json.Unmarshal(wire.FunctionCall, &mode); err == nil {
+			result.ToolChoice = &ir.ToolChoice{}
+			switch mode {
+			case "auto":
+				result.ToolChoice.Mode = ir.ToolChoiceAuto
+			case "none":
+				result.ToolChoice.Mode = ir.ToolChoiceNone
+			default:
+				return nil, invalidChat("function_call must be auto, none, or a named function")
+			}
+		} else {
+			var choice struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(wire.FunctionCall, &choice); err != nil || choice.Name == "" {
+				return nil, invalidChat("function_call must be a string or a function object")
+			}
+			result.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceTool, Name: choice.Name}
+		}
 	}
 	if wire.ParallelToolCalls != nil {
-		if result.ToolChoice == nil && absentJSON(wire.ToolChoice) {
+		if result.ToolChoice == nil && absentJSON(wire.ToolChoice) && absentJSON(wire.FunctionCall) {
 			result.ToolChoice = &ir.ToolChoice{Mode: ir.ToolChoiceAuto}
 		}
 		if result.ToolChoice != nil {
