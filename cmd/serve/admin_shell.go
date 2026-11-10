@@ -18,6 +18,30 @@ func adminHeadTabs(active string) string {
 	return b.String()
 }
 
+// adminHeadSub renders the line under the tabs. The models bar (search, bulk
+// toggles, retry) is models-only, so it is emitted here instead of being
+// rendered everywhere and hidden again by script - that flashed on load and
+// left the non-models pages describing a state they do not own.
+func adminHeadSub(active string) string {
+	if active != "models" {
+		return adminPageSub[active]
+	}
+	return `<div class=sub id=counts></div>
+  <div class=bar>
+    <input type=search id=q placeholder="search models..." autofocus>
+    <button id=all>Enable all</button>
+    <button id=none>Disable all</button>
+    <button id=retry>Retry failed models</button>
+  </div>`
+}
+
+// adminPageSub is the static subtitle per non-models tab.
+var adminPageSub = map[string]string{
+	"dashboard": `<div class=sub>usage, latency and request history for every upstream API</div>`,
+	"config":    `<div class=sub>web search, automode and gateway settings</div>`,
+	"chromes":   `<div class=sub>captcha browsers - start on demand, kill to free RAM</div>`,
+}
+
 func adminHead(active string) string {
 	return `<!doctype html><meta charset="utf-8"><title>Gateway admin</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -43,6 +67,11 @@ h2{color:var(--dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.09
   border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer}
 .row:hover{border-color:#333a4a}
 .row.hide{display:none}
+/* .row is shared chrome: model toggles, provider cards, captcha status. Only
+   model-toggle rows carry data-id + .sw; every models-only script hook below
+   keys on that pair so other pages are left alone. */
+.row.static{cursor:default}
+.row.static:hover{border-color:var(--line)}
 .name{flex:1;display:flex;align-items:center;gap:.5rem}
 .id{color:var(--dim);font-size:.75rem;font-family:ui-monospace,Consolas,monospace}
 .badge{color:var(--bad);border:1px solid var(--bad);border-radius:999px;font-size:.66rem;
@@ -150,24 +179,16 @@ table.stats tfoot th{color:var(--dim);background:var(--card)}
 .del-row .id{flex:1}
 .del-row button{border-color:var(--on);color:var(--on);padding:.2rem .55rem;font-size:.8rem}
 /* NAV TABS */
-	.tab-bar{display:flex;gap:.4rem;padding-top:.5rem;border-top:1px solid var(--line);margin-top:.75rem}
-	.tab{color:var(--dim);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;
-	  padding:.3rem .6rem;border-radius:6px;text-decoration:none}
-	.tab:hover{color:var(--fg);background:#1d212b}
-	.tab.on{color:var(--fg);background:#223044}
-	/* hide search on non-models pages */
-	#q:not([data-page=models]){display:none}
-	</style>
+.tab-bar{display:flex;gap:.4rem;padding-top:.5rem;border-top:1px solid var(--line);margin-top:.75rem}
+.tab{color:var(--dim);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;
+  padding:.3rem .6rem;border-radius:6px;text-decoration:none}
+.tab:hover{color:var(--fg);background:#1d212b}
+.tab.on{color:var(--fg);background:#223044}
+</style>
 <header><div class=wrap>
   <h1>Gateway admin</h1>
   <div class=tab-bar>` + adminHeadTabs(active) + `</div>
-  <div class=sub id=counts></div>
-  <div class=bar>
-    <input type=search id=q placeholder="search models…" autofocus data-page="models">
-    <button id=all>Enable all</button>
-    <button id=none>Disable all</button>
-    <button id=retry>Retry failed models</button>
-  </div>
+  ` + adminHeadSub(active) + `
 </div></header>
 `
 }

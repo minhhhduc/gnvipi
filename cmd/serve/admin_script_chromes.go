@@ -42,9 +42,9 @@ if (PAGE === 'chromes') {
                   : status.state === 'stopping' ? 'Stopping Chrome captcha…'
                   : status.enabled ? 'Chrome captcha enabled · ' + status.ready + ' ready tokens'
                   : 'Chrome captcha is off / ' + (status.state === 'stopped' ? 'stopped' : 'idle');
-      box.innerHTML = '<div class=row><span class=id>' + label + '</span></div>' + (list.length
+      box.innerHTML = '<div class="row static"><span class=id>' + label + '</span></div>' + (list.length
         ? list.map(c =>
-            '<div class=row data-id="chrome' + c.index + '">' +
+            '<div class="row static" data-id="chrome' + c.index + '">' +
               '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
               (c.busy && !c.killed ? '<span class="badge warn">busy</span>' : '') +
               (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">killed</span>'
@@ -56,7 +56,7 @@ if (PAGE === 'chromes') {
                 (c.killed ? 'start' : 'kill') + '">' +
                 (c.killed ? 'start' : 'kill') + '</button>' +
             '</div>').join('')
-        : '<div class=row><span class=id>No Chrome processes allocated</span></div>') +
+        : '<div class="row static"><span class=id>No Chrome processes allocated</span></div>') +
         '<div class=bar style="margin-top:.6rem">' +
           '<button type=button data-mode-all=start' + (transitioning ? ' disabled' : '') + '>' +
             (status.enabled ? 'Start All' : 'Turn On / Start All') + '</button>' +
