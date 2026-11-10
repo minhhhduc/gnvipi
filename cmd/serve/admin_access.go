@@ -131,6 +131,37 @@ func adminLoopbackBind(addr string) bool {
 	return err == nil && adminLoopbackHost(host)
 }
 
+// portOnly reduces a listen address to ":port" for URLs and status lines, so
+// both the loopback default (127.0.0.1:8080) and a wildcard bind (:8080) read
+// as http://localhost:8080. The admin access policy is decided separately from
+// adminLoopbackBind, using the real bind address.
+func portOnly(addr string) string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return addr
+	}
+	return ":" + port
+}
+
+// logAdminSurface states where the admin console listens on startup. Without a
+// token the console is loopback-only, which is the default; a wildcard bind
+// without a token stays closed, so say so instead of letting the first browser
+// request discover it.
+func logAdminSurface(addr, token string) {
+	scope := "loopback only"
+	switch {
+	case token != "":
+		scope = "token protected"
+	case adminLoopbackBind(addr):
+	default:
+		scope = "disabled (non-loopback bind needs -admin-token)"
+	}
+	log.Printf("admin console: http://localhost%s/admin (%s)", portOnly(addr), scope)
+	if !adminLoopbackBind(addr) && token == "" {
+		log.Printf("warning: -addr %s listens on every interface and -admin-token is empty; /admin requests are rejected with 403", addr)
+	}
+}
+
 func adminLoopbackHost(host string) bool {
 	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
 		return true

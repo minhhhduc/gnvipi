@@ -55,7 +55,10 @@ func main() {
 }
 
 func run() (err error) {
-	addr := flag.String("addr", ":8080", "listen address")
+	// Loopback by default: the admin console and /v1 routes stay unreachable
+	// from the network unless the operator opts in with an explicit wildcard
+	// bind. A non-loopback bind also requires -admin-token for /admin.
+	addr := flag.String("addr", "127.0.0.1:8080", "listen address (loopback by default; use :8080 for all interfaces)")
 	captchaFlag := flag.String("captcha", "", "one-shot hCaptcha token (consumed on first use)")
 	flag.Bool("auto", false, "captcha Chrome starts only on demand from /admin (startup stays idle)")
 	poolSize := flag.Int("pool-size", 3, "ready captcha tokens to keep buffered after Admin Start All")
@@ -330,7 +333,7 @@ func run() (err error) {
 
 	prefs.onMaskChange = func() {
 		bindNvidiaRuntime(core, exec, getNvidiaModels())
-		writeClaudeModelCache(*addr, getModels())
+		writeClaudeModelCache(portOnly(*addr), getModels())
 	}
 
 	started := make(chan struct{})
@@ -338,10 +341,11 @@ func run() (err error) {
 		OnAfterStart: func(_ *cliproxy.Service) {
 			ensureNvidiaAuth(core)
 			n := bindNvidiaRuntime(core, exec, getNvidiaModels())
-			writeClaudeModelCache(*addr, getModels())
+			writeClaudeModelCache(portOnly(*addr), getModels())
 			startNvidiaReconciler(ctx, core, exec, getNvidiaModels)
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
-				version, *addr, len(nvidiaModels), n, execCoalesce(*coalesceMs), *maxInflight)
+				version, portOnly(*addr), len(nvidiaModels), n, execCoalesce(*coalesceMs), *maxInflight)
+			logAdminSurface(*addr, *adminToken)
 			close(started)
 		},
 	}
