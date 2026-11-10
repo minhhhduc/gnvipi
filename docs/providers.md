@@ -190,7 +190,7 @@ Each provider defines served models in the `models` array:
 | `upstream_model` | `string` | The model name sent to the upstream provider. |
 | `hidden` | `bool` | When `true`, hides the model from catalog discovery `/v1/models` without disabling direct routing. |
 | `fallbacks` | `[]string` | Candidate model aliases tried in order when an upstream call fails. |
-| `fallback_statuses`| `[]int` | Upstream HTTP status codes that trigger fallback failover. |
+| `fallback_statuses`| `[]int` | Upstream HTTP status codes that trigger fallback failover. Defaults to `408`, `429`, and `5xx` when omitted. |
 | `allow_shadow` | `bool` | Allows mapping aliases that would otherwise shadow protected system models. |
 
 #### Wildcard Matching & Prefix-Stripping
@@ -225,7 +225,10 @@ When resolving an incoming model name:
 Fallback chains guarantee high availability when upstream providers experience outages, capacity limits, or rate limits:
 
 - **Ordered Failover**: When a model invocation fails with a qualifying status, the dispatcher resolves `fallbacks[0]`, then `fallbacks[1]`, etc.
-- **Status Filter (`fallback_statuses`)**: If specified, failover triggers only on matching HTTP status codes (e.g. `[429, 500, 502, 503]`). If omitted, all upstream errors qualify.
+- **Status Filter (`fallback_statuses`)**:
+  - **Explicit Filter**: If specified, failover triggers only on matching HTTP status codes (e.g. `[429, 500, 502, 503]`).
+  - **Default Trigger Statuses (when omitted)**: Failover triggers on `408 Request Timeout`, `429 Too Many Requests`, and `500-599` server errors (as well as network/dial/context timeouts before the first response byte).
+  - **Non-retryable 4xx Responses**: Client errors such as `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, and `422 Unprocessable Entity` are immediately returned to the client and do NOT trigger fallback unless explicitly configured in `fallback_statuses`.
 - **TTFB Boundary (Stream Safety)**:
   - For non-streaming requests, fallbacks are attempted after any complete upstream failure.
   - For streaming requests, fallbacks can only trigger **before** the first response header / token chunk is emitted to the client (Time To First Byte). Once the client stream begins, the error is transmitted directly to preserve protocol framing.
