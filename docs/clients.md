@@ -30,7 +30,7 @@ The gateway listens by default on `http://localhost:8080` (or the address specif
 |---|---|---|
 | **OpenAI SDKs** (Python, TypeScript, Go) | `http://localhost:8080/v1` | Official OpenAI SDKs automatically append `/chat/completions`, `/models`, etc. to `baseURL`. The `/v1` path prefix is expected. |
 | **Claude Code & Anthropic SDKs** | `http://localhost:8080` | Anthropic client libraries automatically append `/v1/messages` and `/v1/messages/count_tokens` to `ANTHROPIC_BASE_URL`. |
-| **OpenAI Responses / Codex** | `http://localhost:8080/v1` or `http://localhost:8080/backend-api/codex` | Codex CLI and IDE plugins query `/backend-api/codex/responses` or `/v1/responses`. |
+| **OpenAI Responses / Codex** | `http://localhost:8080/v1` (custom providers)<br>`http://localhost:8080/backend-api/codex` (NVIDIA Playground) | Codex CLI and IDE plugins querying `/v1/responses` route through the v2 gateway dispatcher. `/backend-api/codex/responses` falls through to CLIProxyAPI (NVIDIA Playground only). |
 | **OpenCode** | `http://localhost:8080/v1` (OpenAI mode)<br>`http://localhost:8080` (Anthropic mode) | OpenCode supports both OpenAI and Anthropic provider backends. |
 | **cURL / HTTP Clients** | `http://localhost:8080` | Call exact endpoint paths directly. |
 
@@ -41,7 +41,7 @@ The gateway handles inbound requests across all three primary protocols:
 - **OpenAI Chat Completions:** `POST /v1/chat/completions`
 - **Anthropic Messages:** `POST /v1/messages`
 - **Anthropic Token Counting:** `POST /v1/messages/count_tokens`
-- **OpenAI Responses / Codex:** `POST /v1/responses` and `POST /backend-api/codex/responses`
+- **OpenAI Responses / Codex:** `POST /v1/responses` (v2 gateway dispatcher for custom providers) and `POST /backend-api/codex/responses` (CLIProxyAPI fall-through for NVIDIA Playground models)
 - **Model Discovery:** `GET /v1/models` (returns dual-compatible JSON format honoring OpenAI and Anthropic discovery structures)
 - **Health & Ping Checks:** `GET /v1/api/hello`, `HEAD /v1/api/hello`, `GET /api/hello`, `HEAD /api/hello` (provides instant HTTP 200 checks for Claude Code connection validation)
 
@@ -235,6 +235,11 @@ The gateway implements the OpenAI Responses protocol for Codex clients, develope
 #### Endpoints
 - Standard Responses: `POST /v1/responses`
 - Codex Compatibility: `POST /backend-api/codex/responses`
+
+> [!IMPORTANT]
+> **Dispatcher vs. CLIProxyAPI Routing Nuance:**
+> In the gateway dispatcher (`internal/gateway/dispatch/dispatch.go`), `routeProtocol(path)` only matches `POST /v1/responses`. Requests targeting `POST /v1/responses` route through the v2 gateway dispatcher for custom providers, enabling cross-protocol translation and multi-provider dispatch.
+> In contrast, requests sent to `POST /backend-api/codex/responses` bypass `dispatch.Dispatcher` and fall through to CLIProxyAPI (which only supports NVIDIA Playground models). Therefore, clients targeting v2 custom providers must configure their base URL to use `http://localhost:8080/v1` (`POST /v1/responses`).
 
 #### Example Request Payload
 
