@@ -1,331 +1,94 @@
-# gnvipi — NVIDIA Playground Gateway
+# gnvipi — Universal LLM API Gateway & NVIDIA Playground Reverse-Proxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-A self-hosted multi-format LLM gateway that serves **NVIDIA Playground models
-(deepseek-v4, kimi, glm, nemotron, gpt-oss, …)** plus any number of
-**custom OpenAI-compatible / Anthropic endpoints** behind one local server, with
-automatic hCaptcha solving (headless Chrome pool) and a built-in admin console
-for model management and per-request statistics.
+A unified local gateway for AI coding agents (**Claude Code**, **OpenAI SDKs**, **OpenCode**, **Codex**, **Aider**) bridging 3 inbound client protocols (**OpenAI Chat**, **Anthropic Messages**, **OpenAI Responses**) to any upstream provider (**OpenAI-compatible**, **Anthropic-compatible**, **OpenAI Responses**, **NVIDIA Playground**, and custom endpoints).
 
-Embedded [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) does the
-inbound format translation; this repo provides the NVIDIA provider executor,
-the captcha automation, and the admin surface. **Client API-key authentication
-is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`,
-`/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth
-behavior remains. Admin access is open only on loopback listeners; non-loopback
-listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default `-addr :8080`,
-Windows helper, and Docker Compose expose all interfaces. Use a loopback bind
-or restrict access with a firewall or authenticated reverse proxy. Placeholder
-Claude credentials do not secure the gateway.
+The gateway combines a high-performance **Adapter-Hub** translation engine and zero-copy passthrough relay with an automated headless Chrome captcha pool for NVIDIA Playground models (DeepSeek-V4, Kimi, GLM, Nemotron, GPT-OSS, and more), protected by dial-time SSRF defenses, inbound authentication, and a built-in Admin Console v2.
 
-Configured provider/gateway/admin credentials and common authentication forms
-are redacted from diagnostics, error responses and new statistics records.
-Rotated credentials remain protected for in-flight requests. Successful model
-output is unchanged; diagnostic bodies/SSE frames are buffered with a 1 MiB
-limit before disclosure. Credential storage and existing historical files are
-not migrated by this filtering layer.
+---
+
+## Documentation Links
+
+- **[Release Notes](RELEASE_NOTES.md)** — Universal LLM Gateway v2.0 feature highlights, deprecations, and upgrade guide.
+- **[Provider Configuration Guide](docs/providers.md)** — Schema v2 reference, model mappings, wildcard routing, fallback chains, and migration (#61).
+- **[Client Setup & Compatibility Matrix Guide](docs/clients.md)** — Step-by-step setup for Claude Code, OpenAI SDKs, Codex, OpenCode, and the 9-combination compatibility matrix (#62).
+- **[Architecture Overview](docs/architecture/overview.md)** — Hub-and-Spoke pattern, normalized IR, component layout, and architectural invariants.
+- **[Adapter Developer Guide](docs/architecture/adapters.md)** — How to implement, register, and test new inbound/outbound protocol adapters (#63).
+- **[Master Implementation Roadmap](docs/architecture/universal-llm-gateway-roadmap.md)** — Complete 10-phase milestone breakdown and issue index (#65).
+
+---
 
 ## Endpoints
 
-| Route | Format |
-|---|---|
-| `POST /v1/chat/completions` | OpenAI Chat Completions |
-| `POST /v1/responses` | OpenAI Responses |
-| `POST /v1/messages` | Anthropic Messages (drop-in for Claude Code) |
-| `POST /v1/messages/count_tokens` | Anthropic token count (local estimate for NVIDIA models) |
-| `GET /v1/models` | catalog (respecting admin on/off mask), plus `automode` and `cycle` |
-| `POST /mcp` | Streamable HTTP MCP (`search_web`) |
-| `/admin` | admin console (see below) |
-| `GET /healthz` | health + captcha pool stats |
+| Route | Format / Functionality | Description |
+|---|---|---|
+| `POST /v1/chat/completions` | OpenAI Chat Completions | Standard chat endpoint for OpenAI SDKs, OpenCode, and Aider |
+| `POST /v1/messages` | Anthropic Messages | Drop-in Anthropic endpoint for Claude Code and Anthropic clients |
+| `POST /v1/responses` | OpenAI Responses | OpenAI Responses protocol endpoint for Codex and next-gen tools |
+| `POST /v1/messages/count_tokens` | Anthropic Token Counting | Accurate token counting across custom providers and local estimation |
+| `GET /v1/models` | Unified Model Catalog | Dynamic catalog listing across all custom providers and NVIDIA Playground |
+| `POST /mcp` | HTTP Streamable MCP | Model Context Protocol search tool (`search_web`) |
+| `/admin` | Admin Console v2 | Web console for providers, model masks, Chrome workers, and metrics |
+| `GET /healthz` | Health Check | Gateway liveness and captcha pool status |
 
-## Quick start
+---
 
-Requires **Go 1.26+** and **Chrome/Chromium** when activating Chrome captcha from Admin; set `CHROME_PATH` to
-the browser executable if it is not detected. Claude Code is optional, except
-when using `-Claude`. Run commands from the repository root.
+## Quick Start
 
-```powershell
-.\scripts\init.ps1                   # optional: create local settings (skips if present)
+### 1. Custom Providers (Zero-Browser Mode — No Chrome, No Captcha Needed)
 
-# Windows: initializes settings and builds if needed; Chrome remains idle
-.\scripts\run.ps1                   # :8080; Start All allocates 3 chromes, pool of 6
-.\scripts\run.ps1 -Port 8081        # test instance
-.\scripts\run.ps1 -Claude           # start gateway + open Claude Code pointed at it
-.\scripts\run.ps1 -Harness -Batch 6 # low-RAM captcha harness
-.\scripts\run.ps1 -Proxy socks5://127.0.0.1:1080
-.\scripts\run.ps1 -NoCaptcha        # omit the old -auto flag; Admin can still start Chrome
-```
+If you only use custom upstreams (such as OpenAI, Anthropic, OpenRouter, DeepSeek, or local Ollama / vLLM engines), the gateway runs as a pure lightweight Go proxy without allocating any browser processes:
 
 ```bash
-# Any platform; local-only listener (embedded catalog needs no initialization)
+# Any platform: listen locally on port 8080
 go run ./cmd/serve -addr 127.0.0.1:8080
-go run ./cmd/serve -addr 127.0.0.1:8080 -pool-workers=2 -coalesce-ms=0 -max-inflight=8
-go run ./cmd/serve -addr 127.0.0.1:8080 -captcha "P1_..."  # one-shot manual token, no browser
-go run ./cmd/serve -auto -addr 127.0.0.1:8080            # accepted; still starts with Chrome off
 ```
 
-Startup never launches Chrome, probes NVIDIA playground pages, or waits for captcha
-warmup, including with `-auto` or the default Docker command. Open
-`/admin?page=chromes` and click **Turn On / Start All** before NVIDIA generation.
-**Kill All** releases the pool and Chrome processes; **Start All** creates a fresh
-runtime without restarting the gateway. Custom providers and MCP do not need Chrome.
-
-## Client usage
-
-Use the base URL appropriate to your client; update the port if you changed it:
-
-| Client | Base URL |
-|---|---|
-| OpenAI-compatible SDK | `http://localhost:8080/v1` |
-| Claude Code / Anthropic SDK | `http://localhost:8080` (no `/v1` suffix) |
-| MCP client | `http://localhost:8080/mcp` |
-
-Clients that require an API key can use `local-gateway` as a placeholder; it
-is not checked. Select an enabled model ID from `GET /v1/models`, including
-playground IDs (`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`, …)
-and custom-provider aliases.
-
-After starting the server, check health/catalog and send a streaming request
-(example for Bash; replace the model with an enabled ID from your catalog):
-
-```bash
-curl -fsS http://localhost:8080/healthz
-curl -fsS http://localhost:8080/v1/models
-curl -sS -N http://localhost:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"Say hello."}],"max_tokens":128,"stream":true}'
+On Windows:
+```powershell
+.\scripts\run.ps1 -NoCaptcha
 ```
 
-Set `"stream":false` for a single JSON response. NVIDIA generation needs
-Chrome captcha enabled through Admin, a one-shot `-captcha` token, or a fresh
-`nv-captcha-token` request header. No NVIDIA API key is required; custom-provider requests do not use
-captcha. NVIDIA `/v1/messages/count_tokens` is a local approximation, not an
-exact model-tokenizer or billing count.
+Add your providers via the Admin Console at `http://localhost:8080/admin` or directly in `data/providers.json`.
 
-With gateway authentication enabled, set your client's `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY` to a gateway key. Bearer `Authorization` and `x-api-key` are
-accepted; if both are sent, they must contain the same valid key. Comma-separated
-keys support rotation. Client credentials are removed before provider calls;
-provider credentials stay separate. `/healthz` remains public. An explicit
-`-gateway-key` overrides the environment, including an empty value to disable it.
+### 2. NVIDIA Playground (With Headless Chrome Captcha Solvers)
 
-## Admin console — `/admin`
+To serve free models from the NVIDIA Playground (e.g. `deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`):
 
-When an admin token is configured, visit `/admin` to sign in. API clients may
-send `Authorization: Bearer <token>` or `X-Admin-Token`. Browser sessions use
-HttpOnly, SameSite-strict cookies and expire after 12 hours or a server restart.
-Plain-HTTP cookie login is allowed only on loopback; remote browser login needs
-a real TLS connection, not an untrusted forwarded scheme header. All mutations
-require same-origin browser provenance. Explicit `-admin-token` values override
-the environment, including empty values; non-loopback access then stays closed.
+1. Start the gateway:
+   ```bash
+   go run ./cmd/serve -addr 127.0.0.1:8080
+   ```
+2. Open `http://localhost:8080/admin?page=chromes` and click **Turn On / Start All**.  
+   *Note: Startup is always idle and never launches Chrome automatically until activated.*
+3. On Windows, you can also use:
+   ```powershell
+   .\scripts\run.ps1                    # Starts gateway with Chrome pool ready for activation
+   .\scripts\run.ps1 -Claude            # Starts gateway and launches Claude Code pointed at it
+   ```
 
-One page per tab (`?page=`), each doing exactly one thing:
+---
 
-- **`?page=dashboard`** — LLM request/token statistics **since server start**
-  for NVIDIA and custom-provider traffic. KPI tiles (requests, req/min,
-  tokens in/out, error %, TTFB, p95 latency over the last 200 requests, uptime),
-  per-minute and per-model request charts, and sortable **200-request history
-  frames**. Request history survives restarts; aggregate counters and charts
-  do not. Logs default to `gnvipi/stats.jsonl` under the OS user cache directory
-  (override with `GNVIPI_STATS_FILE`).
-  History is size/time rotated and retained within a configurable disk cap;
-  frame reads use a sparse in-memory index rather than rescanning all history.
-- **`?page=models`** — toggle every model on/off (persisted), delete/restore
-  models from the catalog, add/remove custom endpoints (including
-  `messages_only` and `responses_only` upstream modes; select only one).
-  Delete/restore does not change an independent on/off mask. Historical files
-  that already stored a deleted model in `masks_id` keep that explicit mask;
-  if it was only deletion-generated, re-enable the model once after restoring.
-- **`?page=config`** — select the target for virtual `automode` (Anthropic
-  Messages requests only), configure `cycle`, and choose web-search settings.
-  `automode` may target an enabled real model or `cycle`; the alias rewrite
-  changes only the top-level `model` field before normal provider translation.
-  It does not replace Claude's safety prompt, shorten transcripts, or remap
-  built-in `claude-` model names. Stats use the resolved real model.
-  `?page=automode` remains a legacy alias for this page.
-- **`?page=chromes`** — always available, including while captcha is off. Turn On /
-  Start All allocates Chrome and the token pool on demand; Kill All closes both.
-  Individual slot controls remain available while enabled, with busy/warm state
-  and extract counts. Token warming runs in the background after activation.
+## Client Configuration
 
-`GET /admin/chromes` returns HTTP 200 with `enabled`, `state`, `chromes`, and
-`ready` fields. Before activation: `{"enabled":false,"state":"idle","chromes":[],"ready":0}`.
-POST JSON `{"mode":"start","all":true}` to enable, and
-`{"mode":"kill","all":true}` (or `mode:"stop"`) to disable. Start may take time
-to allocate Chrome; GET remains available with `state:"starting"`, and Kill All
-can cancel that startup. Disabled state after stopping is `state:"stopped"`.
-Actions use the same Admin authentication as the page.
+The gateway exposes a unified interface. Point your client to the appropriate base URL:
 
-## Custom providers
-
-Open `/admin?page=models` and enter a provider name, its base URL (normally
-ending in `/v1`), upstream model ID, and API key if required. Add one entry per
-model. For example, provider `remote` and model `chat-model` advertise the alias
-`remote/chat-model`; use the exact ID returned by `/v1/models`.
-
-Choose the API format the upstream actually accepts:
-
-| Mode | Upstream API | Recommended gateway route |
+| Client Application / SDK | Base URL | Auth Token / Key |
 |---|---|---|
-| Neither checkbox | OpenAI Chat Completions | `/v1/chat/completions` |
-| `messages_only` | Anthropic Messages | `/v1/messages` |
-| `responses_only` | OpenAI Responses | `/v1/responses` (native) or `/v1/messages` (adapted) |
+| **Claude Code** | `http://localhost:8080` (no `/v1` suffix) | `local-gateway` (or configured `-gateway-key`) |
+| **OpenAI Python SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
+| **OpenAI Node / TypeScript SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
+| **Codex / OpenAI Responses** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
+| **OpenCode** | `http://localhost:8080/v1` (OpenAI) or `http://localhost:8080` (Anthropic) | `local-gateway` (or configured `-gateway-key`) |
+| **cURL / HTTP Clients** | `http://localhost:8080` | `Bearer local-gateway` |
 
-Do not select both modes. Use a provider base URL rather than the full
-`/v1/messages` endpoint for `messages_only` providers. Reuse a provider name
-only for models sharing a base URL and credentials; otherwise choose distinct
-names. Tool calling, reasoning, and multimodal support still depend on the
-upstream model.
+### Configuration Examples
 
-Custom upstream URLs require HTTP(S), a host, and no embedded user credentials.
-Loopback/LAN services remain allowed by default; `-deny-private-upstreams`
-disables them. Link-local and cloud-metadata targets are always blocked unless
-`-allow-unsafe-upstreams` is explicitly enabled. Guards cover translated SDK
-requests, redirects and final resolved addresses; trusted configured proxy
-hops may remain local while the ultimate upstream is checked.
-
-The next successful `-models-file` save migrates legacy providers to
-`schema_version: 2` and `providers_v2`, preserving model order, masks and extra
-catalog fields. Writes are v2-only: keep a backup before upgrading; downgrading
-requires restoring the pre-migration file. Invalid or future-version files are
-rejected without overwriting them.
-
-## How it works
-
-```
-client ── /v1/* ──▶ gateway
-                    ├── CLIProxyAPI translation ──▶ NVIDIA executor ──▶ NVIDIA predict API
-                    │                                    ▲
-                    │                              captcha token pool
-                    └── passthrough / translation ──▶ custom upstream
-
-NVIDIA executor + custom-provider handlers ──▶ GlobalStats (usage + latency)
-```
-
-- **Captcha pool**: Admin Start All prewarms single-use hCaptcha tokens with headless
-  Chrome (`internal/captcha`); expired tokens are discarded (`-pool-ttl`). Startup is idle.
-  The pool can batch-mint via a local harness page
-  (`-captcha-harness -pool-batch=N`) to cut RAM and wall time.
-- **SSE coalescing**: consecutive content deltas merge within `-coalesce-ms`
-  (default 16) to reduce event-loop churn; first token always flushes
-  immediately so TTFT is untouched.
-- **Claude Code**: mask changes refresh `/v1/models` and write a best-effort
-  Claude model-discovery cache; `.\scripts\run.ps1 -Claude` sets the base URL
-  and launches Claude Code.
-- **Request identity**: safe inbound `X-Request-Id` values are echoed and forwarded
-  to custom upstreams; otherwise a random ID is generated. Upstream response IDs
-  cannot replace the canonical client ID. The normalized core exposes an opt-in,
-  once-only IR usage recorder with first-byte timing and JSON access logs; legacy
-  traffic keeps its existing recorder and is not counted twice.
-- **Inbound protocol adapters**: `internal/gateway/inbound/` provides JSON and SSE
-  codecs for Anthropic Messages, OpenAI Chat and OpenAI Responses. Responses JSON
-  decoding is stateless: translated requests reject `previous_response_id`,
-  `conversation` and `store: true` with a Responses-shaped 400. Same-protocol
-  passthrough bypasses decoding; the default CLIProxyAPI routing remains unchanged.
-- **Gateway v2 dispatcher**: `gatewayMiddleware` (`dispatch.Dispatcher`), enabled by
-  `-gateway-v2` (default on), routes both same-protocol passthrough relay and cross-protocol
-  translation across all 9 Inbound x Outbound protocol pairs for custom providers (including
-  Anthropic `count_tokens`). Only non-custom (CLIProxyAPI/NVIDIA) traffic falls through to
-  CLIProxyAPI. Setting `-gateway-v2=false` provides a deprecated escape hatch to legacy
-  routing. With gateway v2 enabled, the resolver rejects hidden models with protocol-shaped
-  errors; the legacy escape hatch preserves legacy routing, including its Responses
-  hidden-model fallthrough. Persisted transport/auth/header/endpoint policies remain intact.
-  Exact alias precedence is unchanged; registry/wildcard routing is a separate backlog item.
-  Core-owned cycle requests record only the committed attempt's usage/error.
-
-## Notable flags
-
-```
--auto                     accepted; Chrome still starts only from Admin
--pool-size/-pool-workers  pool depth / Chrome processes allocated by Start All
--pool-ttl D               discard expired pooled tokens (default 90s)
--warm-timeout D           background pool warmup budget after Start All (default 3m)
--captcha-harness          mint on a blank local page (~50MB/chrome, batchable)
--pool-batch N             tokens per browser borrow (harness only)
--coalesce-ms N            SSE delta merge window (0=off)
--max-inflight N           max concurrent NVIDIA streams (0=unlimited)
--captcha-wait D           per-request wait for a pooled token
--inflight-wait D          wait for an NVIDIA stream slot; timeout -> 503
--models-file P            catalog + masks + provider/auto/cycle/search settings
--captcha-select-budget D  benchmark playground URLs on Start All, persist champion
--addr HOST:PORT           listen address (default :8080 = all interfaces)
--chrome-proxy URL         proxy for Chrome + NVIDIA API (or CHROME_PROXY)
--max-body-bytes N         client API body limit (default 32 MiB)
--max-admin-body-bytes N   admin body limit (default 1 MiB)
--gateway-key KEYS         comma-separated client keys (or GNVIPI_GATEWAY_KEY)
--gateway-v2               gateway core dispatcher routing all custom providers (default on; false is deprecated escape hatch)
--admin-token TOKEN        admin access token (or GNVIPI_ADMIN_TOKEN)
--deny-private-upstreams   deny loopback/LAN custom upstreams
--allow-unsafe-upstreams  permit link-local/cloud metadata targets (unsafe)
--stats-max-bytes N        total retained history bytes (default 16 MiB)
--stats-segment-bytes N    bytes per log segment (default 4 MiB)
--stats-rotate-interval D  active segment age (default 24h)
--stats-retention D        history retention (default 7d)
--stats-read-interval D    dashboard/history cadence (default 1s)
-```
-
-Admin Start All uses a pool of 3 tokens and 1 Chrome worker for direct Go runs;
-`run.ps1` configures 6 tokens and 3 workers. Until activation, neither allocates
-Chrome or a pool. Run `go run ./cmd/serve -h` for all flags and defaults.
-
-Body limits apply before routing, including SDK inference aliases. Oversized
-requests return protocol-shaped HTTP 413. Client limits bound both encoded bytes
-and decoded `zstd` bodies; every layer of a supported encoding stack is bounded.
-Both limits must be positive.
-
-Stats limits and intervals must be positive, with segment bytes no greater than
-the total cap. Read intervals cannot exceed the browser timer limit
-(`2147483647ms`, about 24.8 days). Repeated frame polls are cached; rapid switches
-to a different uncached frame return HTTP 429 with `Retry-After`, which the UI
-honors. Rotation and retention work even without an open dashboard.
-
-## Data and configuration
-
-| Data | Default location | Override |
-|---|---|---|
-| Catalog, admin settings, provider API keys | `internal/models/playground_models.json` | `-models-file` |
-| Request history | User cache: `gnvipi/stats.jsonl` | `GNVIPI_STATS_FILE` |
-| Captcha champion state | User cache: `gnvipi/playground-state.json` | `GNVIPI_CAPTCHA_STATE` |
-
-User cache means `~/.cache` on Linux (or `$XDG_CACHE_HOME`),
-`~/Library/Caches` on macOS, and `%LOCALAPPDATA%` on Windows. Overrides are
-file paths; the default stats log lives beside the captcha state file.
-A missing models file uses the embedded catalog, but its parent directory
-must exist and be writable for admin changes to save. Use separate models
-files for simultaneously running instances.
-Use a distinct `GNVIPI_STATS_FILE` per simultaneous gateway process: each process
-owns its active stats file and numeric retained segments.
-
-Provider API keys are saved in **plaintext**. Only the default models-file
-path is Git-ignored here; protect custom paths and backups. Stats logs store
-request metadata, not prompt bodies. Active and numeric segment files are bounded
-to 16 MiB by default, rotate at 4 MiB or 24h, and expire after seven days.
-Inference runs on the selected NVIDIA or
-custom upstream, and request content is forwarded there—not processed by a
-local model inside this gateway.
-
-## Development
-
-```bash
-go build ./... && go test ./... -skip '^TestLiveSearchSmoke$'
-```
-
-The optional live search smoke test requires a gateway listening on port 8081
-with search configured. It makes real backend requests:
-
-```bash
-go test ./cmd/serve -run '^TestLiveSearchSmoke$' -count=1 -v
-```
-
-## Claude Code setup
-
-Claude Code keeps its local configuration under `.claude/`, which is ignored
-by Git in this repository. To point Claude Code at this local Anthropic-
-compatible gateway, use this `settings.json` content:
-
+#### Claude Code
+Set the environment variables or place this in `.claude/settings.json`:
 ```json
 {
   "env": {
@@ -337,123 +100,190 @@ compatible gateway, use this `settings.json` content:
 }
 ```
 
-Save that block as `.claude/settings.json` for this project. The
-`.\scripts\run.ps1 -Claude` helper sets the base URL/auth token and clears
-`ANTHROPIC_API_KEY` for the launched session; it does **not** set the model
-discovery flag.
+#### Official OpenAI Python SDK
+```python
+from openai import OpenAI
 
-Use `.claude/settings.local.json` for machine-specific overrides and keep
-secrets out of shared settings. Both project settings files are Git-ignored
-in this repository. `ANTHROPIC_BASE_URL` must be the gateway root URL, not
-`/v1/messages` or a URL ending in `/v1`; adjust it when changing the port.
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="local-gateway",  # or your GNVIPI_GATEWAY_KEY
+)
 
-## Web search (MCP)
-
-In `/admin?page=config`, choose **Bing** or **DuckDuckGo** to enable gateway
-search. Choices save automatically to `-models-file` (default:
-`internal/models/playground_models.json`) and are restored on restart.
-Search is disabled until a valid search URL is configured.
-
-General-web searches use Bing and DuckDuckGo. Academic, legal, and identifier
-queries can also use arXiv, Crossref, OpenAlex, and Semantic Scholar. Results
-are normalized, deduplicated, and ranked, with titles, URLs, and snippets when
-available.
-
-**Current limitation:** the Config UI also accepts Google, Google Scholar,
-and custom HTTPS URL templates, but the active MCP pipeline does not fetch
-those URLs. Only Bing and DuckDuckGo selections currently change the web
-search engine.
-
-To make `search_web` available in every Claude Code project on this machine,
-register the gateway once:
-
-```bash
-claude mcp add --scope user --transport http gateway-search http://localhost:8080/mcp
+response = client.chat.completions.create(
+    model="openrouter/anthropic/claude-3.7-sonnet",
+    messages=[{"role": "user", "content": "Explain quantum computing in one sentence."}],
+)
+print(response.choices[0].message.content)
 ```
 
-The gateway must be running when Claude Code searches. This is separate from
-Claude Code's built-in `WebSearch`; upstreams may block or rate-limit automated
-requests, and the tool reports backend errors when no usable results remain.
-To prefer gateway search in every Claude Code project, merge these entries
-into `~/.claude/settings.json` (preserve existing settings and permission
-entries), then restart Claude Code:
+#### OpenAI Node.js / TypeScript SDK
+```typescript
+import OpenAI from "openai";
 
-```json
-{
-  "permissions": {
-    "allow": ["mcp__gateway-search__search_web"],
-    "deny": ["WebSearch"]
-  }
+const openai = new OpenAI({
+  baseURL: "http://localhost:8080/v1",
+  apiKey: "local-gateway",
+});
+
+const stream = await openai.chat.completions.create({
+  model: "z-ai/glm-5.2",
+  messages: [{ role: "user", content: "Write a poem about Go." }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || "");
 }
 ```
 
-Add this instruction to `~/.claude/CLAUDE.md`:
+#### Codex CLI
+Configure Codex to target the gateway Responses endpoint:
+```bash
+export OPENAI_BASE_URL="http://localhost:8080/v1"
+export OPENAI_API_KEY="local-gateway"
+```
 
-> Use `mcp__gateway-search__search_web` for web search; it follows the gateway
-> Config page. If unavailable, say that the gateway must be running. Do not
-> substitute built-in `WebSearch` or treat its zero-search response as a
-> gateway search result.
+#### cURL
+```bash
+curl -sS -N http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer local-gateway" \
+  -d '{
+    "model": "z-ai/glm-5.2",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'
+```
 
-## Model cycling
+---
 
-The **config** tab always exposes the virtual model `cycle`. Check the
-models to use and use the arrow buttons to set their order. Changes save
-automatically to `-models-file`. `cycle` remains listed with no models selected,
-but requests to it return 503 until one is chosen.
-Send requests with `cycle`; the gateway keeps it mapped to
-one model until that model returns 429, 404, 408, 410, or a 5xx response,
-then retries on the next enabled model and keeps that model active. A successful
-stream is forwarded immediately, so an error after streaming has begun
-cannot be retried safely. The active position resets to the first model
-when the gateway restarts or the cycle configuration changes.
+## Provider Configuration (Schema v2)
 
-## Troubleshooting
+Providers are declared using the typed v2 schema in `data/providers.json` (or saved from the Admin UI at `/admin?page=models` into `-models-file`).
 
-`/healthz` checks server liveness, not captcha readiness. Admin, MCP, and
-custom-provider routes are available while Chrome starts or is unavailable.
-For NVIDIA generation, enable Chrome captcha from Admin, then check `pool.ready`
-in `/healthz` and worker state on `/admin?page=chromes`.
+### Adding Providers via Admin UI
+1. Navigate to `http://localhost:8080/admin?page=models`.
+2. Under **Custom Providers**, provide:
+   - **Provider Name / ID:** Identifier for namespacing (e.g. `openrouter`, `local-ollama`).
+   - **Base URL:** Upstream endpoint root (e.g. `https://openrouter.ai/api/v1` or `http://127.0.0.1:11434/v1`).
+   - **Wire Protocol:** Choose `openai_chat`, `anthropic_messages`, or `openai_responses`.
+   - **Models & Wildcards:** Map aliases to physical upstream model IDs, or use wildcard patterns (e.g. `openrouter/*`).
+   - **API Key:** Upstream credentials (stored securely and segregated from public catalogs).
+3. Click **Save & Test Connection**.
 
-| Symptom | What to check |
-|---|---|
-| Port already in use | Choose another `-Port` / `-addr` and update client URLs. |
-| `captcha token required` / 503 | Click Turn On / Start All in Admin, or provide a manual token. Chrome is always off on server startup. |
-| `captcha pool empty` / 503 | Wait for warmup after Start All; check Chrome, `CHROME_PATH`, and proxy connectivity. The default `-captcha-wait` is 30s. |
-| Invalid or expired captcha / 401 | Supply a fresh manual token, or let the enabled pool mint replacements; tokens cannot be reused. |
-| `max in-flight upstream streams reached` / 503 | Reduce concurrency or adjust `-max-inflight` and `-inflight-wait` to match available capacity. |
-| `cycle` has no available models / 503 | Select at least one enabled model on the Config page. |
-| `automode target is hidden` / 404 | Re-enable the target or choose a different enabled model. |
-| Admin changes fail to save | Check the `-models-file` parent directory and permissions; container defaults need a writable mount. |
+### Adding Providers via Configuration File
+You can define providers directly in `data/providers.json` or your configured models file:
 
-## Project layout
+```json
+{
+  "schema_version": 2,
+  "providers": [
+    {
+      "id": "openrouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "protocol": "openai_chat",
+      "auth": {
+        "type": "bearer",
+        "key_env": "OPENROUTER_API_KEY"
+      },
+      "models": [
+        {
+          "alias": "openrouter/*",
+          "upstream_model": "*",
+          "strip_prefix": true
+        }
+      ],
+      "concurrency": {
+        "max_concurrent": 8,
+        "max_wait_ms": 5000
+      }
+    },
+    {
+      "id": "ollama",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "protocol": "openai_chat",
+      "models": [
+        {
+          "alias": "ollama/llama3",
+          "upstream_model": "llama3:latest"
+        }
+      ]
+    }
+  ]
+}
+```
 
-Key packages: `cmd/serve` (gateway + admin), `internal/gnvipi` (playground API
-client), `internal/provider/nvidia`
-(executor, SSE coalescing/normalizing, `stats.go`), `internal/captcha`
-(browser group, pool, harness, champion selection), `internal/models`
-(playground catalog). Local build output goes to `bin/`.
+See [docs/providers.md](docs/providers.md) for the complete schema specification, fallback chains, and header policies.
 
-## Docker
+---
 
-`Dockerfile` packages the gateway and Chromium; `docker-compose.yml` provides
-a basic deployment. Its port mapping publishes `8080` on all interfaces by
-default; bind it to `127.0.0.1:8080:8080` for local-only access.
+## Security & Operational Flags
 
-For saved admin settings, mount a writable persistent directory and pass
-`-models-file /data/playground_models.json`. The runtime image has no
-`internal/models` directory, so its default settings path cannot be saved
-without a mount or directory setup.
+The gateway is secure by default:
 
-Example for Bash on Linux/macOS/WSL, with local-only access and persistent
-settings/request history:
+| Flag | Environment Variable | Default | Purpose |
+|---|---|---|---|
+| `-addr` | — | `:8080` | Listen host and port. Use `127.0.0.1:8080` for local-only binding. |
+| `-gateway-key` | `GNVIPI_GATEWAY_KEY` | *(disabled)* | Optional comma-separated API keys protecting `/v1/*` and `/mcp`. |
+| `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Authentication token required for non-loopback `/admin` access. |
+| `-gateway-v2` | — | `true` | Gateway core dispatcher routing all custom providers (default on; false is deprecated). |
+| `-max-body-bytes` | — | `33554432` (32 MiB) | Maximum request body bytes for `/v1/*` routes (enforces `http.MaxBytesReader`). |
+| `-max-admin-body-bytes`| — | `1048576` (1 MiB) | Maximum request body bytes for administrative endpoints. |
+| `-deny-private-upstreams`| — | `false` | Deny loopback and RFC 1918 private LAN addresses for custom upstreams (SSRF protection). |
+| `-allow-unsafe-upstreams`| — | `false` | Permit link-local and cloud-metadata addresses (`169.254.169.254`) — **unsafe**. |
+| `-models-file` | — | `internal/models/playground_models.json` | Path to saved provider configuration and model preferences. |
+
+### Inbound Authentication
+When `-gateway-key` or `GNVIPI_GATEWAY_KEY` is set, client requests must present a valid key via `Authorization: Bearer <key>` or `x-api-key: <key>`. Comma-separated keys permit zero-downtime key rotation.
+
+### Dial-Time SSRF Prevention
+By default, the gateway strictly blocks all cloud metadata services (`169.254.169.254`) and IPv6 link-local addresses. Pass `-deny-private-upstreams` in hardened multi-tenant environments to restrict all private LAN targets.
+
+---
+
+## Admin Console — `/admin`
+
+The built-in web console provides full operational observability:
+- **`?page=dashboard`:** Real-time request and token throughput KPIs, TTFT, p95 latency, error rates, and 200-request rolling history survive restarts.
+- **`?page=models`:** Toggle models on/off, delete/restore catalog entries, and configure v2 custom providers with live validation.
+- **`?page=config`:** Configure virtual `automode` (Claude auto-model alias), `cycle` (ordered round-robin with automatic failover), and web search MCP settings.
+- **`?page=chromes`:** Manage headless Chrome worker pools on demand (Turn On / Start All, Kill All).
+
+---
+
+## Web Search (MCP)
+
+The gateway includes a Streamable HTTP Model Context Protocol (`POST /mcp`) endpoint supporting web search:
+1. In `/admin?page=config`, select **DuckDuckGo** or **Bing**.
+2. Add the tool to Claude Code globally:
+   ```bash
+   claude mcp add --scope user --transport http gateway-search http://localhost:8080/mcp
+   ```
+
+---
+
+## Docker Deployment
+
+A lightweight Docker setup is provided:
 
 ```bash
 docker build -t gnvipi:local .
 docker run --rm -p 127.0.0.1:8080:8080 --shm-size=2g \
   --mount type=volume,source=gnvipi-data,target=/data \
   -e GNVIPI_STATS_FILE=/data/stats.jsonl \
-  gnvipi:local -auto -models-file /data/playground_models.json
+  gnvipi:local -models-file /data/playground_models.json
 ```
 
-The named `gnvipi-data` volume remains when the container is removed. The
-image includes Chromium; Docker users do not need Chrome or Go on the host.
+---
+
+## Development & Verification
+
+Run the full race-detector test suite and linter:
+
+```bash
+# Run all unit, integration, and E2E matrix tests
+go test -race ./...
+
+# Run linter
+golangci-lint run ./...
+```
