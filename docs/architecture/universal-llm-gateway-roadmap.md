@@ -1,9 +1,14 @@
 # Universal LLM API Gateway — Architecture & Implementation Roadmap
 
 > **Tracking Issue:** [#65](https://github.com/minhhhduc/gnvipi/issues/65)  
-> **Status:** Planning / Published Backlog  
+> **Status:** Completed / Universal LLM Gateway v2.0 Released  
 > **Repository:** [minhhhduc/gnvipi](https://github.com/minhhhduc/gnvipi)  
-> **Target Release:** Universal LLM Gateway v2.0  
+> **Target Release:** Universal LLM Gateway v2.0 (Released & Active by Default)  
+
+---
+
+> **Release Status & Executive Summary:**  
+> All **10 phases** and all **64 issues** have been successfully implemented, integrated, and verified. The Universal LLM Gateway v2 architecture is complete: the normalized Internal Representation (IR) engine, bi-directional inbound/outbound adapters across all 3 protocols (OpenAI Chat Completions, Anthropic Messages, OpenAI Responses), zero-copy same-protocol passthrough relay, tool calling parity, reasoning effort/budget mapping, multimodal image inputs, structured outputs, v2 provider configuration with failovers and virtual models (`automode`, `cycle`), Admin UI v2, and end-to-end integration and security test suites are fully verified in CI. Gateway v2 is enabled by default (`-gateway-v2=true`).
 
 ---
 
@@ -50,7 +55,7 @@ The evolved Universal LLM Gateway establishes a strict **Adapter-Hub** architect
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Client Applications                             │
-│   (Claude Code, OpenAI Python/JS SDK, Codex, OpenCode, Aider, etc.)    │
+│   (Claude Code, OpenAI Python/JS SDK, Codex, OpenCode, cURL, etc.)     │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ HTTP Request (SSE or JSON)
                                      ▼
@@ -146,7 +151,7 @@ The evolved Universal LLM Gateway establishes a strict **Adapter-Hub** architect
 
 All 64 implementation tasks have been created as official GitHub issues on repository [minhhhduc/gnvipi](https://github.com/minhhhduc/gnvipi).
 
-### Phase 1: Architectural Foundations (Milestone 1)
+### Phase 1: Architectural Foundations (Milestone 1 — Completed)
 Foundational data structures, SSE parser/writer, normalized error models, adapter interfaces, and test fixtures.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -158,7 +163,7 @@ Foundational data structures, SSE parser/writer, normalized error models, adapte
 | [#6](https://github.com/minhhhduc/gnvipi/issues/6) | [testing] Build fake upstream test harness for OpenAI Chat, Anthropic and Responses | `testing` | None (Foundation) |
 | [#7](https://github.com/minhhhduc/gnvipi/issues/7) | [testing] Add characterization tests for current custom-provider routing before refactor | `testing`, `routing` | None (Foundation) |
 
-### Phase 2: Gateway Core (Milestone 2)
+### Phase 2: Gateway Core (Milestone 2 — Completed)
 Shared HTTP client factory, request body limits, header forwarding policies, model resolver, same-protocol relay, and dispatcher middleware.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -171,7 +176,7 @@ Shared HTTP client factory, request body limits, header forwarding policies, mod
 | [#14](https://github.com/minhhhduc/gnvipi/issues/14) | [core] Gateway dispatcher middleware behind -gateway-v2 feature flag | `core`, `routing` | [#4](https://github.com/minhhhduc/gnvipi/issues/4), [#7](https://github.com/minhhhduc/gnvipi/issues/7), [#12](https://github.com/minhhhduc/gnvipi/issues/12), [#13](https://github.com/minhhhduc/gnvipi/issues/13) |
 | [#15](https://github.com/minhhhduc/gnvipi/issues/15) | [testing] Adapter contract test suite for inbound and outbound adapters | `testing`, `adapter` | [#4](https://github.com/minhhhduc/gnvipi/issues/4), [#6](https://github.com/minhhhduc/gnvipi/issues/6) |
 
-### Phase 3: Inbound Protocol Adapters (Milestone 3)
+### Phase 3: Inbound Protocol Adapters (Milestone 3 — Completed)
 Inbound decoders and encoders for Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -183,7 +188,7 @@ Inbound decoders and encoders for Anthropic Messages, OpenAI Chat Completions, a
 | [#21](https://github.com/minhhhduc/gnvipi/issues/21) | [inbound] OpenAI Responses: streaming event encoder | `adapter`, `protocol`, `streaming`, `inbound` | [#1](https://github.com/minhhhduc/gnvipi/issues/1), [#2](https://github.com/minhhhduc/gnvipi/issues/2), [#4](https://github.com/minhhhduc/gnvipi/issues/4) |
 | [#22](https://github.com/minhhhduc/gnvipi/issues/22) | [inbound] Anthropic count_tokens for custom providers | `adapter`, `protocol`, `inbound` | [#12](https://github.com/minhhhduc/gnvipi/issues/12), [#16](https://github.com/minhhhduc/gnvipi/issues/16) |
 
-### Phase 4: Outbound Provider Adapters (Milestone 4)
+### Phase 4: Outbound Provider Adapters (Milestone 4 — Completed)
 Outbound builders and parsers for OpenAI Chat, Anthropic Messages, OpenAI Responses, and custom endpoints.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -195,7 +200,7 @@ Outbound builders and parsers for OpenAI Chat, Anthropic Messages, OpenAI Respon
 | [#28](https://github.com/minhhhduc/gnvipi/issues/28) | [outbound] OpenAI Responses upstream adapter: streaming event parser | `adapter`, `provider`, `streaming`, `outbound` | [#1](https://github.com/minhhhduc/gnvipi/issues/1), [#2](https://github.com/minhhhduc/gnvipi/issues/2), [#4](https://github.com/minhhhduc/gnvipi/issues/4) |
 | [#29](https://github.com/minhhhduc/gnvipi/issues/29) | [outbound] Custom provider adapter extension point and endpoint path overrides | `adapter`, `provider`, `architecture`, `outbound` | [#4](https://github.com/minhhhduc/gnvipi/issues/4), [#5](https://github.com/minhhhduc/gnvipi/issues/5) |
 
-### Phase 5: Translation Pipeline and Streaming (Milestone 5)
+### Phase 5: Translation Pipeline and Streaming (Milestone 5 — Completed)
 Core execution pipeline for cross-protocol non-streaming and streaming translation.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -205,7 +210,7 @@ Core execution pipeline for cross-protocol non-streaming and streaming translati
 | [#33](https://github.com/minhhhduc/gnvipi/issues/33) | [streaming] Enable and verify cross-protocol streaming matrix with real adapters | `streaming`, `protocol`, `testing` | [#17](https://github.com/minhhhduc/gnvipi/issues/17), [#19](https://github.com/minhhhduc/gnvipi/issues/19), [#21](https://github.com/minhhhduc/gnvipi/issues/21), [#24](https://github.com/minhhhduc/gnvipi/issues/24), [#26](https://github.com/minhhhduc/gnvipi/issues/26), [#28](https://github.com/minhhhduc/gnvipi/issues/28), [#31](https://github.com/minhhhduc/gnvipi/issues/31), [#32](https://github.com/minhhhduc/gnvipi/issues/32) |
 | [#34](https://github.com/minhhhduc/gnvipi/issues/34) | [protocol] Unsupported feature handling: capability checks, strict/lenient modes and dropped-parameter reporting | `protocol`, `core` | [#30](https://github.com/minhhhduc/gnvipi/issues/30) |
 
-### Phase 6: Provider Configuration and Routing (Milestone 6)
+### Phase 6: Provider Configuration and Routing (Milestone 6 — Completed)
 V2 provider storage, secrets redaction, SSRF prevention, admin JSON API, web UI, alias resolution, virtual models, and fallback routing.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -219,7 +224,7 @@ V2 provider storage, secrets redaction, SSRF prevention, admin JSON API, web UI,
 | [#42](https://github.com/minhhhduc/gnvipi/issues/42) | [routing] Per-alias provider fallback policy (pre-stream only) | `routing`, `reliability` | [#30](https://github.com/minhhhduc/gnvipi/issues/30), [#40](https://github.com/minhhhduc/gnvipi/issues/40) |
 | [#43](https://github.com/minhhhduc/gnvipi/issues/43) | [routing] Build /v1/models catalog from the provider registry with protocol and capability metadata | `routing`, `provider` | [#40](https://github.com/minhhhduc/gnvipi/issues/40) |
 
-### Phase 7: Tool Calling and Feature Compatibility (Milestone 7)
+### Phase 7: Tool Calling and Feature Compatibility (Milestone 7 — Completed)
 Advanced feature parity: tool calling, reasoning, multimodal images, and structured outputs across protocols.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -230,7 +235,7 @@ Advanced feature parity: tool calling, reasoning, multimodal images, and structu
 | [#48](https://github.com/minhhhduc/gnvipi/issues/48) | [protocol] Multimodal image input mapping and limits across protocols | `protocol`, `adapter` | [#32](https://github.com/minhhhduc/gnvipi/issues/32) |
 | [#49](https://github.com/minhhhduc/gnvipi/issues/49) | [protocol] Structured output (JSON mode / JSON schema) mapping | `protocol`, `adapter` | [#34](https://github.com/minhhhduc/gnvipi/issues/34) |
 
-### Phase 8: Security and Reliability (Milestone 8)
+### Phase 8: Security and Reliability (Milestone 8 — Completed)
 Inbound API key authentication, admin route protection, secret redaction, safe retries, concurrency limits, and atomic persistence.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -241,7 +246,7 @@ Inbound API key authentication, admin route protection, secret redaction, safe r
 | [#54](https://github.com/minhhhduc/gnvipi/issues/54) | [reliability] Per-provider concurrency limits and request isolation tests | `reliability`, `core` | [#14](https://github.com/minhhhduc/gnvipi/issues/14) |
 | [#55](https://github.com/minhhhduc/gnvipi/issues/55) | [security] Quote generated CLIProxyAPI YAML and write config files atomically | `security`, `reliability` | None (Foundation) |
 
-### Phase 9: Integration Testing and Compatibility (Milestone 9)
+### Phase 9: Integration Testing and Compatibility (Milestone 9 — Completed)
 Full cross-protocol matrix test suite (18 combinations), tool conformance suite, client fixtures (Claude Code, OpenAI SDKs, Codex), and security limits.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -250,7 +255,7 @@ Full cross-protocol matrix test suite (18 combinations), tool conformance suite,
 | [#58](https://github.com/minhhhduc/gnvipi/issues/58) | [testing] Client compatibility fixtures for Claude Code, OpenAI SDK and Responses clients | `testing` | [#56](https://github.com/minhhhduc/gnvipi/issues/56) |
 | [#59](https://github.com/minhhhduc/gnvipi/issues/59) | [testing] Security and resource-limit test suite | `testing`, `security` | [#8](https://github.com/minhhhduc/gnvipi/issues/8), [#9](https://github.com/minhhhduc/gnvipi/issues/9), [#37](https://github.com/minhhhduc/gnvipi/issues/37), [#50](https://github.com/minhhhduc/gnvipi/issues/50), [#51](https://github.com/minhhhduc/gnvipi/issues/51), [#52](https://github.com/minhhhduc/gnvipi/issues/52) |
 
-### Phase 10: Documentation and Release Readiness (Milestone 10)
+### Phase 10: Documentation and Release Readiness (Milestone 10 — Completed)
 Activating v2 as default, legacy code deprecation, comprehensive operator documentation, adapter developer guide, and release notes.
 | Issue | Title | Labels | Dependencies |
 |---|---|---|---|
@@ -522,7 +527,7 @@ The backlog is partitioned into **10 execution waves** to maximize concurrent de
 
 To prevent merge conflicts during concurrent development across multiple agents:
 1. **Isolated Packages:** All new adapter code is isolated under `internal/gateway/inbound/<proto>` and `internal/gateway/outbound/<proto>`. No two adapters share a source directory.
-2. **Explicit Adapter Registration:** Avoid Go package `init()` side-effects. Adapters are wired explicitly in a single registration file (`internal/gateway/dispatch/register.go`).
+2. **Explicit Adapter Registration:** Avoid Go package `init()` side-effects. Adapters are wired explicitly in `cmd/serve/gateway_dispatch.go` (`gatewayV2Middleware`).
 3. **Hotspot Isolation (`cmd/serve/main.go`):** The primary server entry point will be modified only at specific milestones:
    - Wave 1: Inbound Auth & CSRF middlewares ([#50](https://github.com/minhhhduc/gnvipi/issues/50), [#51](https://github.com/minhhhduc/gnvipi/issues/51)).
    - Wave 2: Body limit wrapper ([#9](https://github.com/minhhhduc/gnvipi/issues/9)).
