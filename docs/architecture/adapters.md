@@ -391,6 +391,9 @@ The following minimal example demonstrates a custom protocol adapter implementin
 
 This code is verified by unit tests in [`internal/gateway/adapter/example_test.go`](file:///internal/gateway/adapter/example_test.go).
 
+> [!NOTE]
+> `provider.ParseProtocol` (`internal/gateway/provider/extensions.go`) requires custom outbound protocols configured on a `Provider` to use the `"custom:<name>"` prefix (e.g. `"custom:example"`, matching `[a-z0-9][a-z0-9._-]*`). Plain names without the `"custom:"` prefix are rejected by `Provider.Validate()` with an `unknown protocol` error.
+
 ### Inbound Adapter Implementation
 
 ```go
@@ -408,7 +411,7 @@ import (
     "github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
-const ProtocolCustom ir.Protocol = "custom-protocol"
+const ProtocolCustom ir.Protocol = "custom:example"
 
 type CustomInbound struct{}
 
@@ -618,12 +621,14 @@ func (CustomOutbound) ParseResponse(resp *http.Response) (out *ir.Response, err 
 }
 
 type customStream struct {
-    reader *sse.Reader
-    body   io.Closer
+    reader    *sse.Reader
+    body      io.Closer
+    pending   []ir.StreamEvent
+    blockOpen bool
 }
 
 func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
-    for {
+    for len(s.pending) == 0 {
         event, err := s.reader.Next(ctx)
         if err != nil {
             return ir.StreamEvent{}, err
@@ -638,7 +643,7 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
             if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
                 return ir.StreamEvent{}, err
             }
-            return ir.NewMessageStart(p.ID, ir.RoleAssistant, p.Model, ir.Usage{}), nil
+            s.pending = append(s.pending, ir.NewMessageStart(p.ID, ir.RoleAssistant, p.Model, ir.Usage{}))
         case "token":
             var p struct {
                 Text string `json:"text"`
@@ -646,9 +651,17 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
             if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
                 return ir.StreamEvent{}, err
             }
-            return ir.NewTextDelta(0, p.Text), nil
+            if !s.blockOpen {
+                s.pending = append(s.pending, ir.NewBlockStart(0, ir.NewTextBlock("")))
+                s.blockOpen = true
+            }
+            s.pending = append(s.pending, ir.NewTextDelta(0, p.Text))
         case "stop":
-            return ir.NewMessageStop(ir.StopEndTurn), nil
+            if s.blockOpen {
+                s.pending = append(s.pending, ir.NewBlockStop(0))
+                s.blockOpen = false
+            }
+            s.pending = append(s.pending, ir.NewMessageStop(ir.StopEndTurn))
         case "error":
             var p struct {
                 Kind    string `json:"kind"`
@@ -657,12 +670,19 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
             if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
                 return ir.StreamEvent{}, err
             }
-            return ir.NewErrorEvent(p.Kind, p.Message), nil
+            s.pending = append(s.pending, ir.NewErrorEvent(p.Kind, p.Message))
         }
     }
+
+    ev := s.pending[0]
+    s.pending = s.pending[1:]
+    return ev, nil
 }
 
 func (s *customStream) Close() error {
+    if s.reader != nil {
+        s.reader.Close()
+    }
     if s.body != nil {
         return s.body.Close()
     }
@@ -703,6 +723,42 @@ func TestCustomAdapter(t *testing.T) {
         t.Fatalf("BuildRequest: %v", err)
     }
     _ = httpReq
+}
+
+func TestCustomStream(t *testing.T) {
+    const ssePayload = "event: start\ndata: {\"id\":\"msg-1\",\"model\":\"custom-v1\"}\n\n" +
+        "event: token\ndata: {\"text\":\"hello \"}\n\n" +
+        "event: token\ndata: {\"text\":\"world\"}\n\n" +
+        "event: stop\ndata: {}\n\n"
+
+    out := CustomOutbound{}
+    resp := &http.Response{
+        StatusCode: http.StatusOK,
+        Body:       io.NopCloser(strings.NewReader(ssePayload)),
+        Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+    }
+
+    stream, err := out.ParseStream(context.Background(), resp)
+    if err != nil {
+        t.Fatalf("ParseStream: %v", err)
+    }
+    defer stream.Close()
+
+    var events []ir.StreamEvent
+    for {
+        ev, err := stream.Next(context.Background())
+        if err != nil {
+            if errors.Is(err, io.EOF) {
+                break
+            }
+            t.Fatalf("Next: %v", err)
+        }
+        events = append(events, ev)
+    }
+
+    if err := ir.ValidateEventOrder(events); err != nil {
+        t.Fatalf("ValidateEventOrder: %v", err)
+    }
 }
 ```
 

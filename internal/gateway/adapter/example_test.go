@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
-const protocolCustom ir.Protocol = "custom-protocol"
+const protocolCustom ir.Protocol = "custom:example"
 
 // CustomInbound implements adapter.Inbound for a simple custom protocol.
 type CustomInbound struct{}
@@ -225,12 +226,14 @@ func (CustomOutbound) ParseResponse(resp *http.Response) (out *ir.Response, err 
 }
 
 type customStream struct {
-	reader *sse.Reader
-	body   io.Closer
+	reader    *sse.Reader
+	body      io.Closer
+	pending   []ir.StreamEvent
+	blockOpen bool
 }
 
 func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
-	for {
+	for len(s.pending) == 0 {
 		event, err := s.reader.Next(ctx)
 		if err != nil {
 			return ir.StreamEvent{}, err
@@ -245,7 +248,7 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
 			if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
 				return ir.StreamEvent{}, err
 			}
-			return ir.NewMessageStart(p.ID, ir.RoleAssistant, p.Model, ir.Usage{}), nil
+			s.pending = append(s.pending, ir.NewMessageStart(p.ID, ir.RoleAssistant, p.Model, ir.Usage{}))
 		case "token":
 			var p struct {
 				Text string `json:"text"`
@@ -253,9 +256,17 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
 			if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
 				return ir.StreamEvent{}, err
 			}
-			return ir.NewTextDelta(0, p.Text), nil
+			if !s.blockOpen {
+				s.pending = append(s.pending, ir.NewBlockStart(0, ir.NewTextBlock("")))
+				s.blockOpen = true
+			}
+			s.pending = append(s.pending, ir.NewTextDelta(0, p.Text))
 		case "stop":
-			return ir.NewMessageStop(ir.StopEndTurn), nil
+			if s.blockOpen {
+				s.pending = append(s.pending, ir.NewBlockStop(0))
+				s.blockOpen = false
+			}
+			s.pending = append(s.pending, ir.NewMessageStop(ir.StopEndTurn))
 		case "error":
 			var p struct {
 				Kind    string `json:"kind"`
@@ -264,12 +275,19 @@ func (s *customStream) Next(ctx context.Context) (ir.StreamEvent, error) {
 			if err := json.Unmarshal([]byte(event.Data), &p); err != nil {
 				return ir.StreamEvent{}, err
 			}
-			return ir.NewErrorEvent(p.Kind, p.Message), nil
+			s.pending = append(s.pending, ir.NewErrorEvent(p.Kind, p.Message))
 		}
 	}
+
+	ev := s.pending[0]
+	s.pending = s.pending[1:]
+	return ev, nil
 }
 
 func (s *customStream) Close() error {
+	if s.reader != nil {
+		s.reader.Close()
+	}
 	if s.body != nil {
 		return s.body.Close()
 	}
@@ -383,6 +401,68 @@ func (s *memoryStream) Close() error {
 func TestExampleStreamSequencing(t *testing.T) {
 	t.Parallel()
 
+	// 1. Verify outbound ParseStream decodes SSE chunks and satisfies event ordering
+	const ssePayload = "event: start\ndata: {\"id\":\"msg-1\",\"model\":\"custom-test\"}\n\n" +
+		"event: token\ndata: {\"text\":\"chunk 1\"}\n\n" +
+		"event: token\ndata: {\"text\":\"chunk 2\"}\n\n" +
+		"event: stop\ndata: {}\n\n"
+
+	out := CustomOutbound{}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(ssePayload)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	parsedStream, err := out.ParseStream(context.Background(), resp)
+	if err != nil {
+		t.Fatalf("ParseStream failed: %v", err)
+	}
+	defer func() {
+		if closeErr := parsedStream.Close(); closeErr != nil {
+			t.Errorf("parsedStream.Close failed: %v", closeErr)
+		}
+	}()
+
+	var parsedEvents []ir.StreamEvent
+	for {
+		ev, err := parsedStream.Next(context.Background())
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("parsedStream.Next failed: %v", err)
+		}
+		parsedEvents = append(parsedEvents, ev)
+	}
+
+	if err := ir.ValidateEventOrder(parsedEvents); err != nil {
+		t.Fatalf("ValidateEventOrder rejected parsed stream: %v", err)
+	}
+
+	if len(parsedEvents) != 6 {
+		t.Fatalf("got %d events, want 6", len(parsedEvents))
+	}
+	if parsedEvents[0].Type != ir.EventMessageStart || parsedEvents[0].Message.ID != "msg-1" {
+		t.Errorf("unexpected event 0: %+v", parsedEvents[0])
+	}
+	if parsedEvents[1].Type != ir.EventBlockStart || parsedEvents[1].Index != 0 {
+		t.Errorf("unexpected event 1: %+v", parsedEvents[1])
+	}
+	if parsedEvents[2].Type != ir.EventBlockDelta || parsedEvents[2].Delta.Text != "chunk 1" {
+		t.Errorf("unexpected event 2: %+v", parsedEvents[2])
+	}
+	if parsedEvents[3].Type != ir.EventBlockDelta || parsedEvents[3].Delta.Text != "chunk 2" {
+		t.Errorf("unexpected event 3: %+v", parsedEvents[3])
+	}
+	if parsedEvents[4].Type != ir.EventBlockStop || parsedEvents[4].Index != 0 {
+		t.Errorf("unexpected event 4: %+v", parsedEvents[4])
+	}
+	if parsedEvents[5].Type != ir.EventMessageStop || parsedEvents[5].StopReason != ir.StopEndTurn {
+		t.Errorf("unexpected event 5: %+v", parsedEvents[5])
+	}
+
+	// 2. Inbound EncodeStream verification
 	events := []ir.StreamEvent{
 		ir.NewMessageStart("msg-1", ir.RoleAssistant, "custom-test", ir.Usage{}),
 		ir.NewBlockStart(0, ir.NewTextBlock("")),
@@ -433,6 +513,6 @@ func Example() {
 	fmt.Printf("Inbound: %s\n", inAdapter.Protocol())
 	fmt.Printf("Outbound: %s (streaming=%v)\n", outAdapter.Protocol(), outAdapter.Capabilities().Streaming)
 	// Output:
-	// Inbound: custom-protocol
-	// Outbound: custom-protocol (streaming=true)
+	// Inbound: custom:example
+	// Outbound: custom:example (streaming=true)
 }
