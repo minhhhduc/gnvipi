@@ -1,7 +1,7 @@
 # TTFT / concurrency experiment notes (2026-07-21)
 
 Measured with warmed captcha pool → local `serve` → NVIDIA predict SSE.
-Tooling: `scripts/ttft_sweep.sh`, `cmd/streambench`.
+Tooling: `cmd/streambench` (the one-off `scripts/ttft_sweep.sh` was removed in #157).
 
 ## Sequential (pool ready ≥ 1)
 
@@ -36,4 +36,4 @@ Prioritize first-token latency **and** concurrent fairness:
 - `-max-inflight=4`
 - `-warm-timeout=3m` (block accepting until ≥1 token)
 
-Re-run: `RUNS=2 bash scripts/ttft_sweep.sh`
+Re-run with `go run ./cmd/streambench` against a local `serve`.
