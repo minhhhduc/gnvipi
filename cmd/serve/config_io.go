@@ -42,6 +42,8 @@ func uniqueURLs(urls []string) []string {
 // (~/.claude/cache/gateway-models.json) so /model reflects admin mask changes
 // without waiting for Claude Code to re-fetch /v1/models. Best-effort: a
 // missing cache dir or Claude Code version with a different format is ignored.
+// addr may be a bare port suffix (":8080") or a listen address
+// ("127.0.0.1:8080"); clients always reach the gateway on localhost.
 func writeClaudeModelCache(addr string, catalog []gatewayModel) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -65,7 +67,7 @@ func writeClaudeModelCache(addr string, catalog []gatewayModel) {
 		})
 	}
 	payload, err := json.Marshal(gin.H{
-		"baseUrl":   "http://localhost" + addr,
+		"baseUrl":   "http://localhost" + portOnly(addr),
 		"fetchedAt": time.Now().UnixMilli(),
 		"models":    modelsOut,
 	})

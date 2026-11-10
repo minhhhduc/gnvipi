@@ -11,6 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// defaultAddr must stay in sync with the -addr flag in run() (cmd/serve/main.go).
+// run() parses the global FlagSet and only executes under main(), so the default
+// is mirrored here rather than read from a live flag.
+const defaultAddr = "127.0.0.1:8080"
+
 func adminAccessTestEngine(addr, token string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -291,6 +296,37 @@ func TestAdminAccessSessionExpiration(t *testing.T) {
 		req.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: tc.payload + "." + adminSessionSignature(tc.payload, key)})
 		if got := adminValidSession(req, key); got != tc.want {
 			t.Fatalf("session %q valid = %v, want %v", tc.payload, got, tc.want)
+		}
+	}
+}
+
+// A brand-new checkout runs `go run ./cmd/serve` with no flags and opens the
+// admin console in a browser. That path must not land on the 403 for a
+// non-loopback bind, so the default address has to be loopback.
+func TestDefaultAddrKeepsAdminOpen(t *testing.T) {
+	if !adminLoopbackBind(defaultAddr) {
+		t.Fatalf("default -addr %q is not loopback; /admin would answer 403 out of the box", defaultAddr)
+	}
+	engine := adminAccessTestEngine(defaultAddr, "")
+	response := adminAccessRequest(t, engine, http.MethodGet, "http://localhost"+portOnly(defaultAddr)+"/admin", nil, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("default config blocked /admin: %d %s", response.Code, response.Body.String())
+	}
+}
+
+// The status line and Claude Code's model cache shorten the listen address to
+// ":port"; widening a loopback default to 127.0.0.1 must not break either.
+func TestPortOnly(t *testing.T) {
+	for _, tc := range []struct{ addr, want string }{
+		{"127.0.0.1:8080", ":8080"},
+		{":8080", ":8080"},
+		{" [::1]:8080 ", ":8080"},
+		{"localhost:8080", ":8080"},
+		{"0.0.0.0:9090", ":9090"},
+		{"", ""},
+	} {
+		if got := portOnly(tc.addr); got != tc.want {
+			t.Fatalf("portOnly(%q) = %q, want %q", tc.addr, got, tc.want)
 		}
 	}
 }

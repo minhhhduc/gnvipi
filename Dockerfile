@@ -33,4 +33,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
 	CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
 
 ENTRYPOINT ["serve"]
+# The default loopback bind is invisible outside the container, so the image
+# listens on all interfaces and relies on port publishing (docker run -p
+# 127.0.0.1:8080:8080) for exposure control.
 CMD ["-addr", ":8080"]

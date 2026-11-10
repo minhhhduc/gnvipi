@@ -3,7 +3,8 @@
   Start the NVIDIA playground gateway for Claude Code.
 
 .EXAMPLE
-  .\scripts\run.ps1                                   # :8080, captcha pool on
+  .\scripts\run.ps1                                   # 127.0.0.1:8080, captcha pool on
+  $env:GNVIPI_ADMIN_TOKEN='...'; .\scripts\run.ps1 -Lan  # :8080 on all interfaces; env token enables /admin
   .\scripts\run.ps1 -Port 8099                        # another port (adjust ANTHROPIC_BASE_URL accordingly)
   .\scripts\run.ps1 -Haiku z-ai/glm-5.2               # haiku tier uses NVIDIA, others use Claude account
   .\scripts\run.ps1 -Build                            # build .\bin\serve.exe and run
@@ -22,6 +23,7 @@ param(
   [int]$PoolSize = 6,
   [int]$PoolWorkers = 3,
   [switch]$Build,
+  [switch]$Lan,
   [switch]$NoCaptcha,
   [switch]$Claude,
   [switch]$Harness,
@@ -57,7 +59,11 @@ if ($Sonnet) { $env:MODEL_SONNET = $Sonnet } else { Remove-Item Env:MODEL_SONNET
 if ($Haiku)  { $env:MODEL_HAIKU = $Haiku }   else { Remove-Item Env:MODEL_HAIKU  -ErrorAction SilentlyContinue }
 if ($Fable)  { $env:MODEL_FABLE = $Fable }   else { Remove-Item Env:MODEL_FABLE  -ErrorAction SilentlyContinue }
 if ($Proxy)  { $env:CHROME_PROXY = $Proxy }
-$serveArgs = @('-addr', ":$Port", '-pool-size', "$PoolSize", '-pool-workers', "$PoolWorkers")
+# Bind loopback like the serve default so the admin console stays usable;
+# pass -Lan to expose the gateway on every interface (requires -admin-token
+# before /admin opens up).
+$bindHost = if ($Lan) { "" } else { "127.0.0.1" }
+$serveArgs = @('-addr', "${bindHost}:$Port", '-pool-size', "$PoolSize", '-pool-workers', "$PoolWorkers")
 if (-not $NoCaptcha) { $serveArgs = @('-auto') + $serveArgs }
 if ($Harness) {
   $serveArgs += '-captcha-harness=true'

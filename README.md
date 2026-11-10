@@ -8,7 +8,7 @@ A unified local gateway for AI coding agents (**Claude Code**, **OpenAI SDKs**, 
 
 The gateway combines a high-performance **Adapter-Hub** translation engine and zero-copy passthrough relay with an automated headless Chrome captcha pool for NVIDIA Playground models (DeepSeek-V4, Kimi, GLM, Nemotron, GPT-OSS, and more), protected by dial-time SSRF defenses, inbound authentication, and a built-in Admin Console v2.
 
-**Client API-key authentication is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`, `/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth behavior remains. Admin access is open only on loopback listeners; non-loopback listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. The default `-addr :8080`, Windows helper, and Docker Compose expose all interfaces. Use a loopback bind (`-addr 127.0.0.1:8080`) or restrict access with a firewall or authenticated reverse proxy. Placeholder client credentials do not secure the gateway.
+**Client API-key authentication is optional**: set `-gateway-key` or `GNVIPI_GATEWAY_KEY` to protect `/v1/*`, `/mcp`, and SDK inference aliases. Without a configured key, legacy no-auth behavior remains. The gateway binds `-addr 127.0.0.1:8080` by default, and admin access is open only on loopback listeners; non-loopback listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`. Port publishing (`-addr :8080`, `docker run -p 8080:8080`, or `docker compose` with edited ports) exposes the gateway on all interfaces, so pair it with `-gateway-key`, `-admin-token`, and a firewall or authenticated reverse proxy. Placeholder client credentials do not secure the gateway.
 
 Configured provider/gateway/admin credentials and common authentication forms are redacted from diagnostics, error responses, and new statistics records. Rotated credentials remain protected for in-flight requests. Successful model output is unchanged; diagnostic bodies/SSE frames are buffered with a 1 MiB limit before disclosure.
 
@@ -229,9 +229,9 @@ See [docs/providers.md](docs/providers.md) for the complete schema specification
 
 > [!WARNING]
 > **Network Exposure & Inbound Authentication:**  
-> The default `-addr` is `:8080`, exposing the server on **all network interfaces**. By default, `-gateway-key` is not configured, meaning `/v1/*` and `/mcp` inference routes are **unauthenticated** unless `-gateway-key` or `GNVIPI_GATEWAY_KEY` is set. Placeholder credentials (such as `local-gateway`) do not secure the gateway when authentication is disabled.  
+> The default `-addr` is `127.0.0.1:8080`, so the gateway listens on **loopback only** and is unreachable from other machines. By default, `-gateway-key` is not configured, meaning `/v1/*` and `/mcp` inference routes accept **unauthenticated** requests from anything that can reach the port. Placeholder credentials (such as `local-gateway`) do not secure the gateway when authentication is disabled.  
 > 
-> **Recommended setup:** Always use a loopback bind (`-addr 127.0.0.1:8080`) for local workloads, or protect the port with a firewall or authenticated reverse proxy and configure `-gateway-key`. The `/admin` console is restricted to loopback listeners by default; non-loopback listeners require `-admin-token` or `GNVIPI_ADMIN_TOKEN`.
+> **Opening it to the network:** binding to a wildcard address (`-addr :8080` or `-addr 0.0.0.0:8080`) exposes the gateway on **all network interfaces**. Two consequences: `/v1/*` and `/mcp` become reachable without a key until you set `-gateway-key`, and the `/admin` console answers **HTTP 403** until you set `-admin-token` or `GNVIPI_ADMIN_TOKEN`. Both are by design; the startup log states which mode the admin console is in. For any non-loopback deployment, set `-gateway-key` and `-admin-token`, and prefer a firewall or an authenticated reverse proxy over direct exposure.
 
 ### Inbound Authentication
 When `-gateway-key` or `GNVIPI_GATEWAY_KEY` is set, client requests must present a valid key via `Authorization: Bearer <key>` or `x-api-key: <key>`. Comma-separated keys permit zero-downtime key rotation. Client credentials are removed before provider calls; provider credentials remain separate. `/healthz` remains public. An explicit `-gateway-key` overrides the environment, including an empty value to disable it.
@@ -248,9 +248,9 @@ By default, the gateway strictly blocks all cloud metadata services (`169.254.16
 
 | Flag | Environment Variable | Default | Purpose |
 |---|---|---|---|
-| `-addr` | — | `:8080` | Listen host and port. Exposes all network interfaces by default; use `127.0.0.1:8080` for local-only binding. |
+| `-addr` | — | `127.0.0.1:8080` | Listen host and port. Loopback by default; use `:8080` to expose all network interfaces. |
 | `-gateway-key` | `GNVIPI_GATEWAY_KEY` | *(disabled)* | Optional comma-separated API keys protecting `/v1/*`, `/mcp`, and inference routes. |
-| `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Authentication token required for non-loopback `/admin` access. |
+| `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Admin authentication token. Required for `/admin` on non-loopback binds; the console stays open on loopback without it. |
 | `-gateway-v2` | — | `true` | Gateway core dispatcher routing all custom providers (default on; false is deprecated). |
 | `-models-file` | — | `internal/models/playground_models.json` | Path to saved provider configuration, masks, and model preferences. |
 | `-max-body-bytes` | — | `33554432` (32 MiB) | Maximum request body bytes for `/v1/*` routes (enforces `http.MaxBytesReader`). |
@@ -368,6 +368,8 @@ docker run --rm -p 127.0.0.1:8080:8080 --shm-size=2g \
 ```
 
 The named `gnvipi-data` volume remains when the container is removed. The image includes Chromium; Docker users do not need Chrome or Go on the host.
+
+The container always listens on `:8080` internally, because a loopback bind would be unreachable from outside it. Exposure is controlled by port publishing instead: `-p 127.0.0.1:8080:8080` (as above) keeps the gateway local to the host, `docker-compose.yml` ships the same loopback form, and `-p 8080:8080` publishes on every host interface. That last form is a non-loopback listener from the gateway's point of view, so pass `-admin-token` (`-e GNVIPI_ADMIN_TOKEN=...`) to keep `/admin` reachable.
 
 ---
 
