@@ -73,7 +73,7 @@ func run() (err error) {
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, benchmark playground candidates on Admin Start All to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
-	gatewayV2 := flag.Bool("gateway-v2", true, "route same-protocol custom providers through the gateway core (enabled by default; set -gateway-v2=false as a deprecated escape hatch)")
+	gatewayV2 := flag.Bool("gateway-v2", true, "route all custom provider requests (same-protocol relay and cross-protocol translation) through the gateway core dispatcher (enabled by default; set -gateway-v2=false as a deprecated escape hatch)")
 	autoModeChatResponses := flag.Bool("automode-chat-responses", false, "allow automode virtual model on /v1/chat/completions and /v1/responses (default false: Anthropic /v1/messages only)")
 	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
 	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
@@ -352,11 +352,11 @@ func run() (err error) {
 		WithCoreAuthManager(core).
 		WithServerOptions(
 			api.WithMiddleware(
+				gatewayMiddleware,
 				// Responses-only providers need a real Anthropic<->Responses adapter;
 				// keep it ahead of generic Messages sanitizing/fallback routing.
 				anthropicResponsesPassthrough(prefs),
 				sanitizeClaudeToolResults(),
-				gatewayMiddleware,
 				customOpenAIResponsesPassthrough(prefs),
 				customOpenAICompatPassthrough(prefs),
 				messagesOnlyPassthrough(prefs),
