@@ -26,6 +26,8 @@ secrets.json
 
 # python
 __pycache__/
+*.pyc
+*.pyo
 
 # Local tooling and smoke-test artifacts
 .pi/
