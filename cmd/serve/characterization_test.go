@@ -40,9 +40,9 @@ func mountChain(t *testing.T, p *modelPrefs, stub gin.HandlerFunc) *gin.Engine {
 		t.Fatal(err)
 	}
 	engine.Use(
+		gateway,
 		anthropicResponsesPassthrough(p),
 		sanitizeClaudeToolResults(),
-		gateway,
 		customOpenAIResponsesPassthrough(p),
 		customOpenAICompatPassthrough(p),
 		messagesOnlyPassthrough(p),

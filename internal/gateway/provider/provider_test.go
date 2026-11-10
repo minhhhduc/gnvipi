@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -303,5 +304,51 @@ func TestProxyParseErrorDoesNotExposeCredentials(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "user") {
 		t.Fatalf("proxy credentials entered schema diagnostic: %v", err)
+	}
+}
+
+func TestTimeoutsAndProviderUnmarshalDurationStrings(t *testing.T) {
+	raw := `{
+		"id": "test-provider",
+		"name": "Test",
+		"base_url": "https://api.test.com/v1",
+		"protocol": "openai-chat",
+		"enabled": true,
+		"auth": {"scheme": "none"},
+		"models": [{"alias": "m", "upstream_model": "m"}],
+		"max_concurrency": 10,
+		"queue_timeout": "2s",
+		"timeouts": {
+			"connect": "1s",
+			"tls": "500ms",
+			"response_header": "15s",
+			"idle": "30s",
+			"total": "120s"
+		}
+	}`
+	var p Provider
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if p.QueueTimeout != 2*time.Second {
+		t.Errorf("QueueTimeout = %v, want 2s", p.QueueTimeout)
+	}
+	if p.Timeouts.Connect != time.Second {
+		t.Errorf("Timeouts.Connect = %v, want 1s", p.Timeouts.Connect)
+	}
+	if p.Timeouts.TLS != 500*time.Millisecond {
+		t.Errorf("Timeouts.TLS = %v, want 500ms", p.Timeouts.TLS)
+	}
+	if p.Timeouts.ResponseHeader != 15*time.Second {
+		t.Errorf("Timeouts.ResponseHeader = %v, want 15s", p.Timeouts.ResponseHeader)
+	}
+	if p.Timeouts.Idle != 30*time.Second {
+		t.Errorf("Timeouts.Idle = %v, want 30s", p.Timeouts.Idle)
+	}
+	if p.Timeouts.Total != 120*time.Second {
+		t.Errorf("Timeouts.Total = %v, want 120s", p.Timeouts.Total)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate failed: %v", err)
 	}
 }

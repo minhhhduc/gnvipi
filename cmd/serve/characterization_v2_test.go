@@ -17,7 +17,7 @@ import (
 var characterizationProxyURL string
 
 func characterizationV2Enabled() bool {
-	return os.Getenv("GNVIPI_TEST_GATEWAY_V2") == "1"
+	return os.Getenv("GNVIPI_TEST_GATEWAY_V2") != "0"
 }
 
 // DNS stays at the network boundary: the relay still validates and pins every
@@ -134,9 +134,34 @@ func characterizationProxy(t *testing.T, log *upstreamLog, body string) string {
 }
 
 // Run the same characterization functions in both flag modes. The standalone
-// tests cover flag-off; these nested cases cover the real flag-on dispatcher.
+// tests cover the default flag-on dispatcher; these nested cases cover explicit
+// flag-on as well as the deprecated legacy escape hatch (flag-off).
 func TestGatewayV2Characterization(t *testing.T) {
 	t.Setenv("GNVIPI_TEST_GATEWAY_V2", "1")
+	for _, tc := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"chat", TestChatRoutePassthrough},
+		{"responses", TestResponsesRoutePassthrough},
+		{"messages", TestMessagesRouteMessagesOnlyPassthrough},
+		{"legacy-cross-protocol", TestMessagesRouteResponsesAdapter},
+		{"hidden-models", TestHiddenModelsRejected},
+		{"nvidia-fallthrough", TestUnknownModelsFallThrough},
+		{"hidden-responses", TestResponsesHiddenModelRouting},
+		{"client-identity", TestAgentRouterClientSpoofed},
+		{"automode", TestAutomodeRewritten},
+		{"cycle-retry", TestCycleRetriesAndCommits},
+		{"cycle-committed", TestCycleDoesNotRetryCommittedResponse},
+		{"cycle-count-tokens", TestCycleCountTokensTriesFirstModelOnly},
+		{"tool-results", TestToolResultsSanitized},
+	} {
+		t.Run(tc.name, tc.run)
+	}
+}
+
+func TestLegacyEscapeHatchCharacterization(t *testing.T) {
+	t.Setenv("GNVIPI_TEST_GATEWAY_V2", "0")
 	for _, tc := range []struct {
 		name string
 		run  func(*testing.T)

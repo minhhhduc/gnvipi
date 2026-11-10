@@ -5,9 +5,11 @@ generated analysis tree beside it.
 
 | Document | What it covers |
 |---|---|
+| [providers.md](providers.md) | Universal LLM provider configuration guide, v2 schema reference, and migration instructions (#61). |
 | [architecture/universal-llm-gateway-roadmap.md](architecture/universal-llm-gateway-roadmap.md) | The universal gateway backlog: milestones, dependency graph and execution waves (#65). |
 | [architecture/overview.md](architecture/overview.md) | How the current gateway is put together and where new code belongs. |
 | [architecture/adapters.md](architecture/adapters.md) | Universal gateway adapter developer guide: IR, interfaces, streaming invariants and testing (#63). |
+| [clients.md](clients.md) | Client setup guide (Claude Code, OpenAI SDKs, Codex, OpenCode, cURL) and cross-protocol compatibility matrix (#62). |
 | [development/conventions.md](development/conventions.md) | Build, lint and commit conventions this repository enforces. |
 | [development/testing.md](development/testing.md) | How to run the tests, how CI runs them, and how to write new ones. |
 

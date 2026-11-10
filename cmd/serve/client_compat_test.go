@@ -37,9 +37,9 @@ func setupCompatEngine(t *testing.T, prefs *modelPrefs) *gin.Engine {
 	engine.Use(
 		gatewayRequestContext(),
 		modelsAndHealthMiddleware(getModels, nil),
+		gateway,
 		anthropicResponsesPassthrough(prefs),
 		sanitizeClaudeToolResults(),
-		gateway,
 		customOpenAIResponsesPassthrough(prefs),
 		customOpenAICompatPassthrough(prefs),
 		messagesOnlyPassthrough(prefs),

@@ -27,7 +27,7 @@ func TestAdminDeleteRestorePreservesIndependentMasks(t *testing.T) {
 			const id = "restore/model"
 			p := &modelPrefs{
 				path:      filepath.Join(t.TempDir(), "models.json"),
-				providers: []customProvider{{Name: "restore", BaseURL: "https://upstream.invalid/v1", Model: "upstream-model", Alias: id}},
+				providers: []customProvider{{Name: "restore", BaseURL: "http://upstream.invalid/v1", Model: "upstream-model", Alias: id}},
 			}
 			if tc.hiddenBefore {
 				if err := p.setHidden([]string{id}); err != nil {
