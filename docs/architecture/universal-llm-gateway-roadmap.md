@@ -1,7 +1,8 @@
 # Universal LLM API Gateway — Architecture & Implementation Roadmap
 
-> **Tracking Issue:** [#65](https://github.com/minhhhduc/gnvipi/issues/65)  
+> **Tracking Issue:** [#65](https://github.com/minhhhduc/gnvipi/issues/65) (closed; acts as the historical index)  
 > **Status:** Completed / Universal LLM Gateway v2.0 Released  
+> **Progress:** 64 of 64 issues (#1–#64) closed as completed; every phase below is delivered.  
 > **Repository:** [minhhhduc/gnvipi](https://github.com/minhhhduc/gnvipi)  
 > **Target Release:** Universal LLM Gateway v2.0 (Released & Active by Default)  
 
