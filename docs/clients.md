@@ -370,10 +370,14 @@ The following matrix documents feature support across all **9 Inbound × Upstrea
 
 4. **Reasoning & Thinking Tokens:**
    - **Anthropic ↔ OpenAI Chat/Responses:**
-     - Budget tokens `< 4096` map to effort `low`.
-     - Budget tokens `4096`–`16000` map to effort `medium`.
-     - Budget tokens `> 16000` map to effort `high`.
-     - Conversely: effort `low` maps to 2048 budget tokens, `medium` to 8192, `high` to 16384.
+     - Budget to effort (`BudgetToEffort`):
+       - Budget tokens `<= 2048` map to effort `low`.
+       - Budget tokens `2049`–`8192` map to effort `medium`.
+       - Budget tokens `> 8192` map to effort `high`.
+     - Default effort to budget (`DefaultEffortToBudget`):
+       - Effort `low` maps to 1024 tokens.
+       - Effort `medium` maps to 4096 tokens.
+       - Effort `high` maps to 16384 tokens.
    - Streamed reasoning deltas map losslessly to Anthropic `thinking_delta` or OpenAI `reasoning_content` deltas.
 
 5. **Structured Output (`response_format`):**
@@ -429,7 +433,7 @@ In `models.json` (or via the Admin UI), you can configure capability overrides a
   "id": "my-restricted-provider",
   "name": "Restricted Backend",
   "base_url": "https://api.example.com/v1",
-  "protocol": "openai/chat",
+  "protocol": "openai-chat",
   "extensions": {
     "feature_policy": "strict",
     "capabilities": {
