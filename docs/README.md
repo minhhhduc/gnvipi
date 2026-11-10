@@ -5,6 +5,7 @@ generated analysis tree beside it.
 
 | Document | What it covers |
 |---|---|
+| [providers.md](providers.md) | Universal LLM provider configuration guide, v2 schema reference, and migration instructions (#61). |
 | [architecture/universal-llm-gateway-roadmap.md](architecture/universal-llm-gateway-roadmap.md) | The universal gateway backlog: milestones, dependency graph and execution waves (#65). |
 | [architecture/overview.md](architecture/overview.md) | How the current gateway is put together and where new code belongs. |
 | [development/conventions.md](development/conventions.md) | Build, lint and commit conventions this repository enforces. |
