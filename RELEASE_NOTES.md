@@ -2,7 +2,7 @@
 
 We are thrilled to announce the official release of **Universal LLM API Gateway v2.0**.
 
-This release marks the evolution of `gnvipi` from a specialized NVIDIA Playground reverse-proxy into a comprehensive, high-performance **Universal LLM API Gateway**. The gateway acts as a local adapter hub that allows AI coding agents (Claude Code, OpenAI SDKs, Codex, OpenCode, Aider) to communicate seamlessly with any upstream provider (OpenAI-compatible, Anthropic-compatible, OpenAI Responses, NVIDIA Playground, or custom endpoints) regardless of protocol differences.
+This release marks the evolution of `gnvipi` from a specialized NVIDIA Playground reverse-proxy into a comprehensive, high-performance **Universal LLM API Gateway**. The gateway acts as a local adapter hub that allows AI coding agents (Claude Code, OpenAI SDKs, Codex, OpenCode, cURL) to communicate seamlessly with any upstream provider (OpenAI-compatible, Anthropic-compatible, OpenAI Responses, NVIDIA Playground, or custom endpoints) regardless of protocol differences.
 
 ---
 
@@ -73,7 +73,7 @@ The streaming engine (`internal/gateway/sse` & `internal/gateway/core`) normaliz
 ## 3. Resilient Routing & V2 Provider Management
 
 ### Provider Schema v2
-Providers are organized into physical upstream targets under `data/providers.json` (or configured via `-models-file`):
+Providers are organized into physical upstream targets under the configured models file (`-models-file`, default: `internal/models/playground_models.json`):
 - **Multiple Models per Provider:** Physical endpoints are decoupled from model identifiers.
 - **Wildcard Prefix Routing:** Wildcard mappings such as `openrouter/*` forward any model request under that prefix directly to OpenRouter, automatically stripping or preserving the prefix as configured.
 - **Failover & Fallback Chains:** Providers can declare fallback provider IDs. If the primary upstream returns a transient error (e.g., 429, 502, 503, 504) before streaming commits, the gateway automatically retries on the fallback provider.
@@ -108,7 +108,8 @@ The v2 gateway release has been validated by an exhaustive automated test suite:
   - OpenAI Python SDK (`openai>=1.0.0`)
   - OpenAI TypeScript/Node.js SDK
   - OpenAI Responses / Codex CLI
-  - OpenCode and Aider
+  - OpenCode
+  - cURL / HTTP clients
 - **Security & Limits Suite:** Verifies SSRF dial blocking, body size limit enforcement (HTTP 413), authentication failure responses (HTTP 401), and secret redaction.
 
 ---

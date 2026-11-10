@@ -6,12 +6,12 @@ This document provides a comprehensive overview of the **Universal LLM API Gatew
 
 ## 1. System Topology & Positioning
 
-The gateway serves as a unified local reverse proxy and protocol translator for developer tools and AI coding agents (such as **Claude Code**, **OpenAI Python/Node SDKs**, **Codex**, **OpenCode**, and **Aider**). It simultaneously exposes the three major LLM client protocols and routes requests either to upstream custom API providers or to the automated headless-browser NVIDIA Playground pool:
+The gateway serves as a unified local reverse proxy and protocol translator for developer tools and AI coding agents (such as **Claude Code**, **OpenAI Python/Node SDKs**, **Codex**, **OpenCode**, and **cURL**). It simultaneously exposes the three major LLM client protocols and routes requests either to upstream custom API providers or to the automated headless-browser NVIDIA Playground pool:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Client Applications                             │
-│   (Claude Code, OpenAI Python/Node SDK, Codex, OpenCode, Aider, cURL)  │
+│   (Claude Code, OpenAI Python/Node SDK, Codex, OpenCode, cURL)         │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ Inbound HTTP (JSON or SSE)
                                      ▼
@@ -161,7 +161,7 @@ The following table lists every key package across the repository and its specif
 Adapters convert strictly to and from the normalized `internal/gateway/ir` types. **Inbound and outbound adapters never import or depend on each other.** Adding a new protocol requires only one inbound decoder and one outbound compiler; all existing protocols immediately gain bidirectional interoperability with the new protocol.
 
 ### 2. Explicit Registration Without Magic
-All adapters are registered explicitly during server startup in `internal/gateway/dispatch/register.go`. Go package `init()` side-effects are strictly forbidden, ensuring deterministic boot order, painless unit testing, and easy tree shaking.
+All adapters are registered explicitly during server startup in `cmd/serve/gateway_dispatch.go` (`gatewayV2Middleware`), consistent with the adapter architecture specification. Go package `init()` side-effects are strictly forbidden, ensuring deterministic boot order, painless unit testing, and easy tree shaking.
 
 ### 3. Same-Protocol Streaming Relay
 Whenever an incoming request matches the upstream wire protocol, the gateway bypasses IR conversion and uses a direct streaming relay (`internal/gateway/relay`). This provides bare-metal reverse-proxy performance with sub-millisecond TTFT (time-to-first-token).

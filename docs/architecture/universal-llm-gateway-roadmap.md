@@ -55,7 +55,7 @@ The evolved Universal LLM Gateway establishes a strict **Adapter-Hub** architect
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Client Applications                             │
-│   (Claude Code, OpenAI Python/JS SDK, Codex, OpenCode, Aider, etc.)    │
+│   (Claude Code, OpenAI Python/JS SDK, Codex, OpenCode, cURL, etc.)     │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      │ HTTP Request (SSE or JSON)
                                      ▼
@@ -527,7 +527,7 @@ The backlog is partitioned into **10 execution waves** to maximize concurrent de
 
 To prevent merge conflicts during concurrent development across multiple agents:
 1. **Isolated Packages:** All new adapter code is isolated under `internal/gateway/inbound/<proto>` and `internal/gateway/outbound/<proto>`. No two adapters share a source directory.
-2. **Explicit Adapter Registration:** Avoid Go package `init()` side-effects. Adapters are wired explicitly in a single registration file (`internal/gateway/dispatch/register.go`).
+2. **Explicit Adapter Registration:** Avoid Go package `init()` side-effects. Adapters are wired explicitly in `cmd/serve/gateway_dispatch.go` (`gatewayV2Middleware`).
 3. **Hotspot Isolation (`cmd/serve/main.go`):** The primary server entry point will be modified only at specific milestones:
    - Wave 1: Inbound Auth & CSRF middlewares ([#50](https://github.com/minhhhduc/gnvipi/issues/50), [#51](https://github.com/minhhhduc/gnvipi/issues/51)).
    - Wave 2: Body limit wrapper ([#9](https://github.com/minhhhduc/gnvipi/issues/9)).
