@@ -11,6 +11,7 @@ to check when a request fails. Configuration of upstreams lives in
 | `-addr` | — | `127.0.0.1:8080` | Listen host and port. Loopback by default; use `:8080` to expose all network interfaces. |
 | `-gateway-key` | `GNVIPI_GATEWAY_KEY` | *(disabled)* | Optional comma-separated API keys protecting `/v1/*`, `/mcp`, and inference routes. |
 | `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Admin authentication token. Required for `/admin` on non-loopback binds; the console stays open on loopback without it. |
+| `-disable-admin-ui` | — | `false` | Remove the admin UI and admin API entirely (headless proxy mode); `/v1/*` and `/mcp` are unaffected. |
 | `-gateway-v2` | — | `true` | Gateway core dispatcher routing all custom providers (default on; false is deprecated). |
 | `-models-file` | — | `internal/models/playground_models.json` | Path to saved provider configuration, masks, and model preferences. |
 | `-max-body-bytes` | — | `33554432` (32 MiB) | Maximum request body bytes for `/v1/*` routes (enforces `http.MaxBytesReader`). |
