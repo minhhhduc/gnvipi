@@ -1,45 +1,121 @@
 # Admin Console
 
-The Admin Console is the server-rendered UI at `/admin`. It has no framework, no
-build step, and no external requests: every byte of CSS and JS is a Go string
-constant served with the page, so the console works on a machine with no
-internet access (#166).
+The Admin Console is a headless JSON API plus a standalone vanilla SPA (#170,
+#171). The server renders nothing: `/admin/api/*` returns JSON and `/admin`
+serves three files from `embed.FS` (`web/admin/index.html`, `app.css`,
+`app.js`). No framework, no build step, no external requests — the SPA works on
+a machine with no internet access.
 
-## Pages and routing
+## Layout
 
-`adminHTML(page, catalog)` (`cmd/serve/admin_pages.go`) switches on `?page=`:
+| Path | Role |
+|---|---|
+| `web/admin/index.html` | Shell: rail nav, header slot, `<main id="view">`, toast. Loads `/admin/app.css` and `/admin/app.js` as a module. |
+| `web/admin/app.css` | The full stylesheet (design system below). |
+| `web/admin/app.js` | SPA: API helper, `esc()`, route on `?page=`, one view per console page. |
+| `web/admin/embed.go` | `//go:embed index.html app.css app.js` → `adminui.FS`. |
+| `cmd/serve/admin_ui.go` | `registerAdminUI` serves the embedded files with `http.ServeFileFS`, one asset per request, nothing held in the heap. |
+| `cmd/serve/admin_api.go` | `registerAdminAPIRoutes` registers the JSON endpoints. |
+| `cmd/serve/admin_access.go` | `adminAccess` middleware: loopback/authority, token, session cookie, CSRF, `no-store`. |
+| `cmd/serve/admin_handlers.go` etc. | The pre-existing handlers the API wraps. |
 
-| `?page=` | Page | Notes |
+`registerAdminUI` maps `/admin`, `/admin/`, `/admin/app.css` and
+`/admin/app.js` to the files. Unknown paths under `/admin` are 404s.
+
+## SPA routing
+
+The SPA reads `?page=` and renders into `#view`; links are plain anchors, so
+reload and back/forward both work.
+
+| `?page=` | View | API calls |
 |---|---|---|
-| `dashboard` (default) | Stats: traffic charts, request log | |
-| `models` | Upstream providers + model catalog | also the fallback for an unknown value |
-| `config` | Auto model, web search, model cycle | |
-| `chromes` | Captcha Chrome worker pool | |
+| `dashboard` (default) | Stats: KPI tiles, traffic charts, request log | `GET /admin/api/stats` |
+| `models` | Providers editor + model catalog, masks, delete/restore | `/admin/api/providers*`, `/admin/api/models*` |
+| `config` | Auto model, web search, model cycle | `/admin/api/config/*` |
+| `chromes` | Captcha Chrome worker pool | `/admin/api/chromes` |
 | `automode` | alias for `config` | |
+| anything else | falls back to `models` | |
 
-`adminHead(active)` (`cmd/serve/admin_shell.go`) emits the doctype, meta, the
-whole stylesheet, the fixed left `<nav class=rail>` (brand mark, section links,
-active section filled), and the page `<header>` with its title and sub-line.
-The models filter bar (`modelsBarHTML`) lives inside the header so it stays
-pinned to the top while the catalog scrolls. Under 900px the rail collapses to
-a static top strip. `adminHTML` then appends `<main>`,
-the page's data as JS constants (`PAGE`, `STATS_READ_MS`, `FAILED`, `PROVIDERS`,
-`PROVIDERS_V2`, `DELETED`), and one `<script>` built by concatenating the
-per-page scripts in `cmd/serve/admin_script.go`:
+The old server-rendered pages and the legacy endpoints (`/admin/models`,
+`/admin/providers`, `/admin/stats`, `/admin/cycle`, `/admin/automode`,
+`/admin/search`, `/admin/chromes`, `/admin/delete`) still exist for
+compatibility; the SPA does not use them.
 
-```go
-const adminScript = adminBaseScript + adminProviderScript + adminCycleScript + adminStatsScript + adminChromeScript
+## JSON API
+
+All routes live under `/admin/api` behind `adminAccess`. Request bodies are
+capped by `-max-admin-body-bytes`. Errors are `{"error":"..."}` with 4xx/5xx.
+
+### Providers
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/admin/api/providers` | → bare array of providers (secrets redacted) |
+| POST | `/admin/api/providers` | provider → 201, redacted provider |
+| GET | `/admin/api/providers/:id` | → redacted provider, 404 if unknown |
+| PUT | `/admin/api/providers/:id` | provider → redacted provider |
+| DELETE | `/admin/api/providers/:id` | → `{"ok":true,"deleted":"<id>"}` |
+| POST | `/admin/api/providers/test` | unsaved provider → result |
+| POST | `/admin/api/providers/:id/test` | → result |
+
+A test result is `{"ok":bool,"status":"...","status_code":N,"latency_ms":N,`
+`"message":"...","error":"..."}` (fields depend on outcome). Provider ids are
+single path segments; only model ids may contain `/`.
+
+Redaction: `auth.key` is never returned. A `GET`/`PUT` that omits the key
+preserves the stored one, so the SPA can round-trip a provider without
+re-entering the secret.
+
+### Stats
+
+`GET /admin/api/stats` → `{models, series, series_by_model, events,
+started_at, total_frames}`. `?frames=N` instead returns one frame:
+`{frame, total_frames, events}`. When no frame is ready the endpoint answers
+429 with `Retry-After`; the SPA waits and retries.
+
+### Models
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/admin/api/models` | → `{models:[{id,name,publisher,hidden,deleted,custom,base_url?}], off, deleted}` |
+| POST | `/admin/api/models` | `{"masks_id":[...]}` → `{off}` (`off` = models now masked) |
+| DELETE | `/admin/api/models/*id` | → `{"deleted":"<id>"}` |
+| POST | `/admin/api/models/*id` | `retry-failed` → `{ok}`; `<id>/restore` → `{"restored":"<id>"}` |
+
+Model ids are `publisher/model`, so the id is a **catch-all** (`*id`), not a
+path parameter — Gin does not decode `%2F`. The SPA encodes each segment and
+leaves the slashes literal:
+
+```js
+const modelPath = id => String(id).split('/').map(encodeURIComponent).join('/');
 ```
 
-Each script guards on `PAGE` before touching the DOM, so all five ship to every
-page and only the matching one runs. Adding a page means adding a `case` to the
-switch in `adminHTML`, a label and sub-line in `admin_shell.go`, and a script
-whose first line checks `PAGE`.
+### Config
 
-## Components
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/admin/api/config/automode` | → `{model, chat_responses}` |
+| POST | `/admin/api/config/automode` | `{"model":...,"chat_responses":bool}` → `{model}` |
+| GET | `/admin/api/config/cycle` | → `{name:"cycle", models, available, current}` |
+| POST | `/admin/api/config/cycle` | `{"models":[...]}` → `{name, models}` |
+| GET | `/admin/api/config/search` | → `{url}` |
+| POST | `/admin/api/config/search` | `{"url":...}` → `{url}` |
 
-The stylesheet defines a small vocabulary. Composition is by nesting, not by
-per-page classes.
+### Chromes
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/admin/api/chromes` | → `{enabled, state, chromes:[{index,pid,killed,busy,warmed,extracts,last_ok}], ready}` |
+| POST | `/admin/api/chromes` | `{"index":N,"mode":"start"\|"kill"\|"stop"\|"resume"\|"pause","all":bool}` → status |
+
+An unknown mode is 400, an unknown worker 404. When the lifecycle is
+unavailable (headless build), GET reports `enabled:false` and POST is 503. The
+SPA polls GET every 5s.
+
+## Design system
+
+The stylesheet defines a small vocabulary; composition is by nesting, not by
+per-page classes. It is unchanged from #166.
 
 | Class | Role |
 |---|---|
@@ -47,7 +123,7 @@ per-page classes.
 | `.sheet-head` / `.sheet-title` / `.sheet-body` / `.sheet-foot` | Panel header (title, count, actions), padding wrapper, and the action bar pinned to the bottom. A `<details class=sheet>` uses its `<summary class=sheet-head>` as the toggle. |
 | `.grp` + `.cnt` | Publisher divider inside the model catalog, with its row count. |
 | `.cols` | Auto-fit grid (`minmax(19rem, 1fr)`) for placing whole sheets side by side. |
-| `.split` / `.pane` | Named two-pane grid (list pane + work pane). Used by the models page; collapses to one column under 1100px. |
+| `.split` / `.pane` | Named two-pane grid (list pane + work pane), collapses to one column under 1100px. |
 | `.sec` | Vertical stack with no border, for content that is not a panel. |
 | `.row` / `.static` | One line of a list. `.static` rows are not click-to-toggle. |
 | `.chip` | Monospace identifier (`provider id`, `#0`). |
@@ -55,40 +131,35 @@ per-page classes.
 | `button.primary` | The single commit action of a sheet. |
 | `.tiles` / `.tile` | KPI row at the top of a panel. |
 
-The console is a light workspace: white sheets (`--panel`) on a cool paper plane
-(`--bg`), ink text (`--fg`), one blue for action (`--accent`) and three state
-colors (`--on`, `--bad`, `--warn`) dark enough to read on white. Every color,
-radius and shadow is a custom property on `:root`, and the active tab is the
-only filled control in the header, so "where am I" is always legible (#166).
-
-The chart scripts draw against `--panel` and their series colors are chosen for
-the white surface, so changing the palette means re-checking the charts, not
-just the CSS.
+The console is a light workspace: white sheets (`--panel`) on a cool paper
+plane (`--bg`), ink text (`--fg`), one blue for action (`--accent`) and three
+state colors (`--on`, `--bad`, `--warn`). Every color, radius and shadow is a
+custom property on `:root`. Under 900px the rail collapses to a top strip.
 
 ## Behaviour worth knowing
 
 - **Every toggle saves.** A model switch, the auto-model select, the search
   provider and the cycle checkboxes all POST on change; there is no Save button
-  for them. The console reloads only where the server response changes the
-  rendered list.
-- **The provider editor is collapsed.** `<details id=editor-panel>` opens
-  itself from `loadProviderForEdit` and the Add provider button, so the form
-  never occupies the page before you ask for it.
-- **Publisher dividers follow the filter.** `pruneGroups` in
-  `adminBaseScript` hides a `.grp` whose rows are all filtered out.
-- **Chromes poll.** The worker sheet re-reads `/admin/chromes` every 5s and
-  reflects pool state in the header badge.
+  for them. The SPA re-fetches only where the response changes the list.
+- **The provider editor is collapsed** and opens on Add/edit.
+- **Publisher dividers follow the filter**; a group with no visible rows is
+  hidden.
+- **Chromes poll** every 5s and reflect pool state in the header badge.
+- **No legacy fallback.** The SPA talks only to `/admin/api/*`.
 
-## Invariants
+## Security invariants
 
-These are load-bearing; the redesign did not change them.
-
-- Endpoints: `/admin/models`, `/admin/providers`, `/admin/stats`, `/admin/chromes`,
-  `/admin/cycle`, `/admin/automode`, `/admin/search`, `/admin/delete`,
-  `/admin/api/providers*`.
+- `adminAccess` guards the JSON API **and** the SPA assets identically: a
+  token-protected console returns 401 for `/admin/app.js` too.
+- Non-loopback binds require `-admin-token`. Loopback without a token is open,
+  as before.
+- Mutating requests must be same-origin (`Origin`/`Referer`/`Sec-Fetch-Site`);
+  a cross-origin POST is 403. Responses are `no-store`.
 - Nothing is loaded from a third-party origin — no CDN, no font service, no
-  analytics. `TestAdminPages_*` in `cmd/serve/admin_pages_test.go` pins the
-  markup contracts the scripts and handlers rely on, so a redesign that renames
-  an id fails the suite rather than the browser.
-- CSRF, same-origin checks, and the loopback-only cookie logic are unchanged;
-  see `cmd/serve/admin_access.go`.
+  analytics. `TestAdminPages_*` and the SPA tests pin this.
+- `-disable-admin-ui` removes the whole surface (assets, API, legacy routes,
+  `adminAccess`); `/v1/*` and `/mcp` keep working. See
+  [operations.md](../operations.md).
+- `cmd/serve/admin_contract_test.go` is the contract gate: method/path/status
+  and response keys for every endpoint, slash-id handling, 404 on unknown API
+  paths, token protection of API and assets, and same-origin enforcement.

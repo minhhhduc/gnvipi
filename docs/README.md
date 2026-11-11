@@ -10,7 +10,7 @@ generated analysis tree beside it.
 | [clients.md](clients.md) | Client setup guide (Claude Code, OpenAI SDKs, Codex, OpenCode, cURL) and cross-protocol compatibility matrix (#62). |
 | [architecture/overview.md](architecture/overview.md) | Universal LLM Gateway v2 architecture overview: Hub-and-Spoke pattern, normalized IR, component layout, and design principles (#64). |
 | [architecture/adapters.md](architecture/adapters.md) | Universal gateway adapter developer guide: IR, interfaces, streaming invariants, and testing (#63). |
-| [architecture/admin-console.md](architecture/admin-console.md) | Admin Console architecture: page routing, the self-contained CSS/JS component vocabulary, and the invariants a redesign must keep (#166). |
+| [architecture/admin-console.md](architecture/admin-console.md) | Admin Console architecture: the headless JSON API, the embedded `web/admin` SPA, its design vocabulary, and the contract/security invariants (#170–#173). |
 | [architecture/universal-llm-gateway-roadmap.md](architecture/universal-llm-gateway-roadmap.md) | The universal gateway master roadmap: 10 completed milestones, dependency graph, and execution waves (#65). |
 | [../RELEASE_NOTES.md](../RELEASE_NOTES.md) | Universal LLM Gateway v2.0 release notes, core feature highlights, deprecations, and upgrade instructions (#64). |
 | [development/conventions.md](development/conventions.md) | Build, lint, and commit conventions this repository enforces. |
