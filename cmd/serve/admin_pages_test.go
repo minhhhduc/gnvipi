@@ -230,7 +230,7 @@ func TestAdminModelsPage_CRUDAndTestConnectionHandlers(t *testing.T) {
 	engine.GET("/admin", func(c *gin.Context) {
 		handleAdminDashboard(c, nil)
 	})
-	registerAdminAPIRoutes(engine, p)
+	registerAdminAPIRoutes(engine, p, nil, nil)
 
 	// 1. Initial page render
 	w := httptest.NewRecorder()
