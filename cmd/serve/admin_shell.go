@@ -72,7 +72,7 @@ func adminHead(active string) string {
 :root{
   color-scheme:light;
   /* A light workspace: white panels on a cool paper plane, ink text, one blue
-     for action, and three state colours dark enough to read on white. Chart
+     for action, and three state colors dark enough to read on white. Chart
      series live in the stats script and are tuned to this same surface. */
   --bg:#f4f5f7;--bg-2:#eceff3;--panel:#ffffff;--panel-2:#f7f8fa;
   --line:#e2e6eb;--line-2:#cbd3dc;

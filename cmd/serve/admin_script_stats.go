@@ -2,9 +2,9 @@ package main
 
 const adminStatsScript = `
 // --- Model stats: KPI tiles + line charts (crosshair, tooltip).
-// Series colours are tuned for the light --panel surface: each is dark enough
+// Series colors are tuned for the light --panel surface: each is dark enough
 // to clear 3:1 against white, and the 8-slot order keeps adjacent lines apart
-// for the common colour-vision deficiencies. Grid, axis, crosshair and the
+// for the common color-vision deficiencies. Grid, axis, crosshair and the
 // end-dot ring come from the page tokens, so chrome never looks pasted on.
 if (PAGE === 'dashboard') {
   const charts = document.getElementById('charts');
