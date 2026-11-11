@@ -52,10 +52,32 @@ per-page classes.
 | `button.primary` | The single commit action of a sheet. |
 | `.tiles` / `.tile` | KPI row at the top of a panel. |
 
-Colour comes from custom properties on `:root` (`--bg`, `--panel`, `--line`,
-`--fg`, `--dim`, `--on`, `--bad`, `--warn`, `--accent`). The chart scripts draw
-against `--panel`, so changing the palette means re-checking the charts, not
-just the CSS.
+## Design tokens
+
+Every colour, size and space on the page is a custom property on `:root`, so the
+whole console retunes from one block (#166).
+
+| Group | Tokens |
+|---|---|
+| Surface | `--bg` (page plane), `--bg-2`, `--panel` (sheet), `--panel-2` (rows, wells), `--line`, `--line-2` (hairlines and their hover step) |
+| Ink | `--fg`, `--dim`, `--dim-2` |
+| State | `--on`, `--bad`, `--warn`, `--accent` (signal), `--on-accent` (ink on accent fills) |
+| Type | `--fs-2xs` … `--fs-2xl`, `--lh-tight/snug/base`, `--fw-normal/medium/semi/bold`, `--track-tight`, `--track-micro` |
+| Space & radius | `--sp-1` … `--sp-5`, `--r-sm`, `--r`, `--r-lg` |
+
+The identity is a warm graphite casing — `#12100d` page, `#1e1a15` sheets,
+`#f4ede3` ink — with one cool teal (`#2fc4c0`) doing all the signalling:
+the header rail, the active-tab underline, sheet title ticks, and focus rings.
+Type is the system stack; mono is reserved for identifiers and figures (`.chip`,
+`.pos`, table cells, axis ticks).
+
+Chart chrome is drawn from the page tokens — `.gridline`, `.crosshair` and the
+2px surface ring on end dots (`stroke:var(--panel)`) — so the charts read as part
+of the console, not a pasted-in library. The eight categorical series hues are a
+fixed, colourblind-checked order stored in `MCOLS`
+(`cmd/serve/admin_script_stats.go`): assign them by position, never cycle, and
+re-run the check before adding a ninth. The chart scripts draw against `--panel`,
+so changing the palette means re-checking the charts, not just the CSS.
 
 ## Behaviour worth knowing
 

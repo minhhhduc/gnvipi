@@ -75,11 +75,11 @@ if (PAGE === 'chromes') {
                   (c.killed ? 'start' : 'kill') + '">' +
                   (c.killed ? 'start' : 'kill') + '</button>' +
               '</div>').join('')
-          : '<div class="row static"><span class=id>No Chrome processes allocated. Start All launches the pool, and kill any worker to hand its RAM back.</span></div>') +
+          : '<div class="row static"><span class=id>No Chrome processes allocated. Start all launches the pool, and kill any worker to hand its RAM back.</span></div>') +
         '<div class=sheet-foot>' +
           '<button type=button class=primary data-mode-all=start' + (transitioning ? ' disabled' : '') + '>' +
-            (status.enabled ? 'Start All' : 'Turn On / Start All') + '</button>' +
-          '<button type=button data-mode-all=kill' + (status.state === 'stopping' || (!status.enabled && status.state !== 'starting') ? ' disabled' : '') + '>Kill All</button></div>';
+            (status.enabled ? 'Start all' : 'Turn on and start all') + '</button>' +
+          '<button type=button data-mode-all=kill' + (status.state === 'stopping' || (!status.enabled && status.state !== 'starting') ? ' disabled' : '') + '>Kill all</button></div>';
     } catch (err) {
       box.textContent = 'chromes error: ' + err;
     }
