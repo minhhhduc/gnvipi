@@ -75,6 +75,9 @@ func run() (err error) {
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, benchmark playground candidates on Admin Start All to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
+	// Headless deployments (containers, pure proxy nodes) can drop the whole
+	// admin surface so /admin and /admin/api are not routable at all.
+	disableAdminUI := flag.Bool("disable-admin-ui", false, "disable the admin UI and admin API entirely (headless proxy mode)")
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
 	gatewayV2 := flag.Bool("gateway-v2", true, "route all custom provider requests (same-protocol relay and cross-protocol translation) through the gateway core dispatcher (enabled by default; set -gateway-v2=false as a deprecated escape hatch)")
 	autoModeChatResponses := flag.Bool("automode-chat-responses", false, "allow automode virtual model on /v1/chat/completions and /v1/responses (default false: Anthropic /v1/messages only)")
@@ -345,7 +348,11 @@ func run() (err error) {
 			startNvidiaReconciler(ctx, core, exec, getNvidiaModels)
 			log.Printf("serve %s listening on http://localhost%s (models=%d auth=%d; chat/completions + responses + messages; coalesce=%s max-inflight=%d)",
 				version, portOnly(*addr), len(nvidiaModels), n, execCoalesce(*coalesceMs), *maxInflight)
-			logAdminSurface(*addr, *adminToken)
+			if *disableAdminUI {
+				log.Print("admin console: disabled by -disable-admin-ui")
+			} else {
+				logAdminSurface(*addr, *adminToken)
+			}
 			close(started)
 		},
 	}
@@ -376,28 +383,36 @@ func run() (err error) {
 				engine.Use(gatewayRequestContext())
 				// Guard the early catalog routes and cycle dispatch before WithMiddleware.
 				engine.Use(gatewayAuth(*gatewayKey))
-				// The SDK registers these routes before applying WithMiddleware.
-				engine.Use(adminAccess(*addr, *adminToken))
-				// Resolve automode before cycleRouter inspects the model field.
-				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
-				adminHandler := func(c *gin.Context) {
-					adminRoutes(c, nvidiaModels)
+				// One switch owns the whole admin surface: access middleware, SPA,
+				// legacy endpoints and JSON API. Headless mode registers none of them.
+				if !*disableAdminUI {
+					// The SDK registers these routes before applying WithMiddleware.
+					engine.Use(adminAccess(*addr, *adminToken))
 				}
-				engine.GET("/admin", adminHandler)
-				engine.GET("/admin/stats", adminHandler)
-				chromeHandler := func(c *gin.Context) { chromeRoutes(c, chromes) }
-				engine.GET("/admin/chromes", chromeHandler)
-				engine.POST("/admin/chromes", chromeHandler)
-				engine.POST("/admin/models", adminHandler)
-				engine.POST("/admin/automode", adminHandler)
-				engine.POST("/admin/cycle", adminHandler)
-				engine.POST("/admin/search", adminHandler)
+				// Resolve automode before cycleRouter inspects the model field.
+				// Install middleware before routes: Gin snapshots the chain per route.
+				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
+				if !*disableAdminUI {
+					adminHandler := func(c *gin.Context) {
+						adminRoutes(c, nvidiaModels)
+					}
+					// The SPA owns GET /admin; legacy endpoints stay for tools.
+					registerAdminUI(engine)
+					engine.GET("/admin/stats", adminHandler)
+					chromeHandler := func(c *gin.Context) { chromeRoutes(c, chromes) }
+					engine.GET("/admin/chromes", chromeHandler)
+					engine.POST("/admin/chromes", chromeHandler)
+					engine.POST("/admin/models", adminHandler)
+					engine.POST("/admin/automode", adminHandler)
+					engine.POST("/admin/cycle", adminHandler)
+					engine.POST("/admin/search", adminHandler)
+					engine.POST("/admin/providers", adminHandler)
+					engine.POST("/admin/delete", adminHandler)
+					engine.POST("/admin/retry-failed", adminHandler)
+					registerAdminAPIRoutes(engine, prefs, nvidiaModels, chromes)
+				}
 				engine.POST("/mcp", searchMCP)
 				engine.GET("/mcp", searchMCP)
-				engine.POST("/admin/providers", adminHandler)
-				engine.POST("/admin/delete", adminHandler)
-				engine.POST("/admin/retry-failed", adminHandler)
-				registerAdminAPIRoutes(engine, prefs, nvidiaModels, chromes)
 
 				// Dummy endpoint for Claude Code ping/connection check
 				engine.HEAD("/v1/api/hello", func(c *gin.Context) { c.Status(http.StatusOK) })
