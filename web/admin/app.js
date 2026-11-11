@@ -703,24 +703,13 @@ async function renderModels(gen) {
     }
   }
 
-  // IDs contain "/" (publisher/model), which cannot occupy one gin path
-  // segment. Try the JSON API first; fall back to the legacy body-based
-  // endpoint so every catalog row stays deletable.
-  async function modelAction(id, action) {
-    if (action === 'delete') {
-      try {
-        return await api('/admin/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
-      } catch (err) {
-        if (!id.includes('/')) throw err;
-        return api('/admin/delete', { method: 'POST', body: { id } });
-      }
-    }
-    try {
-      return await api('/admin/api/models/' + encodeURIComponent(id) + '/restore', { method: 'POST' });
-    } catch (err) {
-      if (!id.includes('/')) throw err;
-      return api('/admin/delete', { method: 'POST', body: { id, restore: true } });
-    }
+  // Model ids contain "/" (publisher/model). The API uses a catch-all for
+  // them, so encode each segment and keep the slashes literal.
+  const modelPath = id => String(id).split('/').map(encodeURIComponent).join('/');
+  function modelAction(id, action) {
+    const base = '/admin/api/models/' + modelPath(id);
+    return api(action === 'delete' ? base : base + '/restore',
+      { method: action === 'delete' ? 'DELETE' : 'POST' });
   }
 
   list.addEventListener('click', async e => {
