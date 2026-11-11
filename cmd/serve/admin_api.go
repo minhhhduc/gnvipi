@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
 type ConnectionTestResult struct {
@@ -168,7 +170,7 @@ func getProviderID(c *gin.Context) string {
 	return strings.TrimSpace(rest)
 }
 
-func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs) {
+func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*cliproxy.ModelInfo, chromes *chromeLifecycle) {
 	engine.GET("/admin/api/providers", func(c *gin.Context) { handleAdminAPIListProviders(c, p) })
 	engine.POST("/admin/api/providers", func(c *gin.Context) { handleAdminAPICreateProvider(c, p) })
 	engine.POST("/admin/api/providers/test", func(c *gin.Context) { handleAdminAPITestProviderDirect(c, p) })
@@ -176,6 +178,44 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs) {
 	engine.PUT("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIUpdateProvider(c, p) })
 	engine.DELETE("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIDeleteProvider(c, p) })
 	engine.POST("/admin/api/providers/:id/test", func(c *gin.Context) { handleAdminAPITestProvider(c, p) })
+
+	engine.GET("/admin/api/stats", handleAdminStats)
+
+	engine.GET("/admin/api/models", func(c *gin.Context) { handleAdminAPIListModels(c, p, catalog) })
+	engine.POST("/admin/api/models", func(c *gin.Context) { handleAdminAPISetModelMask(c, p) })
+	// Model ids contain a slash (publisher/model), so the id is a catch-all
+	// rather than a single path segment. The same handler serves
+	// /admin/api/models/retry-failed and /admin/api/models/<id>/restore.
+	engine.DELETE("/admin/api/models/*id", func(c *gin.Context) { handleAdminAPIDeleteModel(c, p) })
+	engine.POST("/admin/api/models/*id", func(c *gin.Context) { handleAdminAPIModelAction(c, p) })
+
+	engine.GET("/admin/api/config/automode", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"model":          p.autoModelID(),
+			"chat_responses": p.autoModelChatResponsesEnabled(),
+		})
+	})
+	engine.POST("/admin/api/config/automode", handleAdminAutomode)
+	engine.GET("/admin/api/config/cycle", func(c *gin.Context) { handleAdminAPIGetCycle(c, p, catalog) })
+	engine.POST("/admin/api/config/cycle", handleAdminCycle)
+	engine.GET("/admin/api/config/search", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"url": p.searchTemplate()})
+	})
+	engine.POST("/admin/api/config/search", handleAdminSearch)
+
+	chromeHandler := func(c *gin.Context) {
+		if chromes == nil {
+			if c.Request.Method == http.MethodGet {
+				c.JSON(http.StatusOK, gin.H{"enabled": false, "state": "idle", "chromes": []any{}, "ready": 0})
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "chrome lifecycle unavailable"})
+			return
+		}
+		chromeRoutes(c, chromes)
+	}
+	engine.GET("/admin/api/chromes", chromeHandler)
+	engine.POST("/admin/api/chromes", chromeHandler)
 }
 
 func handleAdminAPIDispatch(c *gin.Context, p *modelPrefs) {
@@ -891,4 +931,150 @@ func endpointURL(raw, endpoint string) (*url.URL, error) {
 	u.Path = prefix + endpoint
 	u.RawPath = ""
 	return u, nil
+}
+
+type adminAPIModel struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Publisher string `json:"publisher"`
+	Hidden    bool   `json:"hidden"`
+	Deleted   bool   `json:"deleted"`
+	Custom    bool   `json:"custom"`
+	BaseURL   string `json:"base_url,omitempty"`
+}
+
+func handleAdminAPIListModels(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo) {
+	items := make([]adminAPIModel, 0, len(catalog))
+	seen := make(map[string]bool, len(catalog))
+	for _, m := range catalog {
+		if m == nil || m.ID == "" || p.isDeleted(m.ID) {
+			continue
+		}
+		publisher, name, _ := strings.Cut(m.ID, "/")
+		items = append(items, adminAPIModel{
+			ID:        m.ID,
+			Name:      name,
+			Publisher: publisher,
+			Hidden:    p.isHidden(m.ID),
+		})
+		seen[m.ID] = true
+	}
+	for _, cp := range p.listProviders() {
+		id := cp.modelID()
+		if id == "" || seen[id] || p.isDeleted(id) {
+			continue
+		}
+		items = append(items, adminAPIModel{
+			ID:        id,
+			Name:      cp.alias(),
+			Publisher: cp.Name,
+			Hidden:    p.isHidden(id),
+			Custom:    true,
+			BaseURL:   cp.BaseURL,
+		})
+		seen[id] = true
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Publisher != items[j].Publisher {
+			return items[i].Publisher < items[j].Publisher
+		}
+		return items[i].Name < items[j].Name
+	})
+	p.mu.RLock()
+	off := len(p.hidden)
+	p.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{"models": items, "off": off, "deleted": p.listDeleted()})
+}
+
+func handleAdminAPISetModelMask(c *gin.Context, p *modelPrefs) {
+	var payload struct {
+		MasksID []string `json:"masks_id"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := p.setHidden(payload.MasksID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"off": len(payload.MasksID)})
+}
+
+func adminAPIModelID(c *gin.Context) string {
+	return strings.Trim(strings.TrimSpace(c.Param("id")), "/")
+}
+
+func handleAdminAPIDeleteModel(c *gin.Context, p *modelPrefs) {
+	id := adminAPIModelID(c)
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
+		return
+	}
+	if err := p.addDeleted(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": id})
+}
+
+func handleAdminAPIModelAction(c *gin.Context, p *modelPrefs) {
+	rest := adminAPIModelID(c)
+	if rest == "retry-failed" {
+		handleAdminRetryFailed(c)
+		return
+	}
+	id := strings.TrimSuffix(rest, "/restore")
+	if id == "" || id == rest {
+		c.JSON(http.StatusNotFound, gin.H{"error": "unknown admin API path"})
+		return
+	}
+	if err := p.removeDeleted(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"restored": id})
+}
+
+func handleAdminAPIGetCycle(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo) {
+	cfg, index := p.cycleSnapshot()
+	available := make(map[string]bool, len(catalog))
+	for _, m := range catalog {
+		if m != nil && m.ID != "" && !p.isHidden(m.ID) {
+			available[m.ID] = true
+		}
+	}
+	legacy := p.listProviders()
+	for _, cp := range legacy {
+		if id := cp.modelID(); id != "" && !p.isHidden(id) {
+			available[id] = true
+		}
+	}
+	ordered := make([]string, 0, len(available))
+	for _, id := range cfg.Models {
+		if available[id] {
+			ordered = append(ordered, id)
+			delete(available, id)
+		}
+	}
+	for _, m := range catalog {
+		if m != nil && available[m.ID] {
+			ordered = append(ordered, m.ID)
+			delete(available, m.ID)
+		}
+	}
+	for _, cp := range legacy {
+		if id := cp.modelID(); available[id] {
+			ordered = append(ordered, id)
+			delete(available, id)
+		}
+	}
+	if cfg.Models == nil {
+		cfg.Models = []string{}
+	}
+	current := ""
+	if len(cfg.Models) > 0 {
+		current = cfg.Models[index%len(cfg.Models)]
+	}
+	c.JSON(http.StatusOK, gin.H{"name": "cycle", "models": cfg.Models, "available": ordered, "current": current})
 }
