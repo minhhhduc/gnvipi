@@ -2,7 +2,7 @@ package main
 
 const adminStatsScript = `
 // --- Model stats: KPI tiles + line charts (crosshair, tooltip).
-// Palette validated: #3987e5/#d95926 on the #171a21 surface; status badges
+// Palette validated: #3987e5/#d95926 on the --card surface; status badges
 // use --on/--bad.
 if (PAGE === 'dashboard') {
   const charts = document.getElementById('charts');
@@ -46,7 +46,7 @@ if (PAGE === 'dashboard') {
     const pts = v.map((t, i) => x(i).toFixed(1) + ',' + y(t).toFixed(1)).join(' ');
     return '<svg width=' + W + ' height=' + H + ' viewBox="0 0 ' + W + ' ' + H + '" style="display:block">' +
       '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
-      '<circle cx="' + x(v.length - 1).toFixed(1) + '" cy="' + y(v[v.length - 1]).toFixed(1) + '" r="4" fill="' + color + '" stroke="#171a21" stroke-width="2"/>' +
+      '<circle cx="' + x(v.length - 1).toFixed(1) + '" cy="' + y(v[v.length - 1]).toFixed(1) + '" r="4" fill="' + color + '" stroke="#14171e" stroke-width="2"/>' +
       '</svg>';
   }
 
@@ -65,7 +65,7 @@ if (PAGE === 'dashboard') {
     let grid = '';
     for (let t = 0; t <= 4; t++) {
       const v = yMax * t / 4, yy = y(v).toFixed(1);
-      grid += '<line x1=' + PADL + ' x2=' + (W - PADR) + ' y1=' + yy + ' y2=' + yy + ' stroke="#242833" stroke-width="1"/>' +
+      grid += '<line x1=' + PADL + ' x2=' + (W - PADR) + ' y1=' + yy + ' y2=' + yy + ' stroke="#232833" stroke-width="1"/>' +
         '<text x=' + (PADL - 6) + ' y=' + (yy * 1 + 4) + ' text-anchor="end" class=ax>' + fmtN(Math.round(v)) + '</text>';
     }
     let paths = '', legend = '';
@@ -75,7 +75,7 @@ if (PAGE === 'dashboard') {
       paths += '<path d="M' + x(0).toFixed(1) + ',' + y(vals[0] || 0).toFixed(1) +
         ' L' + pts.replace(/ /g, ' L') + '" fill="none" stroke="' + d.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
       // end-dot with a 2px surface ring
-      paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#171a21" stroke-width="2"/>';
+      paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#14171e" stroke-width="2"/>';
       legend += '<span class=lg><svg width=14 height=8><line x1=0 y1=4 x2=14 y2=4 stroke=' + d.color + ' stroke-width=2 stroke-linecap=round/></svg>' + d.label + '</span>';
     });
     chartDefs.push(defs); chartData.push(data);
@@ -83,7 +83,7 @@ if (PAGE === 'dashboard') {
       '<div class=chwrap data-chart>' +
       '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:150px;display:block">' +
       grid + paths +
-      '<line class=crosshair y1=' + PADT + ' y2=' + (H - PADB) + ' x1=-99 x2=-99 stroke="#8b93a7" stroke-width="1"/>' +
+      '<line class=crosshair y1=' + PADT + ' y2=' + (H - PADB) + ' x1=-99 x2=-99 stroke="#8b93a6" stroke-width="1"/>' +
       '</svg><div class=tip hidden></div></div></div>';
   }
 
@@ -107,9 +107,9 @@ if (PAGE === 'dashboard') {
       [fmtN(tot('requests')), 'total requests', reqS, C.req],
       [fmtN(last.requests || 0), 'req / min', reqS, C.req],
       [fmtN(tot('input_tokens')), 'in tokens', series.map(p => p.input_tokens || 0), C.in],
-      [fmtN(tot('output_tokens')), 'tokens ra', series.map(p => p.output_tokens || 0), C.out],
-      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'error', series.map(p => p.errors || 0), '#e66767'],
-      [ttfbAvg ? fmtMS(ttfbAvg) : '—', 'TTFB tb (stream)', null, null],
+      [fmtN(tot('output_tokens')), 'out tokens', series.map(p => p.output_tokens || 0), C.out],
+      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'errors', series.map(p => p.errors || 0), '#e66767'],
+      [ttfbAvg ? fmtMS(ttfbAvg) : '—', 'avg TTFB (stream)', null, null],
       [mss.length ? fmtMS(p95) : '—', 'p95 latency', null, null],
       [fmtUp(startedAt ? Date.now() - startedAt : 0), 'uptime', null, null],
     ];
@@ -117,16 +117,16 @@ if (PAGE === 'dashboard') {
       '<div class=tiles>' + tiles.map(t =>
         '<div class=tile><div class=lbl>' + t[1] + '</div><div class=big>' + t[0] + '</div>' +
         (t[2] ? spark(t[2], t[3]) : '') + '</div>').join('') + '</div>' +
-      '<div class=note>all metrics since server start' +
-        (startedAt ? ' (' + new Date(startedAt).toLocaleString() + ')' : '') +
-        ' — every API the gateway serves: both NVIDIA playground models and custom providers via passthrough (tokenharbor, justworker…) all count.</div>' +
+      '<div class=note>Covers every API the gateway serves — NVIDIA playground models and ' +
+        'passthrough providers alike. Counting since ' +
+        (startedAt ? new Date(startedAt).toLocaleString() : 'server start') + '.</div>' +
       '<div class=chartrow>' +
       lineChart([{key:'requests', label:'requests / min', color:C.req}]) +
       lineChart([{key:'input_tokens', label:'in tok / min', color:C.in}, {key:'output_tokens', label:'out tok / min', color:C.out}]) +
       lineChart([{key:'ttfb_avg_ms', label:'avg TTFB / min', color:C.req, fmt:fmtMS}]) +
       '</div>' +
-      '<div class=note>TTFB = time to first byte of the stream; minutes with no streamed requests show 0.</div>' +
-      '<div class=note><b>per-model charts — requests / min</b></div>' +
+      '<div class=note>TTFB = time to first byte of the stream. Minutes with no streamed requests show 0.</div>' +
+      '<div class=note><b>Per-model requests / min (top 8)</b></div>' +
       (Object.keys(modelSeries).length
         ? (() => {
             const top = Object.entries(modelSeries)

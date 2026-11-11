@@ -47,9 +47,9 @@ if (PAGE === 'chromes') {
             '<div class="row static" data-id="chrome' + c.index + '">' +
               '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
               (c.busy && !c.killed ? '<span class="badge warn">busy</span>' : '') +
-              (c.killed ? '<span class="badge" style="color:var(--bad);border-color:var(--bad)">killed</span>'
+              (c.killed ? '<span class="badge sq">killed</span>'
                         : '<span class="badge ok">running</span>') +
-              (c.warmed && !c.killed ? '<span class="badge ok">warm</span>' : '') +
+              (c.warmed && !c.killed ? '<span class="badge mute">warm</span>' : '') +
               '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
                 c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
               '<button type=button data-index="' + c.index + '" data-mode="' +
