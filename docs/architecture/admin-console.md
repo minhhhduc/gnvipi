@@ -52,9 +52,14 @@ per-page classes.
 | `button.primary` | The single commit action of a sheet. |
 | `.tiles` / `.tile` | KPI row at the top of a panel. |
 
-Colour comes from custom properties on `:root` (`--bg`, `--panel`, `--line`,
-`--fg`, `--dim`, `--on`, `--bad`, `--warn`, `--accent`). The chart scripts draw
-against `--panel`, so changing the palette means re-checking the charts, not
+The console is a light workspace: white sheets (`--panel`) on a cool paper plane
+(`--bg`), ink text (`--fg`), one blue for action (`--accent`) and three state
+colours (`--on`, `--bad`, `--warn`) dark enough to read on white. Every colour,
+radius and shadow is a custom property on `:root`, and the active tab is the
+only filled control in the header, so "where am I" is always legible (#166).
+
+The chart scripts draw against `--panel` and their series colours are chosen for
+the white surface, so changing the palette means re-checking the charts, not
 just the CSS.
 
 ## Behaviour worth knowing
