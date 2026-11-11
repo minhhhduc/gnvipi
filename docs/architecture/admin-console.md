@@ -18,9 +18,11 @@ internet access (#166).
 | `automode` | alias for `config` | |
 
 `adminHead(active)` (`cmd/serve/admin_shell.go`) emits the doctype, meta, the
-whole stylesheet, and the `<header>`: brand, tab bar, and the page's sub-line.
+whole stylesheet, the fixed left `<nav class=rail>` (brand mark, section links,
+active section filled), and the page `<header>` with its title and sub-line.
 The models filter bar (`modelsBarHTML`) lives inside the header so it stays
-pinned to the top while the catalog scrolls. `adminHTML` then appends `<main>`,
+pinned to the top while the catalog scrolls. Under 900px the rail collapses to
+a static top strip. `adminHTML` then appends `<main>`,
 the page's data as JS constants (`PAGE`, `STATS_READ_MS`, `FAILED`, `PROVIDERS`,
 `PROVIDERS_V2`, `DELETED`), and one `<script>` built by concatenating the
 per-page scripts in `cmd/serve/admin_script.go`:
@@ -45,6 +47,7 @@ per-page classes.
 | `.sheet-head` / `.sheet-title` / `.sheet-body` / `.sheet-foot` | Panel header (title, count, actions), padding wrapper, and the action bar pinned to the bottom. A `<details class=sheet>` uses its `<summary class=sheet-head>` as the toggle. |
 | `.grp` + `.cnt` | Publisher divider inside the model catalog, with its row count. |
 | `.cols` | Auto-fit grid (`minmax(19rem, 1fr)`) for placing whole sheets side by side. |
+| `.split` / `.pane` | Named two-pane grid (list pane + work pane). Used by the models page; collapses to one column under 1100px. |
 | `.sec` | Vertical stack with no border, for content that is not a panel. |
 | `.row` / `.static` | One line of a list. `.static` rows are not click-to-toggle. |
 | `.chip` | Monospace identifier (`provider id`, `#0`). |
@@ -52,9 +55,14 @@ per-page classes.
 | `button.primary` | The single commit action of a sheet. |
 | `.tiles` / `.tile` | KPI row at the top of a panel. |
 
-Colour comes from custom properties on `:root` (`--bg`, `--panel`, `--line`,
-`--fg`, `--dim`, `--on`, `--bad`, `--warn`, `--accent`). The chart scripts draw
-against `--panel`, so changing the palette means re-checking the charts, not
+The console is a light workspace: white sheets (`--panel`) on a cool paper plane
+(`--bg`), ink text (`--fg`), one blue for action (`--accent`) and three state
+colors (`--on`, `--bad`, `--warn`) dark enough to read on white. Every color,
+radius and shadow is a custom property on `:root`, and the active tab is the
+only filled control in the header, so "where am I" is always legible (#166).
+
+The chart scripts draw against `--panel` and their series colors are chosen for
+the white surface, so changing the palette means re-checking the charts, not
 just the CSS.
 
 ## Behaviour worth knowing

@@ -2,8 +2,10 @@ package main
 
 const adminStatsScript = `
 // --- Model stats: KPI tiles + line charts (crosshair, tooltip).
-// Palette validated: #3987e5/#d95926 on the --card surface; status badges
-// use --on/--bad.
+// Series colors are tuned for the light --panel surface: each is dark enough
+// to clear 3:1 against white, and the 8-slot order keeps adjacent lines apart
+// for the common color-vision deficiencies. Grid, axis, crosshair and the
+// end-dot ring come from the page tokens, so chrome never looks pasted on.
 if (PAGE === 'dashboard') {
   const charts = document.getElementById('charts');
   const fmtTime = t => { const d = new Date(t); return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—'; };
@@ -13,7 +15,7 @@ if (PAGE === 'dashboard') {
     return (h ? h + 'g ' : '') + (h || m ? m + 'p ' : '') + (h ? '' : (s % 60) + 's'); };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   // Provider badge colors: only from the validated palette / existing CSS tokens.
-  const PCOLS = ['#3987e5', '#d95926', 'var(--on)', 'var(--warn)', 'var(--dim)'];
+  const PCOLS = ['#1f5fd0', '#c2410c', 'var(--on)', 'var(--warn)', 'var(--dim)'];
   function provCell(m) {
     m = m || '';
     const i = m.indexOf('/');
@@ -23,8 +25,8 @@ if (PAGE === 'dashboard') {
     const c = PCOLS[h % PCOLS.length];
     return '<span class=pb style="color:' + c + ';border-color:' + c + '">' + esc(p) + '</span>' + esc(m.slice(i + 1));
   }
-  const C = {req:'#3987e5', in:'#3987e5', out:'#d95926'}; // slot1 blue / slot2 orange
-  const MCOLS = ['#3987e5', '#d95926', '#2da44e', '#bf4b52', '#8250df', '#1b7c83', '#e3b341', '#218bff']; // per-model chart lines
+  const C = {req:'#1f5fd0', in:'#0e7490', out:'#c2410c'}; // requests blue / in teal / out orange
+  const MCOLS = ['#1f5fd0', '#c2410c', '#12734a', '#9a6700', '#86198f', '#0e7490', '#6d28d9', '#b42318']; // per-model chart lines
   const LCOLS = [
     ['time', 'time', 'when the gateway got the request'],
     ['model', 'model', 'called model'],
@@ -46,7 +48,7 @@ if (PAGE === 'dashboard') {
     const pts = v.map((t, i) => x(i).toFixed(1) + ',' + y(t).toFixed(1)).join(' ');
     return '<svg width=' + W + ' height=' + H + ' viewBox="0 0 ' + W + ' ' + H + '" style="display:block">' +
       '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
-      '<circle cx="' + x(v.length - 1).toFixed(1) + '" cy="' + y(v[v.length - 1]).toFixed(1) + '" r="4" fill="' + color + '" stroke="#14171e" stroke-width="2"/>' +
+      '<circle cx="' + x(v.length - 1).toFixed(1) + '" cy="' + y(v[v.length - 1]).toFixed(1) + '" r="4" fill="' + color + '" style="stroke:var(--panel)" stroke-width="2"/>' +
       '</svg>';
   }
 
@@ -65,7 +67,7 @@ if (PAGE === 'dashboard') {
     let grid = '';
     for (let t = 0; t <= 4; t++) {
       const v = yMax * t / 4, yy = y(v).toFixed(1);
-      grid += '<line x1=' + PADL + ' x2=' + (W - PADR) + ' y1=' + yy + ' y2=' + yy + ' stroke="#232833" stroke-width="1"/>' +
+      grid += '<line x1=' + PADL + ' x2=' + (W - PADR) + ' y1=' + yy + ' y2=' + yy + ' stroke="#e6e9ee" stroke-width="1"/>' +
         '<text x=' + (PADL - 6) + ' y=' + (yy * 1 + 4) + ' text-anchor="end" class=ax>' + fmtN(Math.round(v)) + '</text>';
     }
     let paths = '', legend = '';
@@ -75,7 +77,7 @@ if (PAGE === 'dashboard') {
       paths += '<path d="M' + x(0).toFixed(1) + ',' + y(vals[0] || 0).toFixed(1) +
         ' L' + pts.replace(/ /g, ' L') + '" fill="none" stroke="' + d.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
       // end-dot with a 2px surface ring
-      paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' stroke="#14171e" stroke-width="2"/>';
+      paths += '<circle cx=' + x(vals.length - 1).toFixed(1) + ' cy=' + y(vals[vals.length - 1] || 0).toFixed(1) + ' r=4 fill=' + d.color + ' style="stroke:var(--panel)" stroke-width="2"/>';
       legend += '<span class=lg><svg width=14 height=8><line x1=0 y1=4 x2=14 y2=4 stroke=' + d.color + ' stroke-width=2 stroke-linecap=round/></svg>' + d.label + '</span>';
     });
     chartDefs.push(defs); chartData.push(data);
@@ -83,7 +85,7 @@ if (PAGE === 'dashboard') {
       '<div class=chwrap data-chart>' +
       '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="width:100%;height:150px;display:block">' +
       grid + paths +
-      '<line class=crosshair y1=' + PADT + ' y2=' + (H - PADB) + ' x1=-99 x2=-99 stroke="#8b93a6" stroke-width="1"/>' +
+      '<line class=crosshair y1=' + PADT + ' y2=' + (H - PADB) + ' x1=-99 x2=-99 stroke="#9aa6b2" stroke-width="1"/>' +
       '</svg><div class=tip hidden></div></div></div>';
   }
 
@@ -108,7 +110,7 @@ if (PAGE === 'dashboard') {
       [fmtN(last.requests || 0), 'req / min', reqS, C.req],
       [fmtN(tot('input_tokens')), 'in tokens', series.map(p => p.input_tokens || 0), C.in],
       [fmtN(tot('output_tokens')), 'out tokens', series.map(p => p.output_tokens || 0), C.out],
-      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'errors', series.map(p => p.errors || 0), '#e66767'],
+      [fmtN(tot('errors')) + ' (' + errPct + '%)', 'errors', series.map(p => p.errors || 0), '#c0392b'],
       [ttfbAvg ? fmtMS(ttfbAvg) : '—', 'avg TTFB (stream)', null, null],
       [mss.length ? fmtMS(p95) : '—', 'p95 latency', null, null],
       [fmtUp(startedAt ? Date.now() - startedAt : 0), 'uptime', null, null],
