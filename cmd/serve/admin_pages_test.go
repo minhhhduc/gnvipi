@@ -340,9 +340,11 @@ func TestAdminModelsPage_CRUDAndTestConnectionHandlers(t *testing.T) {
 }
 
 func TestAdminPages_ReviewCommentsFixes(t *testing.T) {
-	// Comment 1: sws in adminBaseScript must be scoped to .row .sw so provider toggles are not included
-	if !strings.Contains(adminBaseScript, "const sws = [...document.querySelectorAll('.row .sw')];") {
-		t.Fatalf("expected adminBaseScript to query '.row .sw', got script:\n%s", adminBaseScript)
+	// Comment 1: sws in adminBaseScript must be scoped to the model rows so
+	// provider toggles (and captcha rows, which also use .row) are not included.
+	// Still narrower than .row .sw: data-id marks a model/custom row.
+	if !strings.Contains(adminBaseScript, "document.querySelectorAll('.row[data-id] .sw')") {
+		t.Fatalf("expected adminBaseScript to query '.row[data-id] .sw', got script:\n%s", adminBaseScript)
 	}
 
 	// Comment 2: Wildcard alias keeping upstream as empty string rather than defaulting to alias
@@ -359,5 +361,45 @@ func TestAdminPages_ReviewCommentsFixes(t *testing.T) {
 	}
 	if !strings.Contains(adminProviderScript, "JSON.parse(JSON.stringify(existingModel))") {
 		t.Fatalf("expected adminProviderScript to preserve existing model mapping fields")
+	}
+}
+
+// TestAdminPages_ModelsOnlyWiringStaysOffOtherTabs guards the shell/script
+// contract: the search box, bulk toggles and retry button only exist on the
+// models page, and the caption under the tabs must describe the page it is on.
+// Regression: render() ran on every page and counted unrelated .row elements,
+// so stats/config/chromes claimed "0 on · 0 off · 0 upstream errors".
+func TestAdminPages_ModelsOnlyWiringStaysOffOtherTabs(t *testing.T) {
+	catalog := []*cliproxy.ModelInfo{{ID: "meta/llama-3.3-70b-instruct"}}
+
+	models := adminHTML("models", catalog)
+	for _, id := range []string{`id=q`, `id=all`, `id=none`, `id=retry`, `id=counts`} {
+		if !strings.Contains(models, id) {
+			t.Fatalf("models page is missing %s", id)
+		}
+	}
+
+	for _, page := range []string{"dashboard", "config", "chromes"} {
+		got := adminHTML(page, catalog)
+		for _, id := range []string{`id=q`, `id=all`, `id=none`, `id=retry`, `id=counts`} {
+			if strings.Contains(got, id) {
+				t.Errorf("%s page still renders %s; models-only controls must not reach other tabs", page, id)
+			}
+		}
+		if !strings.Contains(got, `class=sub`) {
+			t.Errorf("%s page has no subtitle describing itself", page)
+		}
+	}
+}
+
+// TestAdminBaseScript_ScopesModelHooksToDataIDRows pins the selector the fix
+// relies on: without [data-id] the models hooks would pick up captcha rows,
+// which reuse .row but carry no switch.
+func TestAdminBaseScript_ScopesModelHooksToDataIDRows(t *testing.T) {
+	if !strings.Contains(adminBaseScript, `document.querySelectorAll('.row[data-id] .sw')`) {
+		t.Fatalf("model toggles must be selected by .row[data-id] .sw, got:\n%s", adminBaseScript)
+	}
+	if strings.Contains(adminBaseScript, "style.display = 'none'") {
+		t.Fatalf("control bar must be server-rendered per page, not hidden at runtime")
 	}
 }

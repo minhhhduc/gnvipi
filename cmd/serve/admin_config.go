@@ -7,7 +7,7 @@ import (
 
 func renderConfigPage(ids []string, providers []customProvider) string {
 	var rows strings.Builder
-	rows.WriteString(`<h2>Gateway config</h2><div class="card settings-card"><p>Choose <code>automode</code> in Claude. Requests to that name use the gateway model selected here, with the request content preserved.</p><label for=auto-model>Auto model</label><select id=auto-model>`)
+	rows.WriteString(`<h2>Auto model</h2><div class="card settings-card"><p>Send <code>model: "automode"</code> and the gateway forwards the request, unchanged, to the model picked here.</p><label for=auto-model>Auto model</label><select id=auto-model>`)
 	selected := prefs.autoModelID()
 	for _, id := range ids {
 		if prefs.isHidden(id) {
@@ -37,6 +37,6 @@ func renderConfigPage(ids []string, providers []customProvider) string {
 	rows.WriteString(`<option value="cycle"` + choice + `>cycle</option>`)
 	rows.WriteString(`</select><p>Current target: <code>` + html.EscapeString(selected) + `</code></p></div>`)
 	rows.WriteString(renderCycleConfig(ids, providers))
-	rows.WriteString(`<h2>Web search</h2><form id=search-form class="card settings-card"><p>Choose an engine or enter a public HTTPS search URL. Changes save automatically and are restored when the gateway restarts. Google, Google Scholar, Bing and DuckDuckGo links work; custom sites use the <code>q</code> parameter or <code>{query}</code> in the URL. Claude Code uses this through the gateway MCP tool.</p><label for=search-provider>Search engine</label><select id=search-provider><option value="">Disabled</option><option value="https://www.google.com/search?q={query}">Google</option><option value="https://scholar.google.com/scholar?q={query}">Google Scholar</option><option value="https://www.bing.com/search?q={query}">Bing</option><option value="https://www.duckduckgo.com/html/?q={query}">DuckDuckGo</option><option value=custom>Custom URL</option></select><label for=search-url>Search URL</label><input id=search-url type=text inputmode=url placeholder="https://example.com/search?q={query}" value="` + html.EscapeString(prefs.searchTemplate()) + `"><button type=submit>Save search</button></form>`)
+	rows.WriteString(`<h2>Web search</h2><form id=search-form class="card settings-card"><p>Backs the gateway search tool that Claude Code calls. Pick an engine or give a public HTTPS URL; custom sites take <code>q</code> or <code>{query}</code>. Saves immediately and survives restarts.</p><label for=search-provider>Search engine</label><select id=search-provider><option value="">Disabled</option><option value="https://www.google.com/search?q={query}">Google</option><option value="https://scholar.google.com/scholar?q={query}">Google Scholar</option><option value="https://www.bing.com/search?q={query}">Bing</option><option value="https://www.duckduckgo.com/html/?q={query}">DuckDuckGo</option><option value=custom>Custom URL</option></select><label for=search-url>Search URL</label><input id=search-url type=text inputmode=url placeholder="https://example.com/search?q={query}" value="` + html.EscapeString(prefs.searchTemplate()) + `"><button type=submit>Save search</button></form>`)
 	return rows.String()
 }

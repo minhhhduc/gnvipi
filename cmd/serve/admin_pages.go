@@ -29,7 +29,7 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 	var rows strings.Builder
 
 	// 1. Upstream Providers List View
-	rows.WriteString(`<h2>upstream providers</h2><div id="provider-list">`)
+	rows.WriteString(`<h2>Upstream providers</h2><div id="provider-list">`)
 	if len(providers) == 0 {
 		rows.WriteString(`<div class="sub" id="no-providers-msg">No upstream providers configured yet.</div>`)
 	} else {
@@ -73,7 +73,7 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 	rows.WriteString(`</div>`)
 
 	// 2. Provider v2 Editor
-	rows.WriteString(`<h2>provider v2 editor</h2>` +
+	rows.WriteString(`<h2>Provider editor</h2>` +
 		`<form id="provider-editor" class="card settings-card">` +
 		`<input type="hidden" id="p-edit-id" value="">` +
 		`<h3 id="editor-heading" style="margin:0 0 .5rem; font-size:.95rem">Add Upstream Provider</h3>` +
@@ -203,8 +203,9 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 	return rows.String()
 }
 
-// adminHTML renders one page per ?page= (dashboard | models | endpoints |
-// chromes) — one function per page.
+// adminHTML renders the page named by ?page= (dashboard | models | config |
+// chromes). models and endpoints share one page; automode is an alias for
+// config; anything else falls through to models.
 func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	if page == "automode" {
 		page = "config"
@@ -227,10 +228,10 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	failed := 0
 	switch page {
 	case "dashboard":
-		rows.WriteString(`<h2>overview (all APIs, since server start)</h2><div id=charts></div>
-<h2>request log (200-request frames, kept across restarts)</h2><div id=frames></div><div id=framebox></div>`)
+		rows.WriteString(`<h2>Overview</h2><div id=charts></div>
+<h2>Request log</h2><div id=frames></div><div id=framebox></div>`)
 	case "chromes":
-		rows.WriteString(`<h2>captcha Chrome — start on demand, kill to free RAM</h2><div id=chromes><div class=row><span class=id>Loading Chrome captcha status…</span></div><div class=bar><button type=button data-mode-all=start>Turn On / Start All</button></div></div>`)
+		rows.WriteString(`<h2>Captcha Chrome</h2><div id=chromes><div class=row static><span class=id>Loading Chrome captcha status…</span></div></div>`)
 	case "config", "automode":
 		rows.WriteString(renderConfigPage(ids, providers))
 	default: // models + endpoints share one page
@@ -269,7 +270,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	}
 
 	return adminHead(page) + `<main>` + rows.String() + `</main>
-<div id=toast></div>
+<div id=toast role=status aria-live=polite></div>
 <script>
 const PAGE = ` + strconv.Quote(page) + `;
 const STATS_READ_MS = ` + strconv.FormatInt(int64((nvidia.StatsReadInterval()-1)/time.Millisecond+1), 10) + `;

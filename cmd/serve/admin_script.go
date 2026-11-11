@@ -39,8 +39,8 @@ if (searchForm) {
   searchURL.addEventListener('change', saveSearch);
   searchForm.addEventListener('submit', e => { e.preventDefault(); saveSearch(); });
 }
-const rows = [...document.querySelectorAll('.row')];
-const sws = [...document.querySelectorAll('.row .sw')];
+const rows = PAGE === 'models' ? [...document.querySelectorAll('.row[data-id]')] : [];
+const sws = PAGE === 'models' ? [...document.querySelectorAll('.row[data-id] .sw')] : [];
 const counts = document.getElementById('counts');
 const toastEl = document.getElementById('toast');
 let toastTimer;
@@ -53,6 +53,7 @@ function flash(msg) {
 }
 
 function render() {
+  if (!counts) return;
   const on = sws.filter(s => s.checked).length;
   counts.textContent = on + ' on · ' + (sws.length - on) + ' off · ' + FAILED + ' upstream errors';
 }
@@ -206,22 +207,18 @@ rows.forEach(r => {
   });
 });
 sws.forEach(s => s.addEventListener('change', save));
-document.getElementById('all').onclick = () => { sws.forEach(s => s.checked = true); save(); };
-document.getElementById('none').onclick = () => { sws.forEach(s => s.checked = false); save(); };
-document.getElementById('retry').onclick = async () => {
-  await fetch('/admin/retry-failed', {method: 'POST'});
-  location.reload();
-};
-document.getElementById('q').addEventListener('input', e => {
-  const q = e.target.value.toLowerCase();
-  rows.forEach(r => r.classList.toggle('hide', !r.dataset.id.toLowerCase().includes(q)));
-});
-render();
 
-// Hide search input on non-models pages
-if (PAGE !== 'models') {
-  document.getElementById('q').style.display = 'none';
-  document.getElementById('all').style.display = 'none';
-  document.getElementById('none').style.display = 'none';
-  document.getElementById('retry').style.display = 'none';
+// The models bar only exists on the models page (adminHeadSub).
+if (PAGE === 'models') {
+  document.getElementById('all').onclick = () => { sws.forEach(s => s.checked = true); save(); };
+  document.getElementById('none').onclick = () => { sws.forEach(s => s.checked = false); save(); };
+  document.getElementById('retry').onclick = async () => {
+    await fetch('/admin/retry-failed', {method: 'POST'});
+    location.reload();
+  };
+  document.getElementById('q').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    rows.forEach(r => r.classList.toggle('hide', !r.dataset.id.toLowerCase().includes(q)));
+  });
+  render();
 }`
