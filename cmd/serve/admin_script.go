@@ -216,9 +216,21 @@ if (PAGE === 'models') {
     await fetch('/admin/retry-failed', {method: 'POST'});
     location.reload();
   };
+  // Publisher dividers would otherwise label an empty stretch of the catalog.
+  const pruneGroups = () => {
+    [...document.querySelectorAll('#catalog .grp')].forEach(g => {
+      let visible = false, n = g.nextElementSibling;
+      while (n && !n.classList.contains('grp')) {
+        if (n.classList.contains('row') && !n.classList.contains('hide')) { visible = true; break; }
+        n = n.nextElementSibling;
+      }
+      g.classList.toggle('hide', !visible);
+    });
+  };
   document.getElementById('q').addEventListener('input', e => {
     const q = e.target.value.toLowerCase();
     rows.forEach(r => r.classList.toggle('hide', !r.dataset.id.toLowerCase().includes(q)));
+    pruneGroups();
   });
   render();
 }`

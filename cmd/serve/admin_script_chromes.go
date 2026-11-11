@@ -4,10 +4,12 @@ const adminChromeScript = `
 // --- Captcha chromes (kill = free RAM, start = respawn) ---
 if (PAGE === 'chromes') {
   const box = document.getElementById('chromes');
+  const stateEl = document.getElementById('chrome-state');
   const fmtLast = t => {
     const d = new Date(t);
-    return d.getFullYear() > 1 ? d.toLocaleTimeString() : '—';
+    return d.getFullYear() > 1 ? d.toLocaleTimeString() : 'never';
   };
+  const tile = (big, lbl) => '<div class=tile><div class=lbl>' + lbl + '</div><div class=big>' + big + '</div></div>';
   async function post(body) {
     const res = await fetch('/admin/chromes', {
       method: 'POST',
@@ -38,27 +40,44 @@ if (PAGE === 'chromes') {
       const status = await res.json();
       const list = status.chromes || [];
       const transitioning = status.state === 'starting' || status.state === 'stopping';
-      const label = status.state === 'starting' ? 'Starting Chrome captcha…'
-                  : status.state === 'stopping' ? 'Stopping Chrome captcha…'
-                  : status.enabled ? 'Chrome captcha enabled · ' + status.ready + ' ready tokens'
-                  : 'Chrome captcha is off / ' + (status.state === 'stopped' ? 'stopped' : 'idle');
-      box.innerHTML = '<div class="row static"><span class=id>' + label + '</span></div>' + (list.length
-        ? list.map(c =>
-            '<div class="row static" data-id="chrome' + c.index + '">' +
-              '<span class=id>#' + c.index + (c.killed ? '' : ' · pid ' + c.pid) + '</span>' +
-              (c.busy && !c.killed ? '<span class="badge warn">busy</span>' : '') +
-              (c.killed ? '<span class="badge sq">killed</span>'
-                        : '<span class="badge ok">running</span>') +
-              (c.warmed && !c.killed ? '<span class="badge mute">warm</span>' : '') +
-              '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.78rem">' +
-                c.extracts + ' extracts · ok ' + fmtLast(c.last_ok) + '</span>' +
-              '<button type=button data-index="' + c.index + '" data-mode="' +
-                (c.killed ? 'start' : 'kill') + '">' +
-                (c.killed ? 'start' : 'kill') + '</button>' +
-            '</div>').join('')
-        : '<div class="row static"><span class=id>No Chrome processes allocated</span></div>') +
-        '<div class=bar style="margin-top:.6rem">' +
-          '<button type=button data-mode-all=start' + (transitioning ? ' disabled' : '') + '>' +
+      const running = list.filter(c => !c.killed).length;
+      const busy = list.filter(c => c.busy && !c.killed).length;
+      const extracts = list.reduce((n, c) => n + (c.extracts || 0), 0);
+
+      // State reads in the sheet header so the tabs above stay the only nav.
+      if (stateEl) {
+        const word = transitioning ? status.state
+                   : status.enabled ? 'enabled' : (status.state === 'stopped' ? 'stopped' : 'idle');
+        const cls = transitioning ? 'warn' : status.enabled ? 'ok' : 'mute';
+        stateEl.innerHTML = '<span class="badge ' + cls + '">' + word + '</span>';
+      }
+
+      box.innerHTML =
+        '<div class=tiles>' +
+          tile(status.ready, 'ready tokens') +
+          tile(running + ' / ' + list.length, 'workers running') +
+          tile(busy, 'in use now') +
+          tile(extracts, 'captcha extracts') +
+        '</div>' +
+        (status.error ? '<div class="note" style="padding:.5rem .9rem 0">last error: ' + status.error + '</div>' : '') +
+        (list.length
+          ? list.map(c =>
+              '<div class="row static" data-id="chrome' + c.index + '">' +
+                '<span class=chip>#' + c.index + '</span>' +
+                (c.killed ? '<span class="badge sq">killed</span>'
+                          : '<span class="badge ok">running</span>') +
+                (c.busy && !c.killed ? '<span class="badge warn">in use</span>' : '') +
+                (c.warmed && !c.killed ? '<span class="badge mute">warm</span>' : '') +
+                '<span class=name style="justify-content:flex-end;color:var(--dim);font-size:.75rem">' +
+                  (c.killed ? 'pid freed' : 'pid ' + c.pid) + ' · ' + c.extracts +
+                  ' extracts · last ok ' + fmtLast(c.last_ok) + '</span>' +
+                '<button type=button class=btn-sm data-index="' + c.index + '" data-mode="' +
+                  (c.killed ? 'start' : 'kill') + '">' +
+                  (c.killed ? 'start' : 'kill') + '</button>' +
+              '</div>').join('')
+          : '<div class="row static"><span class=id>No Chrome processes allocated. Start All launches the pool, and kill any worker to hand its RAM back.</span></div>') +
+        '<div class=sheet-foot>' +
+          '<button type=button class=primary data-mode-all=start' + (transitioning ? ' disabled' : '') + '>' +
             (status.enabled ? 'Start All' : 'Turn On / Start All') + '</button>' +
           '<button type=button data-mode-all=kill' + (status.state === 'stopping' || (!status.enabled && status.state !== 'starting') ? ' disabled' : '') + '>Kill All</button></div>';
     } catch (err) {
