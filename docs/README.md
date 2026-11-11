@@ -5,6 +5,7 @@ generated analysis tree beside it.
 
 | Document | What it covers |
 |---|---|
+| [operations.md](operations.md) | Running the gateway: flags, stats storage, Admin Console access, virtual models, web search MCP, data locations, troubleshooting, Docker notes. |
 | [providers.md](providers.md) | Universal LLM provider configuration guide, v2 schema reference, and migration instructions (#61). |
 | [clients.md](clients.md) | Client setup guide (Claude Code, OpenAI SDKs, Codex, OpenCode, cURL) and cross-protocol compatibility matrix (#62). |
 | [architecture/overview.md](architecture/overview.md) | Universal LLM Gateway v2 architecture overview: Hub-and-Spoke pattern, normalized IR, component layout, and design principles (#64). |
