@@ -16,12 +16,20 @@ if (cycleForm) {
       flash('cycle saved');
     }).catch(err => flash(err.message));
   };
+  // The position number is the failover order, so it is renumbered after a move.
+  const renumber = () => {
+    [...cycleList.querySelectorAll('.cycle-option')].forEach((row, i) => {
+      const pos = row.querySelector('.pos');
+      if (pos) pos.textContent = i + 1;
+    });
+  };
   cycleList.addEventListener('click', e => {
     const button = e.target.closest('button[data-move]');
     if (!button) return;
     const row = button.closest('.cycle-option');
     if (button.dataset.move === 'up' && row.previousElementSibling) row.previousElementSibling.before(row);
     if (button.dataset.move === 'down' && row.nextElementSibling) row.nextElementSibling.after(row);
+    renumber();
     saveCycle();
   });
   cycleList.addEventListener('change', saveCycle);

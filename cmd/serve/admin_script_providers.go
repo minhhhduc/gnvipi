@@ -164,7 +164,21 @@ function loadProviderForEdit(id) {
 
   if (pCancelBtn) pCancelBtn.style.display = 'inline-block';
   if (editorTestBadge) editorTestBadge.innerHTML = '';
+  // The editor is a collapsed <details>; editing a row must open it first.
+  const panel = document.getElementById('editor-panel');
+  if (panel) panel.open = true;
   pEditor.scrollIntoView({ behavior: 'smooth' });
+}
+
+const addProviderBtn = document.getElementById('add-provider-btn');
+if (addProviderBtn) {
+  addProviderBtn.onclick = () => {
+    const panel = document.getElementById('editor-panel');
+    if (panel) panel.open = true;
+    resetEditorForm();
+    if (panel) panel.scrollIntoView({ behavior: 'smooth' });
+    if (pIdInput) pIdInput.focus();
+  };
 }
 
 function resetEditorForm() {

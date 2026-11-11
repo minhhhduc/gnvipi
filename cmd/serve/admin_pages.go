@@ -25,13 +25,21 @@ func modelRowHTML(id, name, checked, badge string) string {
 
 // renderAdminModelsPage renders the provider v2 list and editor along with the
 // full models catalog.
+//
+// Order is by how often a row is touched: providers (few, edited by hand),
+// then the editor, then the catalog (many, read-only). The editor is collapsed
+// because it is the tallest thing on the page and most visits never open it.
 func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, legacyProviders []customProvider, failed *int) string {
 	var rows strings.Builder
 
 	// 1. Upstream Providers List View
-	rows.WriteString(`<h2>Upstream providers</h2><div id="provider-list">`)
+	rows.WriteString(`<section class=sheet>` +
+		`<div class=sheet-head><h2>Upstream providers</h2>` +
+		`<span class=sub>` + strconv.Itoa(len(providers)) + ` configured</span>` +
+		`<button type=button id=add-provider-btn class=btn-sm>Add provider</button>` +
+		`</div><div id="provider-list">`)
 	if len(providers) == 0 {
-		rows.WriteString(`<div class="sub" id="no-providers-msg">No upstream providers configured yet.</div>`)
+		rows.WriteString(`<div class="sub sheet-body" id="no-providers-msg">No upstream providers configured yet. Add one to route gateway models to an upstream API.</div>`)
 	} else {
 		for i := range providers {
 			p := &providers[i]
@@ -43,13 +51,13 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 				`<div class="prov-head">` +
 				`<span class="badge pb ok">` + html.EscapeString(string(p.Protocol)) + `</span>` +
 				`<strong>` + html.EscapeString(p.Name) + `</strong>` +
-				`<span class="id">` + html.EscapeString(p.ID) + `</span>` +
+				`<span class="chip">` + html.EscapeString(p.ID) + `</span>` +
 				`<span class="prov-meta">` + html.EscapeString(p.BaseURL) + `</span>` +
 				`<input type="checkbox" class="sw prov-toggle"` + checked + ` data-id="` + html.EscapeString(p.ID) + `" title="Toggle enabled">` +
 				`</div>` +
-				`<div class="prov-aliases"><span class="dim" style="font-size:0.75rem">Aliases:</span>`)
+				`<div class="prov-aliases"><span class="alias-lbl">Aliases</span>`)
 			if len(p.Models) == 0 {
-				rows.WriteString(`<span class="dim" style="font-size:0.75rem">none</span>`)
+				rows.WriteString(`<span class="dim" style="font-size:.75rem">none</span>`)
 			} else {
 				for _, m := range p.Models {
 					badgeCls := "badge"
@@ -70,13 +78,15 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 				`</div></div>`)
 		}
 	}
-	rows.WriteString(`</div>`)
+	rows.WriteString(`</div></section>`)
 
-	// 2. Provider v2 Editor
-	rows.WriteString(`<h2>Provider editor</h2>` +
-		`<form id="provider-editor" class="card settings-card">` +
+	// 2. Provider v2 Editor — collapsed until "Add provider" or a row's Edit is
+	// used, so the page opens on the lists instead of a tall empty form.
+	rows.WriteString(`<details id=editor-panel class=sheet>` +
+		`<summary class=sheet-head><span class=sheet-title id="editor-heading">Add upstream provider</span>` +
+		`<span class=sub>Aliases, headers, timeouts</span></summary>` +
+		`<form id="provider-editor" class="settings-card">` +
 		`<input type="hidden" id="p-edit-id" value="">` +
-		`<h3 id="editor-heading" style="margin:0 0 .5rem; font-size:.95rem">Add Upstream Provider</h3>` +
 		`<div class="form-grid">` +
 		`<div><label for="p-id">Provider ID</label><input id="p-id" name="id" placeholder="e.g. openrouter" required></div>` +
 		`<div><label for="p-name">Provider Name</label><input id="p-name" name="name" placeholder="e.g. OpenRouter" required></div>` +
@@ -123,12 +133,12 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 		`<div><label for="p-timeout-idle">Idle Timeout (seconds)</label><input type="number" step="any" min="0" id="p-timeout-idle" placeholder="e.g. 30"></div>` +
 		`<div><label for="p-tls">TLS Profile</label><select id="p-tls"><option value="default">Default</option><option value="chrome">Chrome (TLS impersonation)</option></select></div>` +
 		`</div></div></details>` +
-		`<div class="bar" style="margin-top:1rem;align-items:center">` +
-		`<button type="submit" id="save-provider-btn">Save Provider</button>` +
+		`<div class="bar" style="margin-top:.9rem">` +
+		`<button type="submit" id="save-provider-btn" class="primary">Save Provider</button>` +
 		`<button type="button" id="test-editor-btn">Test Connection</button>` +
 		`<button type="button" id="cancel-editor-btn" style="display:none">Cancel</button>` +
 		`<span id="editor-test-badge" class="test-res"></span>` +
-		`</div></form>`)
+		`</div></form></details>`)
 
 	// 3. Models catalog
 	type renderModel struct {
@@ -172,11 +182,21 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 		return renderList[i].Name < renderList[j].Name
 	})
 
-	group := ""
+	// Publisher groups, not one heading per publisher: the catalog is one sheet
+	// with sticky-weight dividers, so a 200-model catalog is one scrolling list
+	// instead of 20 stacked sections. perPub counts each group once.
+	perPub := make(map[string]int, 8)
+	for _, rm := range renderList {
+		perPub[rm.Publisher]++
+	}
+	rows.WriteString(`<section class=sheet id=catalog><div class=sheet-head><h2>Model catalog</h2>` +
+		`<span class=sub>` + strconv.Itoa(len(renderList)) + ` models · grouped by publisher</span></div>`)
+	group := "\x00"
 	for _, rm := range renderList {
 		if rm.Publisher != group {
 			group = rm.Publisher
-			rows.WriteString(`<h2>` + html.EscapeString(rm.Publisher) + `</h2>`)
+			rows.WriteString(`<div class=grp data-grp>` + html.EscapeString(rm.Publisher) +
+				`<span class=cnt>` + strconv.Itoa(perPub[rm.Publisher]) + `</span></div>`)
 		}
 		checked, badge := " checked", ""
 		if prefs.isHidden(rm.ID) {
@@ -200,6 +220,7 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 			rows.WriteString(modelRowHTML(rm.ID, rm.Name, checked, badge))
 		}
 	}
+	rows.WriteString(`</section>`)
 	return rows.String()
 }
 
@@ -228,10 +249,11 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 	failed := 0
 	switch page {
 	case "dashboard":
-		rows.WriteString(`<h2>Overview</h2><div id=charts></div>
-<h2>Request log</h2><div id=frames></div><div id=framebox></div>`)
+		rows.WriteString(`<section class=sec><h2>Traffic</h2><div id=charts></div>
+</section>
+<section class=sheet><div class=sheet-head><h2>Request log</h2><div id=frames></div></div><div id=framebox></div></section>`)
 	case "chromes":
-		rows.WriteString(`<h2>Captcha Chrome</h2><div id=chromes><div class=row static><span class=id>Loading Chrome captcha status…</span></div></div>`)
+		rows.WriteString(`<section class=sheet><div class=sheet-head><h2>Workers</h2><span class=sub id=chrome-state>checking</span></div><div id=chromes><div class=row static><span class=id>Loading Chrome captcha status…</span></div></div></section>`)
 	case "config", "automode":
 		rows.WriteString(renderConfigPage(ids, providers))
 	default: // models + endpoints share one page
