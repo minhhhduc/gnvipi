@@ -18,9 +18,11 @@ internet access (#166).
 | `automode` | alias for `config` | |
 
 `adminHead(active)` (`cmd/serve/admin_shell.go`) emits the doctype, meta, the
-whole stylesheet, and the `<header>`: brand, tab bar, and the page's sub-line.
+whole stylesheet, the fixed left `<nav class=rail>` (brand mark, section links,
+active section filled), and the page `<header>` with its title and sub-line.
 The models filter bar (`modelsBarHTML`) lives inside the header so it stays
-pinned to the top while the catalog scrolls. `adminHTML` then appends `<main>`,
+pinned to the top while the catalog scrolls. Under 900px the rail collapses to
+a static top strip. `adminHTML` then appends `<main>`,
 the page's data as JS constants (`PAGE`, `STATS_READ_MS`, `FAILED`, `PROVIDERS`,
 `PROVIDERS_V2`, `DELETED`), and one `<script>` built by concatenating the
 per-page scripts in `cmd/serve/admin_script.go`:
@@ -45,6 +47,7 @@ per-page classes.
 | `.sheet-head` / `.sheet-title` / `.sheet-body` / `.sheet-foot` | Panel header (title, count, actions), padding wrapper, and the action bar pinned to the bottom. A `<details class=sheet>` uses its `<summary class=sheet-head>` as the toggle. |
 | `.grp` + `.cnt` | Publisher divider inside the model catalog, with its row count. |
 | `.cols` | Auto-fit grid (`minmax(19rem, 1fr)`) for placing whole sheets side by side. |
+| `.split` / `.pane` | Named two-pane grid (list pane + work pane). Used by the models page; collapses to one column under 1100px. |
 | `.sec` | Vertical stack with no border, for content that is not a panel. |
 | `.row` / `.static` | One line of a list. `.static` rows are not click-to-toggle. |
 | `.chip` | Monospace identifier (`provider id`, `#0`). |

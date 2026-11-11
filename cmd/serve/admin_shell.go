@@ -24,7 +24,7 @@ func adminHeadTabs(active string) string {
 		}
 		b.WriteString(`<a class="` + cls + `" href="?page=` + t.id + `"` + cur + `>` + t.label + `</a>`)
 	}
-	return b.String()
+	return `<div class=rail-links>` + b.String() + `</div>`
 }
 
 // adminHeadSub renders the strip under the tabs: the models toolbar on the
@@ -88,7 +88,7 @@ html{-webkit-text-size-adjust:100%}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
-body{margin:0;background:var(--bg);color:var(--fg);
+body{margin:0;padding-left:13rem;background:var(--bg);color:var(--fg);
   font:14px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
   -webkit-font-smoothing:antialiased}
 ::selection{background:rgba(31,95,208,.18)}
@@ -97,7 +97,7 @@ a{color:var(--accent)}
 /* ---- shell ---- */
 header{position:sticky;top:0;z-index:20;background:var(--panel);
   border-bottom:1px solid var(--line);box-shadow:0 1px 0 rgba(16,24,40,.02)}
-.wrap,main{max-width:68rem;margin:0 auto;padding:0 1.5rem}
+.wrap,main{max-width:72rem;margin:0 auto;padding:0 1.5rem}
 .head-row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.7rem 0 .65rem}
 .brand{display:flex;align-items:baseline;gap:.55rem;margin-right:auto}
 h1{margin:0;font-size:1.2rem;font-weight:650;letter-spacing:-.022em}
@@ -107,12 +107,20 @@ h1{margin:0;font-size:1.2rem;font-weight:650;letter-spacing:-.022em}
 input[type=search]{flex:1;min-width:12rem;max-width:22rem}
 .sub{color:var(--dim);font-size:.79rem;padding:0 0 .7rem}
 
-/* ---- nav tabs: a segmented control where the current page is filled ---- */
-.tab-bar{display:inline-flex;gap:2px;padding:3px;background:var(--bg-2);
-  border:1px solid var(--line);border-radius:var(--r)}
-.tab{color:var(--dim);font-size:.8rem;font-weight:550;padding:.34rem .85rem;
+/* ---- left rail: the section switcher lives in a fixed column, so the
+   content area gets the full width and the current section is always in
+   view instead of scrolling away with the page. ---- */
+.rail{position:fixed;inset:0 auto 0 0;width:13rem;z-index:30;display:flex;
+  flex-direction:column;gap:.35rem;padding:1rem .7rem;
+  background:var(--panel);border-right:1px solid var(--line)}
+.rail-brand{display:flex;align-items:center;gap:.55rem;padding:.15rem .35rem 1rem}
+.rail-brand .mark{width:1.65rem;height:1.65rem;border-radius:8px;background:var(--accent);
+  color:var(--on-accent);display:grid;place-items:center;font-size:.78rem;font-weight:700}
+.rail-brand .rail-name{font-weight:650;letter-spacing:-.02em;font-size:.92rem}
+.rail-links{display:flex;flex-direction:column;gap:2px}
+.tab{color:var(--dim);font-size:.84rem;font-weight:550;padding:.42rem .65rem;
   border-radius:var(--r-sm);text-decoration:none;transition:background .12s,color .12s}
-.tab:hover{color:var(--fg);background:var(--panel)}
+.tab:hover{color:var(--fg);background:var(--bg-2)}
 .tab.on{color:var(--on-accent);background:var(--accent);box-shadow:var(--shadow)}
 .tab.on:hover{color:var(--on-accent);background:var(--accent)}
 .tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -148,6 +156,12 @@ details.sheet>summary:hover{background:var(--bg-2)}
 .grp .cnt{color:var(--dim-2);font-weight:500;font-variant-numeric:tabular-nums}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(19rem,1fr));gap:.9rem;
   align-items:start}
+/* Models is the one page with two jobs: providers are edited, the catalog is
+   scanned. They sit side by side instead of stacking into a long scroll. */
+.split{display:grid;grid-template-columns:minmax(19rem,25rem) minmax(0,1fr);
+  gap:.9rem;align-items:start}
+.split>.pane{min-width:0;display:flex;flex-direction:column;gap:.9rem}
+@media (max-width:1100px){.split{grid-template-columns:1fr}}
 
 /* ---- section headings (standalone, outside a sheet) ---- */
 h2{color:var(--fg);font-size:.88rem;letter-spacing:-.012em;margin:0;
@@ -358,11 +372,17 @@ table.stats tbody tr:last-child td{border-bottom:0}
 .del-row button:hover{background:#f0faf4;border-color:var(--on)}
 
 /* ---- narrow screens ---- */
+/* Below the rail breakpoint the navigation becomes a top strip again. */
+@media (max-width:900px){
+  body{padding-left:0}
+  .rail{position:static;width:auto;flex-direction:row;align-items:center;
+    gap:.6rem;padding:.55rem .9rem;border-right:0;border-bottom:1px solid var(--line)}
+  .rail-brand{padding:0}
+  .rail-links{flex-direction:row;flex-wrap:wrap}
+  .rail-brand .rail-name{display:none}
+}
 @media (max-width:640px){
   .wrap,main{padding-left:.9rem;padding-right:.9rem}
-  .brand .product{display:none}
-  .head-row{gap:.6rem}
-  .tab-bar{display:flex;width:100%}
   .tab{flex:1;text-align:center}
   .tools .sub{margin-left:0}
   input[type=search]{max-width:none}
@@ -371,11 +391,12 @@ table.stats tbody tr:last-child td{border-bottom:0}
   .row{padding:.5rem .75rem}
 }
 </style>
+<nav class=rail aria-label="Admin sections">
+  <div class=rail-brand><span class=mark>GW</span><span class=rail-name>Gateway</span></div>
+  ` + adminHeadTabs(active) + `
+</nav>
 <header><div class=wrap>
-  <div class=head-row>
-    <div class=brand><h1>` + title + `</h1><span class=product>Gateway admin</span></div>
-    <nav class=tab-bar aria-label="Admin sections">` + adminHeadTabs(active) + `</nav>
-  </div>
+  <h1>` + title + `</h1>
   ` + adminHeadSub(active) + `
 </div></header>
 `

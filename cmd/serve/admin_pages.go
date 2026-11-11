@@ -31,6 +31,7 @@ func modelRowHTML(id, name, checked, badge string) string {
 // because it is the tallest thing on the page and most visits never open it.
 func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, legacyProviders []customProvider, failed *int) string {
 	var rows strings.Builder
+	rows.WriteString(`<div class=split><div class=pane>`)
 
 	// 1. Upstream Providers List View
 	rows.WriteString(`<section class=sheet>` +
@@ -140,6 +141,8 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 		`<span id="editor-test-badge" class="test-res"></span>` +
 		`</div></form></details>`)
 
+	rows.WriteString(`</div><div class=pane>`)
+
 	// 3. Models catalog
 	type renderModel struct {
 		Publisher string
@@ -220,7 +223,7 @@ func renderAdminModelsPage(ids []string, providers []gatewayprovider.Provider, l
 			rows.WriteString(modelRowHTML(rm.ID, rm.Name, checked, badge))
 		}
 	}
-	rows.WriteString(`</section>`)
+	rows.WriteString(`</section></div></div>`)
 	return rows.String()
 }
 
