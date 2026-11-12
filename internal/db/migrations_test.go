@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
 
@@ -101,6 +102,26 @@ func insertSecretKey(t *testing.T, ctx context.Context, tx pgx.Tx, providerID, o
 		t.Fatalf("insert key %q: %v", name, err)
 	}
 	return id
+}
+
+// assertCheckViolation asserts a CHECK failure (SQLSTATE 23514) on the named
+// constraint. PostgreSQL reports only the constraint name, never the
+// predicate, so the migration names every CHECK these tests depend on.
+func assertCheckViolation(t *testing.T, err error, constraint string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected CHECK violation %q, got no error", constraint)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("error is not a PostgreSQL error: %v", err)
+	}
+	if pgErr.Code != "23514" {
+		t.Fatalf("SQLSTATE = %q, want 23514 (check_violation): %v", pgErr.Code, err)
+	}
+	if pgErr.ConstraintName != constraint {
+		t.Fatalf("constraint = %q, want %q: %v", pgErr.ConstraintName, constraint, err)
+	}
 }
 
 func TestMigrationsApply(t *testing.T) {
@@ -267,31 +288,31 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 		nonce := make([]byte, 12)
 
 		type kase struct {
-			name    string
-			owner   any
-			scheme  string
-			enabled bool
-			header  any
-			keyEnv  any
-			keyRef  any
-			enc     any
-			nonce   any
-			kver    any
-			last4   any
-			wantErr string
+			name           string
+			owner          any
+			scheme         string
+			enabled        bool
+			header         any
+			keyEnv         any
+			keyRef         any
+			enc            any
+			nonce          any
+			kver           any
+			last4          any
+			wantConstraint string
 		}
 		cases := []kase{
-			{name: "enabled bearer without credential", owner: owner, scheme: "bearer", enabled: true, wantErr: "num_nonnulls"},
+			{name: "enabled bearer without credential", owner: owner, scheme: "bearer", enabled: true, wantConstraint: "provider_keys_credential_required"},
 			{name: "enabled bearer with secret", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last"},
-			{name: "enabled bearer with two sources", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", keyEnv: "MY_KEY", wantErr: "num_nonnulls"},
+			{name: "enabled bearer with two sources", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", keyEnv: "MY_KEY", wantConstraint: "provider_keys_credential_single"},
 			{name: "disabled bearer without credential", owner: owner, scheme: "bearer", enabled: false},
-			{name: "none with secret", owner: owner, scheme: "none", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantErr: "auth_scheme"},
+			{name: "none with secret", owner: owner, scheme: "none", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantConstraint: "provider_keys_none_clears_credentials"},
 			{name: "shared none key", owner: nil, scheme: "none", enabled: true},
-			{name: "shared bearer key", owner: nil, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantErr: "owner_id IS NOT NULL"},
-			{name: "header without header name", owner: owner, scheme: "header", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantErr: "auth_header_name"},
+			{name: "shared bearer key", owner: nil, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantConstraint: "provider_keys_owner_none"},
+			{name: "header without header name", owner: owner, scheme: "header", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantConstraint: "provider_keys_header_name_required"},
 			{name: "header with header name", owner: owner, scheme: "header", enabled: true, header: "x-api-key", enc: secret, nonce: nonce, kver: 1, last4: "last"},
-			{name: "bad nonce length", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: make([]byte, 11), kver: 1, last4: "last", wantErr: "secret_nonce"},
-			{name: "key_ref control characters", owner: owner, scheme: "bearer", enabled: true, keyRef: "bad\x01ref", wantErr: "key_ref"},
+			{name: "bad nonce length", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: make([]byte, 11), kver: 1, last4: "last", wantConstraint: "provider_keys_nonce_length"},
+			{name: "key_ref control characters", owner: owner, scheme: "bearer", enabled: true, keyRef: "bad\x01ref", wantConstraint: "provider_keys_key_ref_syntax"},
 			{name: "key_env source", owner: owner, scheme: "bearer", enabled: true, keyEnv: "MY_KEY"},
 			{name: "key_ref source", owner: owner, scheme: "bearer", enabled: true, keyRef: "vault://my/ref"},
 		}
@@ -303,18 +324,13 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 				 VALUES ('cred-provider', $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				tc.owner, fmt.Sprintf("key-%02d", i), tc.enabled, tc.scheme,
 				tc.header, tc.keyEnv, tc.keyRef, tc.enc, tc.nonce, tc.kver, tc.last4)
-			if tc.wantErr == "" {
+			if tc.wantConstraint == "" {
 				if err != nil {
 					t.Fatalf("%s: unexpected error: %v", tc.name, err)
 				}
 				continue
 			}
-			if err == nil {
-				t.Fatalf("%s: expected an error containing %q", tc.name, tc.wantErr)
-			}
-			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.wantErr)) {
-				t.Fatalf("%s: error %q does not mention %q", tc.name, err, tc.wantErr)
-			}
+			assertCheckViolation(t, err, tc.wantConstraint)
 		}
 	})
 }

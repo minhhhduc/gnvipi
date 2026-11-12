@@ -173,34 +173,48 @@ CREATE TABLE provider_keys (
   scope_owner uuid GENERATED ALWAYS AS (
     COALESCE(owner_id, '00000000-0000-0000-0000-000000000000'::uuid)
   ) STORED,
-  CHECK (owner_id IS NOT NULL OR auth_scheme = 'none'),
-  CHECK ((secret_enc IS NULL) = (secret_nonce IS NULL)),
-  CHECK ((secret_enc IS NULL) = (secret_kver IS NULL)),
-  CHECK (secret_enc IS NULL OR octet_length(secret_nonce) = 12),
-  CHECK (secret_kver IS NULL OR secret_kver > 0),
-  CHECK ((secret_enc IS NULL) = (secret_last4 IS NULL)),
-  CHECK (secret_last4 IS NULL OR length(secret_last4) <= 8),
-  CHECK (key_env IS NULL
-         OR key_env ~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$'),
-  CHECK (key_ref IS NULL
-         OR (length(key_ref) BETWEEN 1 AND 512
-             AND key_ref !~ '[[:cntrl:]]')),
-  CHECK (auth_scheme <> 'header'
-         OR (auth_header_name IS NOT NULL
-             AND auth_header_name ~ '^[!#$%&''*+\-.^_`|~0-9A-Za-z]+$')),
-  CHECK (auth_scheme = 'header' OR auth_header_name IS NULL),
+  CONSTRAINT provider_keys_owner_none
+    CHECK (owner_id IS NOT NULL OR auth_scheme = 'none'),
+  CONSTRAINT provider_keys_secret_nonce_pair
+    CHECK ((secret_enc IS NULL) = (secret_nonce IS NULL)),
+  CONSTRAINT provider_keys_secret_kver_pair
+    CHECK ((secret_enc IS NULL) = (secret_kver IS NULL)),
+  CONSTRAINT provider_keys_nonce_length
+    CHECK (secret_enc IS NULL OR octet_length(secret_nonce) = 12),
+  CONSTRAINT provider_keys_kver_positive
+    CHECK (secret_kver IS NULL OR secret_kver > 0),
+  CONSTRAINT provider_keys_secret_last4_pair
+    CHECK ((secret_enc IS NULL) = (secret_last4 IS NULL)),
+  CONSTRAINT provider_keys_last4_length
+    CHECK (secret_last4 IS NULL OR length(secret_last4) <= 8),
+  CONSTRAINT provider_keys_key_env_syntax
+    CHECK (key_env IS NULL
+           OR key_env ~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$'),
+  CONSTRAINT provider_keys_key_ref_syntax
+    CHECK (key_ref IS NULL
+           OR (length(key_ref) BETWEEN 1 AND 512
+               AND key_ref !~ '[[:cntrl:]]')),
+  CONSTRAINT provider_keys_header_name_required
+    CHECK (auth_scheme <> 'header'
+           OR (auth_header_name IS NOT NULL
+               AND auth_header_name ~ '^[!#$%&''*+\-.^_`|~0-9A-Za-z]+$')),
+  CONSTRAINT provider_keys_header_name_only
+    CHECK (auth_scheme = 'header' OR auth_header_name IS NULL),
   -- Exactly one credential source for an enabled non-none key. A disabled key
   -- may have zero sources, which is what makes clear_secret + enabled=false
   -- a legal state.
-  CHECK (num_nonnulls(secret_enc, key_env, key_ref) <= 1),
-  CHECK (auth_scheme = 'none'
-         OR NOT enabled
-         OR num_nonnulls(secret_enc, key_env, key_ref) = 1),
-  CHECK (auth_scheme <> 'none'
-         OR (secret_enc IS NULL AND secret_nonce IS NULL
-             AND secret_kver IS NULL AND secret_last4 IS NULL
-             AND key_env IS NULL AND key_ref IS NULL
-             AND auth_header_name IS NULL)),
+  CONSTRAINT provider_keys_credential_single
+    CHECK (num_nonnulls(secret_enc, key_env, key_ref) <= 1),
+  CONSTRAINT provider_keys_credential_required
+    CHECK (auth_scheme = 'none'
+           OR NOT enabled
+           OR num_nonnulls(secret_enc, key_env, key_ref) = 1),
+  CONSTRAINT provider_keys_none_clears_credentials
+    CHECK (auth_scheme <> 'none'
+           OR (secret_enc IS NULL AND secret_nonce IS NULL
+               AND secret_kver IS NULL AND secret_last4 IS NULL
+               AND key_env IS NULL AND key_ref IS NULL
+               AND auth_header_name IS NULL)),
   UNIQUE (id, provider_id, scope_owner)
 );
 CREATE UNIQUE INDEX provider_keys_owner_name_uq
