@@ -1,8 +1,9 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { useGateway } from "../lib/context";
 import { avg, clock, fmtCompact, fmtInt, fmtMs, fmtPercent, minuteLabel, p95 } from "../lib/format";
+import { clampFrame, getFrameNavState } from "../lib/helpers";
 import { seriesValues, ttfbValues } from "../lib/chart";
 import type { FrameResponse, Stats as StatsData } from "../lib/types";
 import { Card, CardHead, Empty, PageHeader } from "../components/ui";
@@ -74,25 +75,79 @@ export function StatsView() {
       .map((entry) => entry.model);
   }, [data.series_by_model]);
 
+  const frameRef = useRef<number | null>(frame);
+  frameRef.current = frame;
+  const lastReadAtRef = useRef<number>(0);
+  const reqIdRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    if (frame == null) {
+    if (frame == null || totalFrames <= 0) {
+      if (timerRef.current) clearTimeout(timerRef.current);
       setFrameData(null);
+      setFrameError(null);
+      setRetryAt(0);
       return;
     }
-    const ctrl = new AbortController();
-    api<FrameResponse>(`/admin/api/stats?frames=${frame}`, { signal: ctrl.signal })
-      .then((d) => {
+
+    const targetFrame = clampFrame(frame, totalFrames);
+    let aborted = false;
+
+    const doFetch = async () => {
+      if (aborted || frameRef.current !== targetFrame) return;
+
+      const now = Date.now();
+      const elapsed = now - lastReadAtRef.current;
+      const minInterval = 1000;
+      if (elapsed < minInterval) {
+        const wait = minInterval - elapsed;
+        timerRef.current = setTimeout(() => {
+          void doFetch();
+        }, wait);
+        return;
+      }
+
+      lastReadAtRef.current = Date.now();
+      const thisReq = ++reqIdRef.current;
+
+      try {
+        const d = await api<FrameResponse>(`/admin/api/stats?frames=${targetFrame}`);
+        if (aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
         setFrameData(d);
         setFrameError(null);
-      })
-      .catch((err) => {
-        if (ctrl.signal.aborted) return;
-        setFrameError(err instanceof Error ? err.message : "Frame read failed");
-        const secs = err instanceof ApiError && err.retryAfter ? err.retryAfter : 3;
-        setRetryAt(Date.now() + secs * 1000);
-      });
-    return () => ctrl.abort();
-  }, [frame]);
+        setRetryAt(0);
+      } catch (err) {
+        if (aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
+        const msg = err instanceof Error ? err.message : "Frame read failed";
+        setFrameError(msg);
+
+        let retrySeconds = 0;
+        if (err instanceof ApiError) {
+          if (err.retryAfter && err.retryAfter > 0) {
+            retrySeconds = err.retryAfter;
+          } else if (err.status === 429) {
+            retrySeconds = 1;
+          }
+        }
+        if (retrySeconds > 0) {
+          const waitMs = Math.max(1000, retrySeconds * 1000);
+          setRetryAt(Date.now() + waitMs);
+          timerRef.current = setTimeout(() => {
+            if (!aborted && frameRef.current === targetFrame) {
+              void doFetch();
+            }
+          }, waitMs);
+        }
+      }
+    };
+
+    void doFetch();
+
+    return () => {
+      aborted = true;
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [frame, totalFrames]);
 
   const now = Date.now();
   const throttled = retryAt > now;
@@ -159,25 +214,32 @@ export function StatsView() {
           sub={throttled ? "throttled" : frameData ? `frame ${frameData.frame} of ${totalFrames}` : `${events.length} recent events`}
         >
           <div class="flex items-center gap-1">
-            <button
-              class="btn btn-sm"
-              disabled={frame == null || frame <= 1}
-              onClick={() => setFrame(Math.max(1, (frame || 1) - 1))}
-              aria-label="Previous frame"
-            >
-              «
-            </button>
-            <button class="btn btn-sm" onClick={() => setFrame(null)} disabled={frame == null}>
-              Latest
-            </button>
-            <button
-              class="btn btn-sm"
-              disabled={frame != null && frame >= totalFrames}
-              onClick={() => setFrame((frame || 1) + 1)}
-              aria-label="Next frame"
-            >
-              »
-            </button>
+            {(() => {
+              const nav = getFrameNavState(frame, totalFrames);
+              return (
+                <>
+                  <button
+                    class="btn btn-sm"
+                    disabled={!nav.canPrev}
+                    onClick={() => nav.prevTarget != null && setFrame(nav.prevTarget)}
+                    aria-label="Previous frame"
+                  >
+                    «
+                  </button>
+                  <button class="btn btn-sm" onClick={() => setFrame(null)} disabled={!nav.canLatest}>
+                    Latest
+                  </button>
+                  <button
+                    class="btn btn-sm"
+                    disabled={!nav.canNext}
+                    onClick={() => setFrame(nav.nextTarget)}
+                    aria-label="Next frame"
+                  >
+                    »
+                  </button>
+                </>
+              );
+            })()}
           </div>
         </CardHead>
         {frameError && (

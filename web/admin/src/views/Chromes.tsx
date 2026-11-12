@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import type { ChromeInfo, ChromeStatus } from "../lib/types";
+import { formatLastOk } from "../lib/helpers";
 import { Card, CardHead, Dialog, Empty, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
 
@@ -46,9 +47,12 @@ export function ChromesView() {
     }
   };
 
-  const running = !!status && status.enabled && status.chromes.length > 0;
-  const inUse = (status?.chromes || []).filter((c) => c.busy).length;
-  const extracts = (status?.chromes || []).reduce((n, c) => n + (c.extracts || 0), 0);
+  const list = status?.chromes || [];
+  const runningCount = list.filter((c) => !c.killed).length;
+  const totalCount = list.length;
+  const running = !!status && status.enabled && totalCount > 0;
+  const inUse = list.filter((c) => c.busy).length;
+  const extracts = list.reduce((n, c) => n + (c.extracts || 0), 0);
 
   return (
     <>
@@ -64,10 +68,10 @@ export function ChromesView() {
         <div class="flex flex-wrap items-center gap-6 px-[22px] py-6">
           <div>
             <div class="text-[30px] font-bold tracking-[-0.04em]">{running ? "Enabled" : status?.state || "Idle"}</div>
-            <div class="text-xs text-dim">{running ? `${status?.chromes.length} workers allocated` : "No Chrome processes allocated"}</div>
+            <div class="text-xs text-dim">{totalCount > 0 ? `${totalCount} workers allocated` : "No Chrome processes allocated"}</div>
           </div>
           <Stat value={status?.ready ?? 0} label="ready tokens" />
-          <Stat value={`${running ? status?.chromes.length : 0} / ${running ? status?.chromes.length : 0}`} label="workers running" />
+          <Stat value={`${runningCount} / ${totalCount}`} label="workers running" />
           <Stat value={inUse} label="in use now" />
           <Stat value={extracts} label="captcha extracts" />
           <div class="ml-auto flex gap-2">
@@ -76,8 +80,8 @@ export function ChromesView() {
             </button>
             <button
               class="btn btn-danger"
-              disabled={busy || !running}
-              title={running ? "Stops every worker" : "Nothing to kill — no workers are running"}
+              disabled={busy || runningCount === 0}
+              title={runningCount > 0 ? "Stops every worker" : "Nothing to kill — no workers are running"}
               onClick={() => setConfirm({ kind: "all" })}
             >
               Kill All…
@@ -107,9 +111,25 @@ export function ChromesView() {
                   </td>
                   <td class="mono">{c.pid}</td>
                   <td>{c.extracts}</td>
-                  <td class="muted">{c.last_ok || "—"}</td>
+                  <td class="muted">{formatLastOk(c.last_ok)}</td>
                   <td class="text-right">
-                    <button class="btn btn-sm" disabled={busy} onClick={() => setConfirm({ kind: "one", worker: c })}>Kill…</button>
+                    {c.killed ? (
+                      <button
+                        class="btn btn-sm btn-primary"
+                        disabled={busy}
+                        onClick={() => void post({ mode: "start", index: c.index }, `Starting worker #${c.index}`)}
+                      >
+                        Start
+                      </button>
+                    ) : (
+                      <button
+                        class="btn btn-sm"
+                        disabled={busy}
+                        onClick={() => setConfirm({ kind: "one", worker: c })}
+                      >
+                        Kill…
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

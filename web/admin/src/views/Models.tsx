@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, modelPath } from "../lib/api";
 import { useUi } from "../components/ui";
 import type { ModelsResponse, Provider, TestResult } from "../lib/types";
@@ -21,6 +21,9 @@ export function ModelsView() {
   const [deletedOpen, setDeletedOpen] = useState(false);
   const [tests, setTests] = useState<Record<string, TestResult>>({});
   const [localHidden, setLocalHidden] = useState<Record<string, boolean>>({});
+  const pendingTargetRef = useRef<{ hiddenIds: string[]; localState: Record<string, boolean> } | null>(null);
+  const activeSaveRef = useRef<boolean>(false);
+  const confirmedStateRef = useRef<Record<string, boolean>>({});
 
   const load = async () => {
     try {
@@ -28,6 +31,8 @@ export function ModelsView() {
       setProviders(p);
       setCatalog(m);
       setLocalHidden({});
+      confirmedStateRef.current = {};
+      pendingTargetRef.current = null;
       setLoading(false);
     } catch (err) {
       setLoading(false);
@@ -45,16 +50,32 @@ export function ModelsView() {
   );
   const onCount = models.filter((m) => !(localHidden[m.id] ?? m.hidden)).length;
 
-  const toggleModel = async (id: string, visible: boolean) => {
+  const drainMaskQueue = async () => {
+    if (activeSaveRef.current) return;
+    activeSaveRef.current = true;
+    while (pendingTargetRef.current) {
+      const target = pendingTargetRef.current;
+      pendingTargetRef.current = null;
+      try {
+        await api("/admin/api/models", { method: "POST", body: { masks_id: target.hiddenIds } });
+        confirmedStateRef.current = target.localState;
+      } catch (err) {
+        if (!pendingTargetRef.current) {
+          setLocalHidden(confirmedStateRef.current);
+          await load();
+        }
+        toast(`Catalog save failed: ${err instanceof Error ? err.message : "unknown"}`, "bad");
+      }
+    }
+    activeSaveRef.current = false;
+  };
+
+  const toggleModel = (id: string, visible: boolean) => {
     const next = { ...localHidden, [id]: !visible };
     setLocalHidden(next);
     const hidden = models.filter((m) => next[m.id] ?? m.hidden).map((m) => m.id);
-    try {
-      await api("/admin/api/models", { method: "POST", body: { masks_id: hidden } });
-    } catch (err) {
-      setLocalHidden(localHidden);
-      toast(`Catalog save failed: ${err instanceof Error ? err.message : "unknown"}`, "bad");
-    }
+    pendingTargetRef.current = { hiddenIds: hidden, localState: next };
+    void drainMaskQueue();
   };
 
   const toggleProvider = async (provider: Provider, enabled: boolean) => {

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
+import { computeAutoModeOptions, computeCycleAvailableOptions } from "../lib/helpers";
 import type { CycleConfig, ModelsResponse } from "../lib/types";
 import { Card, CardHead, Empty, IconChevronDown, IconChevronUp, IconX, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
@@ -100,8 +101,15 @@ export function ConfigView() {
     void saveCycle(models);
   };
 
-  const options = [...new Set([...(catalog.models || []).map((m) => m.id), ...(cycle.models || []), ...(cycle.available || []), auto].filter(Boolean))].sort();
-  const unselected = options.filter((id) => !(cycle.models || []).includes(id));
+  const autoOptions = useMemo(
+    () => computeAutoModeOptions(catalog.models || [], auto),
+    [catalog.models, auto],
+  );
+  const cyclePool = useMemo(
+    () => computeCycleAvailableOptions(catalog.models || [], cycle.models || [], cycle.available || []),
+    [catalog.models, cycle.models, cycle.available],
+  );
+  const unselected = cyclePool.filter((id) => !(cycle.models || []).includes(id));
 
   if (loading) return <><PageHeader title="Config" sub="Auto model, web search and the cycle chain"><HealthPill /></PageHeader><Card><Empty title="Loading…" body="Reading configuration." /></Card></>;
 
@@ -118,7 +126,7 @@ export function ConfigView() {
             <p class="mb-2.5 text-xs text-dim">Requests with <span class="mono">model: "automode"</span> forward unchanged to this model.</p>
             <label class="mb-1 block text-xs font-semibold">Target model</label>
             <select class="input" value={auto} onChange={(e) => void saveAuto((e.target as HTMLSelectElement).value)}>
-              {options.map((id) => <option key={id} value={id}>{id}</option>)}
+              {autoOptions.map((id) => <option key={id} value={id}>{id}</option>)}
             </select>
             <p class="mt-1 text-[11px] text-dim">Current target: <span class="mono">{auto || "—"}</span></p>
           </div>
@@ -151,7 +159,7 @@ export function ConfigView() {
       </div>
 
       <Card>
-        <CardHead title="Model cycle" sub={`${(cycle.models || []).length} of ${options.length} selected · selected list always visible`}>
+        <CardHead title="Model cycle" sub={`${(cycle.models || []).length} of ${cyclePool.length} selected · selected list always visible`}>
           <Saved state={cycleState} />
         </CardHead>
         <div class="grid grid-cols-2 gap-4 px-[15px] py-3.5">

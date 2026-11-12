@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useMemo, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { nsToSeconds, secondsToNs } from "../lib/format";
+import { buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
 import type { Provider, TestResult } from "../lib/types";
 import { Dialog, IconPlus, IconX, Switch, useUi } from "./ui";
 
@@ -136,9 +137,10 @@ export function ProviderEditor({
     const mapping = f.mappings
       .filter((m) => m.alias.trim())
       .map((m) => {
+        const alias = m.alias.trim();
         const item: NonNullable<Provider["models"]>[number] = {
-          alias: m.alias.trim(),
-          upstream_model: m.upstream.trim() || m.alias.trim(),
+          alias,
+          upstream_model: buildUpstreamModel(alias, m.upstream),
         };
         if (m.hidden) item.hidden = true;
         const fallbacks = m.fallbacks.split(",").map((s) => s.trim()).filter(Boolean);
@@ -296,8 +298,9 @@ export function ProviderEditor({
             <div class="grid grid-cols-2 gap-3">
               <Field label="Protocol">
                 <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
-                  <option value="openai-chat">openai-chat</option>
-                  <option value="anthropic-messages">anthropic-messages</option>
+                  {getProtocolOptions(f.protocol).map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
                 </select>
               </Field>
               <Field label="TLS profile">
