@@ -80,5 +80,4 @@ var (
 	ErrTokenNoExpiryNotAllowed = errors.New("auth: admin tokens require an expiry")
 	ErrUsersExist              = errors.New("auth: users already exist; bootstrap creates the first owner only")
 	ErrAuditDetailsTooLarge    = errors.New("auth: audit details exceed 8192 bytes")
-	ErrAuditInvalidDetails     = errors.New("auth: audit details must be an object of scalar metadata")
 )

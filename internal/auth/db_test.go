@@ -271,6 +271,59 @@ func TestUsersDB(t *testing.T) {
 	}
 }
 
+func TestDisableRevokesCredentialsDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	u := createTestUser(t, db, "disable-user", RoleUser, "correct horse battery staple")
+
+	raw, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: u.ID}, DefaultSessionConfig())
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	gwRaw, _, err := CreateAPIToken(ctx, db, CreateAPITokenInput{
+		UserID: u.ID, Kind: TokenKindGateway, Name: "laptop", Expiry: TokenExpiry{NoExpiry: true},
+	})
+	if err != nil {
+		t.Fatalf("create gateway token: %v", err)
+	}
+	admRaw, _, err := CreateAPIToken(ctx, db, CreateAPITokenInput{
+		UserID: u.ID, Kind: TokenKindAdmin, Name: "ci", Scope: ScopeRead,
+	})
+	if err != nil {
+		t.Fatalf("create admin token: %v", err)
+	}
+
+	// Disabling must revoke both token kinds and sessions in the same
+	// transaction as the status change.
+	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Status: statusPtr(StatusDisabled)}); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	if _, err := ValidateSession(ctx, db, raw, time.Now(), DefaultSessionConfig()); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("disabled session still valid: %v", err)
+	}
+	if _, err := ValidateAPIToken(ctx, db, gwRaw, TokenKindGateway, time.Now()); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("disabled gateway token still valid: %v", err)
+	}
+	if _, err := ValidateAPIToken(ctx, db, admRaw, TokenKindAdmin, time.Now()); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("disabled admin token still valid: %v", err)
+	}
+
+	// Re-enabling the account must not resurrect credentials revoked by the
+	// disable transition.
+	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Status: statusPtr(StatusActive)}); err != nil {
+		t.Fatalf("re-enable user: %v", err)
+	}
+	if _, err := ValidateSession(ctx, db, raw, time.Now(), DefaultSessionConfig()); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("session resurrected after re-enable: %v", err)
+	}
+	if _, err := ValidateAPIToken(ctx, db, gwRaw, TokenKindGateway, time.Now()); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("gateway token resurrected after re-enable: %v", err)
+	}
+	if _, err := ValidateAPIToken(ctx, db, admRaw, TokenKindAdmin, time.Now()); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("admin token resurrected after re-enable: %v", err)
+	}
+}
+
 func TestConcurrentLastOwnerDemotion(t *testing.T) {
 	db := testDB(t)
 	ctx := t.Context()

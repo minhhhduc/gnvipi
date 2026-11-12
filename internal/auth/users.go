@@ -120,9 +120,12 @@ type UpdateUserInput struct {
 	MustChangePassword *bool
 }
 
-// UpdateUser applies a patch. Changing the last active owner's role or status
-// returns ErrLastOwner from the database trigger.
-func UpdateUser(ctx context.Context, q Querier, id string, in UpdateUserInput) (*User, error) {
+// UpdateUser applies a patch in one transaction. Changing the last active
+// owner's role or status returns ErrLastOwner from the database trigger.
+// Setting status to disabled also revokes every session and API token in the
+// same transaction, so re-enabling the account does not resurrect credentials
+// that were live before the disable.
+func UpdateUser(ctx context.Context, db DB, id string, in UpdateUserInput) (*User, error) {
 	var role, status *string
 	if in.Role != nil {
 		if !in.Role.Valid() {
@@ -143,7 +146,14 @@ func UpdateUser(ctx context.Context, q Querier, id string, in UpdateUserInput) (
 	if emailSet {
 		email = *in.Email
 	}
-	u, err := scanUser(q.QueryRow(ctx, `
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	u, err := scanUser(tx.QueryRow(ctx, `
 		UPDATE users SET
 			display_name = COALESCE($2::text, display_name),
 			email = CASE WHEN $3::boolean THEN NULLIF($4::text, '') ELSE email END,
@@ -156,6 +166,17 @@ func UpdateUser(ctx context.Context, q Querier, id string, in UpdateUserInput) (
 		id, in.DisplayName, emailSet, email, role, status, in.MustChangePassword))
 	if err != nil {
 		return nil, mapUserWriteError(err)
+	}
+	if in.Status != nil && *in.Status == StatusDisabled {
+		if _, err := RevokeAllSessions(ctx, tx, id); err != nil {
+			return nil, err
+		}
+		if _, err := RevokeUserAPITokens(ctx, tx, id, ""); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return u, nil
 }

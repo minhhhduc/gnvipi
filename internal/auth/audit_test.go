@@ -1,56 +1,70 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
 
-func TestSanitizeDetailsRedactsSensitiveValues(t *testing.T) {
+func TestSanitizeDetailsAllowlist(t *testing.T) {
 	clean, err := SanitizeDetails(map[string]any{
-		"user_id":    "11111111-1111-1111-1111-111111111111",
-		"role":       "owner",
-		"enabled":    true,
-		"count":      3,
-		"secret":     "super-secret",
-		"password":   "hunter2hunter2",
-		"token_name": "laptop",
-		"headers":    map[string]any{"Authorization": "Bearer abc"},
+		"user_id":          "11111111-1111-1111-1111-111111111111",
+		"name":             "Alice",
+		"role":             "owner",
+		"status":           "active",
+		"action":           "user.update",
+		"enabled":          true,
+		"count":            3,
+		"revoked_sessions": int64(2),
+		"note":             "<secret>",
+		"secret":           "super-secret",
+		"password":         "hunter2hunter2",
+		"headers":          map[string]any{"Authorization": "Bearer abc"},
 		"request": map[string]any{
 			"body":    `{"prompt":"hello"}`,
 			"api_key": "sk-live",
 			"model":   "nvidia/llama",
 		},
-		"key_env": "PROVIDER_KEY",
-		"key_ref": "vault://provider",
-		"prompt":  "tell me a secret",
+		"display_name": map[string]any{"value": "nested"},
 	})
 	if err != nil {
 		t.Fatalf("sanitize: %v", err)
 	}
-	for _, key := range []string{"secret", "password", "token_name", "headers", "key_env", "key_ref", "prompt"} {
-		if clean[key] != "[redacted]" {
-			t.Errorf("%s not redacted: %#v", key, clean[key])
+	for _, key := range []string{"note", "secret", "password", "headers", "request", "display_name"} {
+		if _, kept := clean[key]; kept {
+			t.Errorf("non-allowlisted key %q persisted: %#v", key, clean[key])
 		}
 	}
-	nested := clean["request"].(map[string]any)
-	if nested["body"] != "[redacted]" || nested["api_key"] != "[redacted]" {
-		t.Fatalf("nested values not redacted: %#v", nested)
+	if clean["role"] != "owner" || clean["count"] != 3 ||
+		clean["enabled"] != true || clean["name"] != "Alice" {
+		t.Fatalf("allowed metadata changed or dropped: %#v", clean)
 	}
-	if nested["model"] != "nvidia/llama" {
-		t.Fatalf("non-sensitive nested value lost: %#v", nested)
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if clean["role"] != "owner" || clean["count"] != 3 {
-		t.Fatalf("plain metadata changed: %#v", clean)
+	for _, forbidden := range []string{"<secret>", "super-secret", "hunter2hunter2", "Bearer abc", "sk-live", `"prompt"`} {
+		if bytes.Contains(raw, []byte(forbidden)) {
+			t.Fatalf("sanitized audit details contain %q: %s", forbidden, raw)
+		}
 	}
 }
 
-func TestSanitizeDetailsRejectsUnsupportedAndOversized(t *testing.T) {
-	if _, err := SanitizeDetails(map[string]any{"bad": make(chan int)}); !errors.Is(err, ErrAuditInvalidDetails) {
-		t.Fatalf("unsupported type: %v", err)
+func TestSanitizeDetailsDropsUnsupportedAndRejectsOversized(t *testing.T) {
+	clean, err := SanitizeDetails(map[string]any{
+		"count": make(chan int), // allowed key, non-scalar value
+		"meta":  map[string]any{"user_id": "x"},
+	})
+	if err != nil {
+		t.Fatalf("sanitize: %v", err)
 	}
-	if _, err := SanitizeDetails(map[string]any{"note": strings.Repeat("x", 9000)}); !errors.Is(err, ErrAuditDetailsTooLarge) {
+	if len(clean) != 0 {
+		t.Fatalf("non-scalar values persisted: %#v", clean)
+	}
+	if _, err := SanitizeDetails(map[string]any{"name": strings.Repeat("x", 9000)}); !errors.Is(err, ErrAuditDetailsTooLarge) {
 		t.Fatalf("oversized details: %v", err)
 	}
 }

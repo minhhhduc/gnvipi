@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"unicode/utf8"
 )
@@ -68,27 +69,34 @@ func (e AuditEntry) validate() error {
 	return nil
 }
 
-// Sensitive audit detail keys are removed rather than trusted to callers.
-var sensitiveDetailFragments = []string{
-	"secret", "password", "passwd", "token", "authorization",
-	"cookie", "api_key", "apikey", "credential", "header", "body", "prompt",
+// allowedAuditKeys is an allowlist of metadata keys. Audit details are
+// long-lived and owner-readable, so anything not explicitly safe is dropped
+// instead of being persisted.
+var allowedAuditKeys = map[string]struct{}{
+	"id": {}, "user_id": {}, "key_id": {}, "provider_id": {}, "request_id": {},
+	"target_id": {}, "actor_id": {},
+	"name": {}, "username": {}, "display_name": {}, "provider_name": {},
+	"key_name": {}, "target_name": {}, "model": {}, "alias": {},
+	"action": {}, "status": {}, "role": {}, "kind": {}, "scope": {},
+	"enabled": {}, "disabled": {}, "success": {}, "hidden": {}, "deleted": {},
+	"must_change": {}, "active": {},
+	"count": {}, "total": {}, "revoked_sessions": {}, "revoked_tokens": {},
 }
 
-// SanitizeDetails returns a copy of details with secret-like keys replaced and
-// rejects unsupported value shapes. This keeps headers, bodies, prompts,
-// tokens, env values and refs out of the long-lived audit table.
+// SanitizeDetails returns only allowlisted scalar metadata. Unknown keys and
+// objects, arrays and other non-scalar values are dropped, so a caller cannot
+// persist a header, body, prompt, token or other arbitrary value.
 func SanitizeDetails(details map[string]any) (map[string]any, error) {
 	out := make(map[string]any, len(details))
 	for k, v := range details {
-		if sensitiveDetailKey(k) {
-			out[k] = "[redacted]"
+		if _, allowed := allowedAuditKeys[strings.ToLower(k)]; !allowed {
 			continue
 		}
-		clean, err := sanitizeValue(v, 0)
-		if err != nil {
-			return nil, err
+		scalar, ok := auditScalar(v)
+		if !ok {
+			continue
 		}
-		out[k] = clean
+		out[k] = scalar
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
@@ -100,57 +108,23 @@ func SanitizeDetails(details map[string]any) (map[string]any, error) {
 	return out, nil
 }
 
-func sensitiveDetailKey(key string) bool {
-	k := strings.ToLower(key)
-	for _, fragment := range sensitiveDetailFragments {
-		if strings.Contains(k, fragment) {
-			return true
-		}
-	}
-	return k == "env" || k == "ref" || strings.HasSuffix(k, "_env") || strings.HasSuffix(k, "_ref")
-}
-
-func sanitizeValue(v any, depth int) (any, error) {
-	if depth > 8 {
-		return nil, ErrAuditInvalidDetails
-	}
+func auditScalar(v any) (any, bool) {
 	switch x := v.(type) {
-	case nil, bool, string,
+	case string, bool, json.Number,
 		int, int8, int16, int32, int64,
-		uint, uint8, uint16, uint32, uint64,
-		float32, float64, json.Number:
-		return x, nil
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, child := range x {
-			if sensitiveDetailKey(k) {
-				out[k] = "[redacted]"
-				continue
-			}
-			clean, err := sanitizeValue(child, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			out[k] = clean
+		uint, uint8, uint16, uint32, uint64:
+		return x, true
+	case float32:
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return nil, false
 		}
-		return out, nil
-	case []any:
-		out := make([]any, len(x))
-		for i, child := range x {
-			clean, err := sanitizeValue(child, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = clean
+		return x, true
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, false
 		}
-		return out, nil
-	case []string:
-		out := make([]any, len(x))
-		for i, child := range x {
-			out[i] = child
-		}
-		return out, nil
+		return x, true
 	default:
-		return nil, ErrAuditInvalidDetails
+		return nil, false
 	}
 }
