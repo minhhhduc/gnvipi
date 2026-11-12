@@ -4,7 +4,7 @@ import { useUi } from "../components/ui";
 import type { ModelsResponse, Provider, TestResult } from "../lib/types";
 import { Card, CardHead, Dialog, Empty, IconDots, PageHeader, Switch } from "../components/ui";
 import { HealthPill } from "../components/Shell";
-import { ProviderEditor } from "../components/ProviderEditor";
+import { formatProviderTestResult, ProviderEditor, ProviderTestResultBadge } from "../components/ProviderEditor";
 
 export function ModelsView() {
   const { toast, setBanner } = useUi();
@@ -92,13 +92,28 @@ export function ModelsView() {
     }
   };
 
+  const copyBaseUrl = async (provider: Provider) => {
+    try {
+      await navigator.clipboard.writeText(provider.base_url);
+      toast(`Copied ${provider.name} base URL`);
+    } catch (err) {
+      toast(`Copy failed: ${err instanceof Error ? err.message : "clipboard unavailable"}`, "bad");
+    }
+  };
+
   const runTest = async (provider: Provider) => {
     setMenu(null);
     try {
       const result = await api<TestResult>(`/admin/api/providers/${encodeURIComponent(provider.id)}/test`, { method: "POST", body: {} });
       setTests((prev) => ({ ...prev, [provider.id]: result }));
+      setBanner(
+        result.ok ? null : `Provider test failed: ${provider.name}: ${formatProviderTestResult(result)}`,
+        result.ok ? undefined : () => void runTest(provider),
+      );
     } catch (err) {
-      setTests((prev) => ({ ...prev, [provider.id]: { ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" } }));
+      const result: TestResult = { ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" };
+      setTests((prev) => ({ ...prev, [provider.id]: result }));
+      setBanner(`Provider test failed: ${provider.name}: ${formatProviderTestResult(result)}`, () => void runTest(provider));
     }
   };
 
@@ -191,9 +206,16 @@ export function ModelsView() {
                     <IconDots />
                   </button>
                 </div>
-                <div class="mt-1.5 flex items-center gap-2">
-                  <span class="mono max-w-[270px] truncate text-[11px] text-dim" title={p.base_url}>{p.base_url}</span>
-                  <span class="ml-auto whitespace-nowrap text-[11px] text-dim">{(p.models || []).length} aliases</span>
+                <div class="mt-1.5 flex items-start gap-2">
+                  <span class="mono line-clamp-2 min-w-0 flex-1 break-all text-[11px] leading-4 text-dim" title={p.base_url}>{p.base_url}</span>
+                  <button
+                    class="btn btn-sm shrink-0"
+                    aria-label={`Copy base URL for ${p.name}`}
+                    title="Copy base URL"
+                    onClick={() => void copyBaseUrl(p)}
+                  >
+                    Copy
+                  </button>
                   <Switch checked={!!p.enabled} onChange={(v) => void toggleProvider(p, v)} label={`Enable ${p.id}`} />
                 </div>
                 <div class="mt-2 flex flex-wrap items-center gap-1.5">
@@ -202,13 +224,12 @@ export function ModelsView() {
                       {m.alias}{m.hidden ? " (hidden)" : ""}
                     </span>
                   ))}
-                  <span class="ml-auto whitespace-nowrap text-[11px] text-dim">
-                    {tests[p.id]
-                      ? tests[p.id].ok
-                        ? `last test OK${tests[p.id].latency_ms != null ? ` · ${tests[p.id].latency_ms}ms` : ""}`
-                        : `last test ${tests[p.id].status}`
-                      : "not tested"}
-                  </span>
+                  <span class="whitespace-nowrap text-[11px] text-dim">{(p.models || []).length} aliases</span>
+                  {tests[p.id] ? (
+                    <ProviderTestResultBadge result={tests[p.id]} className="ml-auto max-w-full justify-end" />
+                  ) : (
+                    <span class="ml-auto whitespace-nowrap text-[11px] text-dim">not tested</span>
+                  )}
                 </div>
                 {menu === p.id && (
                   <div class="absolute right-2 top-10 z-10 w-[150px] rounded-lg border border-line2 bg-panel p-1 shadow-lg">

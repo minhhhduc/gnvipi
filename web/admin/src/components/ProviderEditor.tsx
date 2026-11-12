@@ -44,6 +44,33 @@ function parseJson(value: string, field: string): { value?: Record<string, unkno
   }
 }
 
+export function formatProviderTestResult(result: TestResult): string {
+  const detail = result.message || result.error;
+  return [
+    result.latency_ms != null ? `${result.latency_ms}ms` : null,
+    result.status,
+    result.status_code != null ? `HTTP ${result.status_code}` : null,
+    detail || null,
+  ].filter(Boolean).join(" · ");
+}
+
+export function ProviderTestResultBadge({
+  result,
+  className = "",
+}: {
+  result: TestResult;
+  className?: string;
+}) {
+  return (
+    <div class={`flex min-w-0 flex-wrap items-center gap-1.5 ${className}`}>
+      <span class={`pill ${result.ok ? "pill-ok" : "pill-bad"}`}>{result.ok ? "OK" : "FAIL"}</span>
+      <span class={`min-w-0 max-w-full break-words text-[11px] ${result.ok ? "text-dim" : "text-bad"}`}>
+        last test in this session · {formatProviderTestResult(result)}
+      </span>
+    </div>
+  );
+}
+
 function init(provider: Provider | null) {
   return {
     id: provider?.id || "",
@@ -243,8 +270,14 @@ export function ProviderEditor({
         { method: "POST", body: payload },
       );
       setTest(result);
+      setBanner(
+        result.ok ? null : `Provider test failed: ${payload.name}: ${formatProviderTestResult(result)}`,
+        result.ok ? undefined : () => void runTest(),
+      );
     } catch (err) {
-      setTest({ ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" });
+      const result: TestResult = { ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" };
+      setTest(result);
+      setBanner(`Provider test failed: ${payload.name}: ${formatProviderTestResult(result)}`, () => void runTest());
     } finally {
       setTesting(false);
     }
@@ -438,14 +471,8 @@ export function ProviderEditor({
           </Section>
         </div>
 
-        <div class="flex items-center gap-2 border-t border-line bg-panel2 px-[18px] py-3">
-          {test && (
-            <span class={`pill ${test.ok ? "pill-ok" : "pill-bad"}`}>
-              {test.ok ? "last test OK" : `last test ${test.status}`}
-              {test.latency_ms != null ? ` · ${test.latency_ms}ms` : ""}
-              {test.status_code ? ` · ${test.status_code}` : ""}
-            </span>
-          )}
+        <div class="flex flex-wrap items-center gap-2 border-t border-line bg-panel2 px-[18px] py-3">
+          {test && <ProviderTestResultBadge result={test} className="w-full" />}
           <span class="ml-auto" />
           <button class="btn" onClick={runTest} disabled={testing || saving}>
             {testing ? "Testing…" : "Test connection"}
