@@ -41,8 +41,8 @@ func TestResolveKeyCredentialSourceMatrix(t *testing.T) {
 	})
 
 	t.Run("header environment credential", func(t *testing.T) {
-		t.Setenv("GNVIPI_TEST_KEY_ENV", "env-secret")
-		key := KeyRow{ID: "k", ProviderID: "p", OwnerID: "u", Enabled: true, AuthScheme: SchemeHeader, AuthHeaderName: "X-Key", KeyEnv: "GNVIPI_TEST_KEY_ENV"}
+		t.Setenv("GNVIPI_KEY_TEST_ENV", "env-secret")
+		key := KeyRow{ID: "k", ProviderID: "p", OwnerID: "u", Enabled: true, AuthScheme: SchemeHeader, AuthHeaderName: "X-Key", KeyEnv: "GNVIPI_KEY_TEST_ENV"}
 		got, err := ResolveKeyCredential(ctx, key, nil, nil)
 		if err != nil || got.Raw != "env-secret" {
 			t.Fatalf("got %+v, %v", got, err)
@@ -50,7 +50,7 @@ func TestResolveKeyCredentialSourceMatrix(t *testing.T) {
 	})
 
 	t.Run("missing environment variable is unavailable", func(t *testing.T) {
-		key := KeyRow{ID: "k", ProviderID: "p", OwnerID: "u", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_DEFINITELY_UNSET"}
+		key := KeyRow{ID: "k", ProviderID: "p", OwnerID: "u", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_DEFINITELY_UNSET"}
 		if _, err := ResolveKeyCredential(ctx, key, nil, nil); !errors.Is(err, ErrCredentialUnavailable) {
 			t.Fatalf("error = %v", err)
 		}
@@ -80,15 +80,15 @@ func TestResolveKeyCredentialSourceMatrix(t *testing.T) {
 
 	t.Run("multiple sources rejected", func(t *testing.T) {
 		key, ring := sealedKey(t, SchemeBearer, "secret")
-		key.KeyEnv = "GNVIPI_TEST_KEY_ENV"
-		t.Setenv("GNVIPI_TEST_KEY_ENV", "other")
+		key.KeyEnv = "GNVIPI_KEY_TEST_ENV"
+		t.Setenv("GNVIPI_KEY_TEST_ENV", "other")
 		if _, err := ResolveKeyCredential(ctx, key, ring, nil); !errors.Is(err, ErrInvalidCredentialSource) {
 			t.Fatalf("error = %v", err)
 		}
 	})
 
 	t.Run("none with credential rejected", func(t *testing.T) {
-		key := KeyRow{ID: "k", AuthScheme: SchemeNone, Enabled: true, KeyEnv: "GNVIPI_TEST_KEY_ENV"}
+		key := KeyRow{ID: "k", AuthScheme: SchemeNone, Enabled: true, KeyEnv: "GNVIPI_KEY_TEST_ENV"}
 		if _, err := ResolveKeyCredential(ctx, key, nil, nil); !errors.Is(err, ErrInvalidCredentialSource) {
 			t.Fatalf("error = %v", err)
 		}
@@ -103,7 +103,7 @@ func TestResolveKeyCredentialSourceMatrix(t *testing.T) {
 
 	t.Run("decrypt failure does not fall back to env", func(t *testing.T) {
 		key, ring := sealedKey(t, SchemeBearer, "original")
-		t.Setenv("GNVIPI_TEST_KEY_ENV", "fallback")
+		t.Setenv("GNVIPI_KEY_TEST_ENV", "fallback")
 		key.KeyEnv = ""
 		key.SecretEnc = append([]byte(nil), key.SecretEnc...)
 		key.SecretEnc[0] ^= 0xff
@@ -187,11 +187,11 @@ func TestApplyKeyPatchClearSecret(t *testing.T) {
 	if next.HasSecret() || next.SecretNonce != nil || next.SecretKVer != 0 || next.SecretLast4 != "" {
 		t.Fatalf("secret not cleared: %+v", next)
 	}
-	replaced, err := ApplyKeyPatch(sealed, KeyPatch{ClearSecret: true, KeyEnv: ptr("GNVIPI_TEST_KEY_ENV")}, ring)
+	replaced, err := ApplyKeyPatch(sealed, KeyPatch{ClearSecret: true, KeyEnv: ptr("GNVIPI_KEY_TEST_ENV")}, ring)
 	if err != nil {
 		t.Fatalf("clear with replacement: %v", err)
 	}
-	if replaced.HasSecret() || replaced.KeyEnv != "GNVIPI_TEST_KEY_ENV" {
+	if replaced.HasSecret() || replaced.KeyEnv != "GNVIPI_KEY_TEST_ENV" {
 		t.Fatalf("unexpected replacement: %+v", replaced)
 	}
 }
@@ -257,11 +257,11 @@ func TestApplyKeyPatchEnvAndRefExclusive(t *testing.T) {
 	ring := testKeyring(t)
 	cur, _ := sealedKey(t, SchemeBearer, "secret")
 
-	next, err := ApplyKeyPatch(cur, KeyPatch{KeyEnv: ptr("GNVIPI_TEST_KEY_ENV")}, ring)
+	next, err := ApplyKeyPatch(cur, KeyPatch{KeyEnv: ptr("GNVIPI_KEY_TEST_ENV")}, ring)
 	if err != nil {
 		t.Fatalf("env patch: %v", err)
 	}
-	if next.HasSecret() || next.KeyEnv != "GNVIPI_TEST_KEY_ENV" || next.KeyRef != "" {
+	if next.HasSecret() || next.KeyEnv != "GNVIPI_KEY_TEST_ENV" || next.KeyRef != "" {
 		t.Fatalf("unexpected env patch: %+v", next)
 	}
 	next, err = ApplyKeyPatch(cur, KeyPatch{KeyRef: ptr("import:foo")}, ring)
@@ -277,3 +277,27 @@ func TestApplyKeyPatchEnvAndRefExclusive(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestKeyEnvAllowlist(t *testing.T) {
+	for _, name := range []string{"GNVIPI_MASTER_KEY", "GNVIPI_DATABASE_URL", "GNVIPI_PASSWORD_PEPPER", "GNVIPI_ADMIN_TOKEN", "OTHER_KEY", "GNVIPI_KEY_"} {
+		if err := validateKeyEnvName(name); err == nil {
+			t.Errorf("validateKeyEnvName(%q) accepted reserved/invalid name", name)
+		}
+	}
+	if err := validateKeyEnvName("GNVIPI_KEY_OPENROUTER"); err != nil {
+		t.Fatalf("valid key env rejected: %v", err)
+	}
+	t.Setenv("GNVIPI_KEY_OPENROUTER", "sk-test")
+	key := KeyRow{ID: "k1", ProviderID: "p1", OwnerID: "u1", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_OPENROUTER"}
+	got, err := ResolveKeyCredential(context.Background(), key, nil, nil)
+	if err != nil || got.Raw != "sk-test" {
+		t.Fatalf("resolve allowlisted env = %+v, %v", got, err)
+	}
+	key.KeyEnv = "GNVIPI_MASTER_KEY"
+	if _, err := ResolveKeyCredential(context.Background(), key, nil, nil); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("reserved env error = %v, want ErrInvalidCredentialSource", err)
+	}
+	if _, err := ApplyKeyPatch(key, KeyPatch{KeyEnv: &key.KeyEnv}, nil); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("reserved env patch error = %v", err)
+	}
+}

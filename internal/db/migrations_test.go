@@ -27,6 +27,9 @@ func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("GNVIPI_TEST_DATABASE_URL"))
 	if dsn == "" {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when CI=true")
+		}
 		t.Skip("GNVIPI_TEST_DATABASE_URL is not set; point it at a disposable PostgreSQL database to run schema integration tests")
 	}
 	return dsn

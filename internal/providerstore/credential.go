@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // RefResolver resolves provider_keys.key_ref values from the imported secrets
@@ -70,6 +71,9 @@ func ResolveKeyCredential(ctx context.Context, key KeyRow, keyring *Keyring, ref
 		}
 		return credentialFromPlaintext(key.AuthScheme, plaintext)
 	case key.KeyEnv != "":
+		if err := validateKeyEnvName(key.KeyEnv); err != nil {
+			return ResolvedCredential{}, fmt.Errorf("%w: key %s: %w", ErrInvalidCredentialSource, key.ID, err)
+		}
 		value, ok := os.LookupEnv(key.KeyEnv)
 		if !ok || value == "" {
 			return ResolvedCredential{}, fmt.Errorf("%w: key %s environment credential is empty", ErrCredentialUnavailable, key.ID)
@@ -87,6 +91,21 @@ func ResolveKeyCredential(ctx context.Context, key KeyRow, keyring *Keyring, ref
 	default:
 		return ResolvedCredential{}, fmt.Errorf("%w: enabled key %s has no credential", ErrInvalidCredentialSource, key.ID)
 	}
+}
+
+// validateKeyEnvName confines key_env to operator-provisioned credential
+// variables. Without this allowlist a key could read GNVIPI_MASTER_KEY,
+// database DSNs or admin tokens and send them upstream.
+func validateKeyEnvName(name string) error {
+	if !strings.HasPrefix(name, "GNVIPI_KEY_") || name == "GNVIPI_KEY_" {
+		return fmt.Errorf("key_env must use the GNVIPI_KEY_ prefix")
+	}
+	switch name {
+	case "GNVIPI_MASTER_KEY", "GNVIPI_DATABASE_URL", "GNVIPI_MIGRATION_DATABASE_URL",
+		"GNVIPI_PASSWORD_PEPPER", "GNVIPI_ADMIN_TOKEN", "GNVIPI_GATEWAY_TOKEN":
+		return fmt.Errorf("key_env %q is reserved", name)
+	}
+	return nil
 }
 
 func credentialFromPlaintext(scheme string, plaintext []byte) (ResolvedCredential, error) {
@@ -163,6 +182,11 @@ func ApplyKeyPatch(cur KeyRow, patch KeyPatch, keyring *Keyring) (KeyRow, error)
 		clearSecret(&next)
 	}
 	if patch.KeyEnv != nil {
+		if *patch.KeyEnv != "" {
+			if err := validateKeyEnvName(*patch.KeyEnv); err != nil {
+				return KeyRow{}, fmt.Errorf("%w: %w", ErrInvalidCredentialSource, err)
+			}
+		}
 		next.KeyEnv = *patch.KeyEnv
 		if next.KeyEnv != "" {
 			clearSecret(&next)

@@ -24,6 +24,9 @@ func TestNextBackoff(t *testing.T) {
 func TestDBRowSourceLoadConfig(t *testing.T) {
 	dsn := os.Getenv("GNVIPI_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when CI=true")
+		}
 		t.Skip("GNVIPI_TEST_DATABASE_URL is not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
