@@ -1,11 +1,32 @@
 package providerstore
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 )
+
+func TestUserProviderSummaryRedactsSensitiveConfig(t *testing.T) {
+	row := validProviderRow("p1", true)
+	row.ProxyURL = "https://proxy.example"
+	row.Headers = []byte(`{"Authorization":"secret"}`)
+	row.ExtraBody = []byte(`{"api_key":"secret"}`)
+	row.Extensions = []byte(`{"secret":"value"}`)
+
+	data, err := json.Marshal(UserProviderSummary(row))
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(fields) != 3 || fields["id"] != "p1" || fields["name"] != "p1" || fields["protocol"] != "openai-chat" {
+		t.Fatalf("user provider fields = %s", data)
+	}
+}
 
 func TestLegacyViewAuthMapping(t *testing.T) {
 	row := validProviderRow("p1", true)
@@ -52,7 +73,7 @@ func TestLegacyViewNeverReturnsStoredSecret(t *testing.T) {
 }
 
 func TestLegacyViewKeyEnvAndRefVisibility(t *testing.T) {
-	key := KeyRow{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "key", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "SOME_ENV", KeyRef: "import:foo"}
+	key := KeyRow{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "key", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_SOME_ENV", KeyRef: "import:foo"}
 
 	view, err := LegacyView(validProviderRow("p1", true), []KeyRow{key}, nil, LegacyViewOptions{})
 	if err != nil {
@@ -66,7 +87,7 @@ func TestLegacyViewKeyEnvAndRefVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy view: %v", err)
 	}
-	if view.Auth.KeyEnv != "SOME_ENV" || view.Auth.KeyRef != "import:foo" {
+	if view.Auth.KeyEnv != "GNVIPI_KEY_SOME_ENV" || view.Auth.KeyRef != "import:foo" {
 		t.Fatalf("metadata = %+v", view.Auth)
 	}
 }

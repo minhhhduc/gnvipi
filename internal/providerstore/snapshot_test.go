@@ -79,10 +79,14 @@ func TestBuildSnapshotRejectsInvalidRows(t *testing.T) {
 		"sensitive config": func(rows *Rows) {
 			rows.Providers[0].BaseURL = "https://user:pass@example.com/v1"
 		},
+		"unsafe key env": func(rows *Rows) {
+			rows.Keys[0].AuthScheme = SchemeBearer
+			rows.Keys[0].KeyEnv = "GNVIPI_MASTER_KEY"
+		},
 		"shared credential key": func(rows *Rows) {
 			rows.Keys[0].OwnerID = ""
 			rows.Keys[0].AuthScheme = SchemeBearer
-			rows.Keys[0].KeyEnv = "GNVIPI_TEST_KEY_ENV"
+			rows.Keys[0].KeyEnv = "GNVIPI_KEY_TEST_ENV"
 			rows.KeyModels[0].OwnerID = ""
 		},
 	}

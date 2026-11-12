@@ -317,7 +317,7 @@ func TestRouterTriesAllCandidatesInWinningTier(t *testing.T) {
 	rows := Rows{
 		Providers: []ProviderRow{validProviderRow("p1", true)},
 		Keys: []KeyRow{
-			{ID: "k1-env", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_ROUTER_TEST_UNSET"},
+			{ID: "k1-env", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_ROUTER_TEST_UNSET"},
 			testKey("k2-ok", "p1", "u1", SchemeNone),
 		},
 		KeyModels: []KeyModelRow{
@@ -344,7 +344,7 @@ func TestRouterAuditEvents(t *testing.T) {
 	rows := Rows{
 		Providers: []ProviderRow{validProviderRow("p1", true)},
 		Keys: []KeyRow{
-			{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_ROUTER_TEST_UNSET"},
+			{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_ROUTER_TEST_UNSET"},
 		},
 		KeyModels: []KeyModelRow{exactModel("k1", "p1", "u1", "m", "up")},
 	}
@@ -384,7 +384,7 @@ func TestRouterSkipsUnresolvableCredential(t *testing.T) {
 	rows := Rows{
 		Providers: []ProviderRow{validProviderRow("p1", true)},
 		Keys: []KeyRow{
-			{ID: "k-env", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_ROUTER_TEST_UNSET"},
+			{ID: "k-env", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_KEY_ROUTER_TEST_UNSET"},
 			testKey("k-fb", "p1", "u1", SchemeNone),
 		},
 		KeyModels: []KeyModelRow{

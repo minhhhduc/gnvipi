@@ -320,8 +320,10 @@ func ValidateKeyRow(k KeyRow) error {
 	} else if k.AuthHeaderName != "" {
 		return fmt.Errorf("%w: key %s sets auth_header_name for scheme %s", ErrInvalidCredentialSource, k.ID, k.AuthScheme)
 	}
-	if k.KeyEnv != "" && !envNamePattern.MatchString(k.KeyEnv) {
-		return fmt.Errorf("%w: key %s has invalid key_env", ErrInvalidCredentialSource, k.ID)
+	if k.KeyEnv != "" {
+		if err := validateKeyEnvName(k.KeyEnv); err != nil {
+			return fmt.Errorf("%w: key %s has invalid key_env: %w", ErrInvalidCredentialSource, k.ID, err)
+		}
 	}
 	if k.KeyRef != "" {
 		if len(k.KeyRef) > 512 || strings.ContainsAny(k.KeyRef, "\x00\r\n") {

@@ -189,7 +189,7 @@ CREATE TABLE provider_keys (
     CHECK (secret_last4 IS NULL OR length(secret_last4) <= 8),
   CONSTRAINT provider_keys_key_env_syntax
     CHECK (key_env IS NULL
-           OR key_env ~ '^[A-Za-z_][A-Za-z0-9_]{0,127}$'),
+           OR key_env ~ '^GNVIPI_KEY_[A-Za-z0-9_]+$'),
   CONSTRAINT provider_keys_key_ref_syntax
     CHECK (key_ref IS NULL
            OR (length(key_ref) BETWEEN 1 AND 512
@@ -208,7 +208,7 @@ CREATE TABLE provider_keys (
   CONSTRAINT provider_keys_credential_required
     CHECK (auth_scheme = 'none'
            OR NOT enabled
-           OR num_nonnulls(secret_enc, key_env, key_ref) = 1),
+           OR num_nonnulls(secret_enc, key_env, key_ref) >= 1),
   CONSTRAINT provider_keys_none_clears_credentials
     CHECK (auth_scheme <> 'none'
            OR (secret_enc IS NULL AND secret_nonce IS NULL

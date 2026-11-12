@@ -264,12 +264,15 @@ func TestApplyKeyPatchEnvAndRefExclusive(t *testing.T) {
 	if next.HasSecret() || next.KeyEnv != "GNVIPI_KEY_TEST_ENV" || next.KeyRef != "" {
 		t.Fatalf("unexpected env patch: %+v", next)
 	}
-	next, err = ApplyKeyPatch(cur, KeyPatch{KeyRef: ptr("import:foo")}, ring)
+	if _, err := ApplyKeyPatch(cur, KeyPatch{KeyRef: ptr("import:foo")}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("unprivileged ref patch error = %v, want ErrInvalidCredentialSource", err)
+	}
+	next, err = ApplyKeyPatch(cur, KeyPatch{KeyRef: ptr("import:foo"), AllowKeyRef: true}, ring)
 	if err != nil {
-		t.Fatalf("ref patch: %v", err)
+		t.Fatalf("privileged ref patch: %v", err)
 	}
 	if next.HasSecret() || next.KeyRef != "import:foo" || next.KeyEnv != "" {
-		t.Fatalf("unexpected ref patch: %+v", next)
+		t.Fatalf("unexpected privileged ref patch: %+v", next)
 	}
 	if _, err := ApplyKeyPatch(cur, KeyPatch{KeyEnv: ptr("A"), KeyRef: ptr("B")}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
 		t.Fatalf("env+ref error = %v", err)
@@ -279,7 +282,18 @@ func TestApplyKeyPatchEnvAndRefExclusive(t *testing.T) {
 func ptr[T any](value T) *T { return &value }
 
 func TestKeyEnvAllowlist(t *testing.T) {
-	for _, name := range []string{"GNVIPI_MASTER_KEY", "GNVIPI_DATABASE_URL", "GNVIPI_PASSWORD_PEPPER", "GNVIPI_ADMIN_TOKEN", "OTHER_KEY", "GNVIPI_KEY_"} {
+	for _, name := range []string{
+		"GNVIPI_MASTER_KEY",
+		"GNVIPI_MASTER_KEY_VERSION",
+		"GNVIPI_DATABASE_URL",
+		"GNVIPI_MIGRATION_DATABASE_URL",
+		"GNVIPI_MIGRATION_CUSTOM",
+		"GNVIPI_PASSWORD_PEPPER",
+		"GNVIPI_ADMIN_TOKEN",
+		"OTHER_KEY",
+		"GNVIPI_KEY_",
+		"GNVIPI_KEY_BAD-DASH",
+	} {
 		if err := validateKeyEnvName(name); err == nil {
 			t.Errorf("validateKeyEnvName(%q) accepted reserved/invalid name", name)
 		}

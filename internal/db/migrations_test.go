@@ -307,7 +307,7 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 		cases := []kase{
 			{name: "enabled bearer without credential", owner: owner, scheme: "bearer", enabled: true, wantConstraint: "provider_keys_credential_required"},
 			{name: "enabled bearer with secret", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last"},
-			{name: "enabled bearer with two sources", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", keyEnv: "MY_KEY", wantConstraint: "provider_keys_credential_single"},
+			{name: "enabled bearer with two sources", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", keyEnv: "GNVIPI_KEY_TEST", wantConstraint: "provider_keys_credential_single"},
 			{name: "disabled bearer without credential", owner: owner, scheme: "bearer", enabled: false},
 			{name: "none with secret", owner: owner, scheme: "none", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantConstraint: "provider_keys_none_clears_credentials"},
 			{name: "shared none key", owner: nil, scheme: "none", enabled: true},
@@ -316,7 +316,9 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 			{name: "header with header name", owner: owner, scheme: "header", enabled: true, header: "x-api-key", enc: secret, nonce: nonce, kver: 1, last4: "last"},
 			{name: "bad nonce length", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: make([]byte, 11), kver: 1, last4: "last", wantConstraint: "provider_keys_nonce_length"},
 			{name: "key_ref control characters", owner: owner, scheme: "bearer", enabled: true, keyRef: "bad\x01ref", wantConstraint: "provider_keys_key_ref_syntax"},
-			{name: "key_env source", owner: owner, scheme: "bearer", enabled: true, keyEnv: "MY_KEY"},
+			{name: "key_env outside credential namespace", owner: owner, scheme: "bearer", enabled: true, keyEnv: "GNVIPI_MASTER_KEY", wantConstraint: "provider_keys_key_env_syntax"},
+			{name: "empty key_env namespace suffix", owner: owner, scheme: "bearer", enabled: true, keyEnv: "GNVIPI_KEY_", wantConstraint: "provider_keys_key_env_syntax"},
+			{name: "key_env source", owner: owner, scheme: "bearer", enabled: true, keyEnv: "GNVIPI_KEY_TEST"},
 			{name: "key_ref source", owner: owner, scheme: "bearer", enabled: true, keyRef: "vault://my/ref"},
 		}
 		for i, tc := range cases {
@@ -514,16 +516,16 @@ func TestConfigVersionBumpsPerStatement(t *testing.T) {
 			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
 			t.Fatalf("upsert settings: %v", err)
 		}
-		v++
-		expectBump(v, "settings write")
+		v += 2 // ON CONFLICT DO UPDATE fires both INSERT and UPDATE statement events
+		expectBump(v, "settings upsert")
 
 		insertUser(t, ctx, tx, "bump-user", "user")
 		expectBump(v, "user insert must not bump")
 		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE username = 'bump-user'`); err != nil {
 			t.Fatalf("delete user: %v", err)
 		}
-		v++
-		expectBump(v, "user DELETE statement")
+		v += 2 // users delete cascades through provider_keys, whose statement trigger also bumps
+		expectBump(v, "user DELETE statement plus cascade")
 
 		insertProvider(t, ctx, tx, "bump-provider")
 		v++

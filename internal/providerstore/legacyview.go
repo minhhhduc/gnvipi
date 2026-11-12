@@ -5,8 +5,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 )
+
+// ProviderSummary is the complete provider shape exposed to regular users.
+// Server routing configuration and credential metadata are intentionally absent.
+type ProviderSummary struct {
+	ID       string      `json:"id"`
+	Name     string      `json:"name"`
+	Protocol ir.Protocol `json:"protocol"`
+}
+
+// UserProviderSummary redacts owner/admin-only routing configuration.
+func UserProviderSummary(row ProviderRow) ProviderSummary {
+	return ProviderSummary{ID: row.ID, Name: row.Name, Protocol: ir.Protocol(row.Protocol)}
+}
 
 // LegacyViewOptions controls which key metadata is visible to the caller.
 type LegacyViewOptions struct {

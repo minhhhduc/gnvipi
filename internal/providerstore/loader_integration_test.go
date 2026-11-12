@@ -52,6 +52,9 @@ func TestDBRowSourceLoadConfig(t *testing.T) {
 		t.Fatalf("check schema: %v", err)
 	}
 	if !migrated {
+		if os.Getenv("GNVIPI_REQUIRE_DB_TESTS") == "true" {
+			t.Fatal("provider-key tables are not migrated while GNVIPI_REQUIRE_DB_TESTS=true")
+		}
 		t.Skip("provider-key tables are not migrated in GNVIPI_TEST_DATABASE_URL")
 	}
 

@@ -97,13 +97,17 @@ func ResolveKeyCredential(ctx context.Context, key KeyRow, keyring *Keyring, ref
 // variables. Without this allowlist a key could read GNVIPI_MASTER_KEY,
 // database DSNs or admin tokens and send them upstream.
 func validateKeyEnvName(name string) error {
-	if !strings.HasPrefix(name, "GNVIPI_KEY_") || name == "GNVIPI_KEY_" {
-		return fmt.Errorf("key_env must use the GNVIPI_KEY_ prefix")
-	}
-	switch name {
-	case "GNVIPI_MASTER_KEY", "GNVIPI_DATABASE_URL", "GNVIPI_MIGRATION_DATABASE_URL",
-		"GNVIPI_PASSWORD_PEPPER", "GNVIPI_ADMIN_TOKEN", "GNVIPI_GATEWAY_TOKEN":
+	if strings.HasPrefix(name, "GNVIPI_MASTER_KEY") ||
+		strings.HasPrefix(name, "GNVIPI_MIGRATION_") ||
+		name == "GNVIPI_DATABASE_URL" ||
+		name == "GNVIPI_MAINTENANCE_DATABASE_URL" ||
+		name == "GNVIPI_PASSWORD_PEPPER" ||
+		name == "GNVIPI_ADMIN_TOKEN" ||
+		name == "GNVIPI_GATEWAY_TOKEN" {
 		return fmt.Errorf("key_env %q is reserved", name)
+	}
+	if !strings.HasPrefix(name, "GNVIPI_KEY_") || name == "GNVIPI_KEY_" || !envNamePattern.MatchString(name) {
+		return fmt.Errorf("key_env must use the GNVIPI_KEY_* namespace")
 	}
 	return nil
 }
@@ -150,6 +154,9 @@ type KeyPatch struct {
 	KeyEnv         *string
 	KeyRef         *string
 	ClearSecret    bool
+	// AllowKeyRef is set only after owner/admin authorization. The zero value
+	// keeps regular-user and unauthenticated callers fail-closed.
+	AllowKeyRef bool
 }
 
 // ApplyKeyPatch applies clear_secret and credential-transition semantics, then
@@ -171,6 +178,9 @@ func ApplyKeyPatch(cur KeyRow, patch KeyPatch, keyring *Keyring) (KeyRow, error)
 	}
 	settingEnv := patch.KeyEnv != nil && *patch.KeyEnv != ""
 	settingRef := patch.KeyRef != nil && *patch.KeyRef != ""
+	if settingRef && !patch.AllowKeyRef {
+		return KeyRow{}, fmt.Errorf("%w: key_ref writes require owner/admin authorization", ErrInvalidCredentialSource)
+	}
 	if len(patch.Secret) > 0 && (settingEnv || settingRef) {
 		return KeyRow{}, fmt.Errorf("%w: secret, key_env and key_ref cannot coexist", ErrInvalidCredentialSource)
 	}
