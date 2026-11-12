@@ -186,7 +186,10 @@ func (DefaultRecorder) Record(c *Completion) {
 	if model == "" {
 		model = r.UpstreamModel
 	}
-	nvidia.GlobalStats.Observe(model, uint64(max(c.Usage.InputTokens, 0)), uint64(max(c.Usage.OutputTokens, 0)), c.Duration, c.TTFB, r.Stream, c.Err != nil)
+	nvidia.GlobalStats.ObserveMeta(
+		nvidia.EventMeta{RequestID: r.ID, ProviderID: r.ResolvedProvider},
+		model, uint64(max(c.Usage.InputTokens, 0)), uint64(max(c.Usage.OutputTokens, 0)),
+		c.Duration, c.TTFB, r.Stream, c.Err != nil)
 	line, err := json.Marshal(struct {
 		RequestID        string      `json:"request_id"`
 		InboundProtocol  ir.Protocol `json:"inbound_protocol"`
