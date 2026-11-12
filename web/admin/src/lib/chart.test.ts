@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { axisMax, niceTicks, segments, ttfbValues } from "./chart";
+import type { RequestEvent } from "./types";
+import { axisMax, modelSetKey, niceTicks, segments, sortRequestEvents, topModelNames, ttfbValues } from "./chart";
 import { modelPath } from "./api";
 
 describe("niceTicks", () => {
@@ -48,6 +49,72 @@ describe("ttfbValues", () => {
       { ttfb_avg_ms: 0 },
     ]);
     expect(values).toEqual([null, 120, null]);
+  });
+});
+
+describe("topModelNames", () => {
+  it("keeps its memo key stable while only request totals change", () => {
+    const first = {
+      alpha: [{ requests: 4 }],
+      beta: [{ requests: 7 }],
+      gamma: [{ requests: 1 }],
+    };
+    const nextPoll = {
+      gamma: [{ requests: 100 }],
+      beta: [{ requests: 2 }],
+      alpha: [{ requests: 20 }],
+    };
+
+    expect(topModelNames(first)).toEqual(["beta", "alpha", "gamma"]);
+    expect(modelSetKey(nextPoll)).toBe(modelSetKey(first));
+    expect(modelSetKey({ ...nextPoll, delta: [{ requests: 1 }] })).not.toBe(modelSetKey(first));
+  });
+
+  it("uses deterministic order for tied totals and limits the legend to five models", () => {
+    const byModel = Object.fromEntries(
+      ["foxtrot", "echo", "delta", "charlie", "bravo", "alpha"].map((model) => [model, [{ requests: 1 }]]),
+    );
+
+    expect(topModelNames(byModel)).toEqual(["alpha", "bravo", "charlie", "delta", "echo"]);
+  });
+});
+
+describe("sortRequestEvents", () => {
+  const earlierOk: RequestEvent = {
+    time: "2026-01-01T00:00:00Z",
+    model: "alpha",
+    streamed: false,
+    input_tokens: 1,
+    output_tokens: 10,
+    ms: 100,
+    ttfb_ms: 0,
+  };
+  const laterError: RequestEvent = {
+    time: "2026-01-01T00:01:00Z",
+    model: "zeta",
+    streamed: true,
+    input_tokens: 20,
+    output_tokens: 2,
+    ms: 300,
+    ttfb_ms: 50,
+    error: "upstream failed",
+  };
+
+  it.each([
+    ["time", earlierOk, laterError],
+    ["model", earlierOk, laterError],
+    ["streamed", earlierOk, laterError],
+    ["input_tokens", earlierOk, laterError],
+    ["output_tokens", laterError, earlierOk],
+    ["ms", earlierOk, laterError],
+    ["ttfb_ms", earlierOk, laterError],
+    ["error", earlierOk, laterError],
+  ] as const)("sorts %s in both directions without mutating the source", (key, ascendingFirst, descendingFirst) => {
+    const source = [laterError, earlierOk];
+
+    expect(sortRequestEvents(source, key, "asc")).toEqual([ascendingFirst, descendingFirst]);
+    expect(sortRequestEvents(source, key, "desc")).toEqual([descendingFirst, ascendingFirst]);
+    expect(source).toEqual([laterError, earlierOk]);
   });
 });
 

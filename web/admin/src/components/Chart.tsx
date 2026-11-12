@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { niceTicks, segments } from "../lib/chart";
 
 export interface ChartSeries {
@@ -13,25 +14,43 @@ interface Props {
   emptyMessage?: string;
 }
 
-const W = 560;
+const DEFAULT_WIDTH = 560;
+const PL = 38;
+const PR = 10;
+const PT = 8;
+const PB = 20;
 
 export function LineChart({ series, labels, height = 168, emptyMessage }: Props) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
   const pointCount = labels.length;
   const all = series.flatMap((s) => s.values).filter((v): v is number => v != null);
   const dataMax = Math.max(0, ...all);
   const ticks = niceTicks(dataMax);
   const yMax = ticks[ticks.length - 1] || 1;
+  const hasData = all.length > 0 && dataMax !== 0;
 
-  const PL = 38;
-  const PR = 10;
-  const PT = 8;
-  const PB = 20;
-  const iw = W - PL - PR;
+  useLayoutEffect(() => {
+    if (!hasData) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const initialWidth = Math.round(svg.getBoundingClientRect().width);
+    if (initialWidth > 0) setWidth(initialWidth);
+    const observer = new ResizeObserver(([entry]) => {
+      const nextWidth = Math.round(entry.contentRect.width);
+      if (nextWidth > 0) setWidth(nextWidth);
+    });
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, [hasData]);
+
+  const iw = width - PL - PR;
   const ih = height - PT - PB;
   const x = (i: number) => PL + (pointCount <= 1 ? 0 : (i / (pointCount - 1)) * iw);
   const y = (v: number) => PT + ih - (v / yMax) * ih;
 
-  if (!all.length || dataMax === 0) {
+  if (!hasData) {
     return (
       <div class="flex h-[168px] flex-col items-center justify-center gap-1 text-center text-dim">
         <span class="text-sm font-semibold text-fg">No requests yet</span>
@@ -53,10 +72,10 @@ export function LineChart({ series, labels, height = 168, emptyMessage }: Props)
           ))}
         </div>
       )}
-      <svg viewBox={`0 0 ${W} ${height}`} class="block w-full" style={{ height }} preserveAspectRatio="none">
+      <svg ref={svgRef} width="100%" height={height} class="block">
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={PL} x2={W - PR} y1={y(t)} y2={y(t)} stroke="var(--line)" stroke-width="1" />
+            <line x1={PL} x2={width - PR} y1={y(t)} y2={y(t)} stroke="var(--line)" stroke-width="1" />
             <text x={PL - 6} y={y(t) + 3.5} text-anchor="end" font-size="9" fill="var(--dim)">
               {t}
             </text>
@@ -66,7 +85,7 @@ export function LineChart({ series, labels, height = 168, emptyMessage }: Props)
           i % labelStep === 0 || i === pointCount - 1 ? (
             <text
               key={`${label}-${i}`}
-              x={i === pointCount - 1 ? W - PR : x(i)}
+              x={i === pointCount - 1 ? width - PR : x(i)}
               y={height - 4}
               text-anchor={i === pointCount - 1 ? "end" : "middle"}
               font-size="9"

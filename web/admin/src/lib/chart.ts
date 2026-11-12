@@ -1,3 +1,5 @@
+import type { RequestEvent } from "./types";
+
 export interface Point {
   value: number | null;
 }
@@ -58,4 +60,65 @@ export function ttfbValues(series: { ttfb_avg_ms: number }[]): (number | null)[]
 /** Ordered numbers from a stats series. */
 export function seriesValues(series: { requests: number }[]): number[] {
   return series.map((m) => m.requests);
+}
+
+export function modelSetKey(seriesByModel: Record<string, unknown>): string {
+  return JSON.stringify(Object.keys(seriesByModel).sort());
+}
+
+export function topModelNames(
+  seriesByModel: Record<string, { requests: number }[]>,
+  limit = 5,
+): string[] {
+  return Object.entries(seriesByModel)
+    .map(([model, series]) => ({ model, total: series.reduce((sum, minute) => sum + minute.requests, 0) }))
+    .sort((a, b) => b.total - a.total || a.model.localeCompare(b.model))
+    .slice(0, limit)
+    .map(({ model }) => model);
+}
+
+export type RequestSortKey =
+  | "time"
+  | "model"
+  | "streamed"
+  | "input_tokens"
+  | "output_tokens"
+  | "ms"
+  | "ttfb_ms"
+  | "error";
+
+export type SortDirection = "asc" | "desc";
+
+function requestSortValue(event: RequestEvent, key: RequestSortKey): string | number {
+  switch (key) {
+    case "time": {
+      const time = Date.parse(event.time);
+      return Number.isFinite(time) ? time : 0;
+    }
+    case "model":
+      return event.model;
+    case "streamed":
+      return event.streamed ? 1 : 0;
+    case "error":
+      return event.error ? 1 : 0;
+    default:
+      return event[key];
+  }
+}
+
+export function sortRequestEvents(
+  events: RequestEvent[],
+  key: RequestSortKey,
+  direction: SortDirection,
+): RequestEvent[] {
+  const factor = direction === "asc" ? 1 : -1;
+  return events.slice().sort((a, b) => {
+    const aValue = requestSortValue(a, key);
+    const bValue = requestSortValue(b, key);
+    const comparison =
+      typeof aValue === "string"
+        ? aValue.localeCompare(bValue as string)
+        : aValue - (bValue as number);
+    return comparison * factor;
+  });
 }

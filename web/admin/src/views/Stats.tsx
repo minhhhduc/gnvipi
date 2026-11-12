@@ -2,9 +2,10 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { useGateway } from "../lib/context";
-import { avg, clock, fmtCompact, fmtInt, fmtMs, fmtPercent, minuteLabel, p95 } from "../lib/format";
+import { avg, clock, fmtCompact, fmtInt, fmtMs, fmtPercent, minuteLabel, p95, uptime } from "../lib/format";
 import { clampFrame, getFrameNavState } from "../lib/helpers";
-import { seriesValues, ttfbValues } from "../lib/chart";
+import { modelSetKey, seriesValues, sortRequestEvents, topModelNames, ttfbValues } from "../lib/chart";
+import type { RequestSortKey, SortDirection } from "../lib/chart";
 import type { FrameResponse, Stats as StatsData } from "../lib/types";
 import { Card, CardHead, Empty, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
@@ -43,6 +44,11 @@ export function StatsView() {
   const [frameData, setFrameData] = useState<FrameResponse | null>(null);
   const [frameError, setFrameError] = useState<string | null>(null);
   const [retryAt, setRetryAt] = useState(0);
+  const [eventSort, setEventSort] = useState<{ key: RequestSortKey; direction: SortDirection }>({
+    key: "time",
+    direction: "desc",
+  });
+  const [pollingPaused, setPollingPaused] = useState(() => document.hidden);
   const data: StatsData = stats || {};
   const series = useMemo(
     () => (data.series || []).slice().sort((a, b) => a.minute.localeCompare(b.minute)),
@@ -66,20 +72,25 @@ export function StatsView() {
   const value = (v: string) => (unavailable ? "—" : v);
   const labels = series.map((m) => minuteLabel(m.minute));
 
-  const topModels = useMemo(() => {
-    const byModel = data.series_by_model || {};
-    return Object.entries(byModel)
-      .map(([model, ms]) => ({ model, total: ms.reduce((n, m) => n + m.requests, 0) }))
-      .sort((a, b) => b.total - a.total || a.model.localeCompare(b.model))
-      .slice(0, 5)
-      .map((entry) => entry.model);
-  }, [data.series_by_model]);
+  const seriesByModel = data.series_by_model || {};
+  const topModelKey = modelSetKey(seriesByModel);
+  const topModels = useMemo(() => topModelNames(seriesByModel), [topModelKey]);
+  const sortedEvents = useMemo(
+    () => sortRequestEvents(events, eventSort.key, eventSort.direction),
+    [events, eventSort.key, eventSort.direction],
+  );
 
   const frameRef = useRef<number | null>(frame);
   frameRef.current = frame;
   const lastReadAtRef = useRef<number>(0);
   const reqIdRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const onVisibilityChange = () => setPollingPaused(document.hidden);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
 
   useEffect(() => {
     if (frame == null || totalFrames <= 0) {
@@ -154,12 +165,37 @@ export function StatsView() {
   const now = Date.now();
   const throttled = retryAt > now;
 
+  const requestHeader = (key: RequestSortKey, label: string) => {
+    const active = eventSort.key === key;
+    const ariaSort = active ? (eventSort.direction === "asc" ? "ascending" : "descending") : "none";
+    return (
+      <th aria-sort={ariaSort}>
+        <button
+          type="button"
+          class="flex w-full cursor-pointer items-center gap-1 text-left hover:text-fg"
+          onClick={() =>
+            setEventSort((current) => ({
+              key,
+              direction: current.key === key && current.direction === "desc" ? "asc" : "desc",
+            }))
+          }
+        >
+          {label}
+          <span class="inline-block w-2 text-[8px] leading-none text-accent" aria-hidden="true">
+            {active ? (eventSort.direction === "asc" ? "▲" : "▼") : ""}
+          </span>
+        </button>
+      </th>
+    );
+  };
+
   return (
     <>
       <PageHeader title="Stats" sub="Live traffic across every upstream API">
         <HealthPill />
         <span class="text-xs text-dim">
-          {statsUpdated ? `Updated ${Math.max(0, Math.round((now - statsUpdated) / 1000))}s ago` : "Waiting for data"} · auto-refresh 2s
+          {statsUpdated ? `Updated ${Math.max(0, Math.round((now - statsUpdated) / 1000))}s ago` : "Waiting for data"} ·{" "}
+          {pollingPaused ? "auto-refresh paused" : "auto-refresh 2s"}
         </span>
       </PageHeader>
 
@@ -175,7 +211,7 @@ export function StatsView() {
         />
         <Kpi label="Avg TTFB" value={value(fmtMs(avgTtfb))} detail="last 200 events · streamed only" />
         <Kpi label="p95 latency" value={value(fmtMs(p95Ms))} detail="last 200 events" />
-        <Kpi label="Uptime" value={data.started_at ? uptimeShort(data.started_at) : "—"} detail="since process start" />
+        <Kpi label="Uptime" value={data.started_at ? uptime(data.started_at) : "—"} detail="since process start" />
       </div>
 
       <div class="mb-3 grid grid-cols-2 gap-3">
@@ -203,7 +239,7 @@ export function StatsView() {
             series={topModels.map((model, i) => ({
               label: model,
               color: COLORS.top[i % COLORS.top.length],
-              values: seriesValues(data.series_by_model?.[model] || []),
+              values: seriesValues(seriesByModel[model] || []),
             }))}
             labels={labels}
           />
@@ -256,18 +292,18 @@ export function StatsView() {
           <table class="table">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Model</th>
-                <th>Stream</th>
-                <th>In</th>
-                <th>Out</th>
-                <th>Latency</th>
-                <th>TTFB</th>
-                <th>Status</th>
+                {requestHeader("time", "Time")}
+                {requestHeader("model", "Model")}
+                {requestHeader("streamed", "Stream")}
+                {requestHeader("input_tokens", "In")}
+                {requestHeader("output_tokens", "Out")}
+                {requestHeader("ms", "Latency")}
+                {requestHeader("ttfb_ms", "TTFB")}
+                {requestHeader("error", "Status")}
               </tr>
             </thead>
             <tbody>
-              {events.map((e, i) => (
+              {sortedEvents.map((e, i) => (
                 <tr key={`${e.time}-${i}`}>
                   <td class="muted">{clock(e.time)}</td>
                   <td class="mono">{e.model}</td>
@@ -287,13 +323,4 @@ export function StatsView() {
       </Card>
     </>
   );
-}
-
-function uptimeShort(startedAt: string): string {
-  const t = Date.parse(startedAt);
-  if (!Number.isFinite(t)) return "—";
-  const secs = Math.max(0, (Date.now() - t) / 1000);
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return `${h}h ${m}m`;
 }
