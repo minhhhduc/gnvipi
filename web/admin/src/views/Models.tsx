@@ -109,11 +109,12 @@ export function ModelsView() {
       setBanner(
         result.ok ? null : `Provider test failed: ${provider.name}: ${formatProviderTestResult(result)}`,
         result.ok ? undefined : () => void runTest(provider),
+        "provider-test",
       );
     } catch (err) {
       const result: TestResult = { ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" };
       setTests((prev) => ({ ...prev, [provider.id]: result }));
-      setBanner(`Provider test failed: ${provider.name}: ${formatProviderTestResult(result)}`, () => void runTest(provider));
+      setBanner(`Provider test failed: ${provider.name}: ${formatProviderTestResult(result)}`, () => void runTest(provider), "provider-test");
     }
   };
 

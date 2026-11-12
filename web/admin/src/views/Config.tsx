@@ -191,6 +191,7 @@ export function ConfigView() {
               class="input"
               value={engine}
               onChange={(e) => chooseSearchEngine((e.target as HTMLSelectElement).value)}
+              disabled={searchState === "saving"}
               onClick={(e) => {
                 const selectedEngine = (e.currentTarget as HTMLSelectElement).value;
                 const next = syncSearchEngine(selectedEngine, searchUrl);
@@ -203,13 +204,14 @@ export function ConfigView() {
             <input
               class="input mono"
               value={searchUrl}
+              disabled={searchState === "saving"}
               onInput={(e) => {
                 const next = syncSearchUrl((e.target as HTMLInputElement).value);
                 setEngine(next.engine);
                 setSearchUrl(next.url);
               }}
             />
-            <div class="mt-2 flex justify-end"><button class="btn btn-sm" onClick={() => void saveSearch({ engine: "custom", url: searchUrl })}>Save URL</button></div>
+            <div class="mt-2 flex justify-end"><button class="btn btn-sm" disabled={searchState === "saving"} onClick={() => void saveSearch({ engine: "custom", url: searchUrl })}>Save URL</button></div>
           </div>
         </Card>
       </div>

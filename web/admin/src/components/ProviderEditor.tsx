@@ -273,11 +273,12 @@ export function ProviderEditor({
       setBanner(
         result.ok ? null : `Provider test failed: ${payload.name}: ${formatProviderTestResult(result)}`,
         result.ok ? undefined : () => void runTest(),
+        "provider-test",
       );
     } catch (err) {
       const result: TestResult = { ok: false, status: "error", error: err instanceof Error ? err.message : "Test failed" };
       setTest(result);
-      setBanner(`Provider test failed: ${payload.name}: ${formatProviderTestResult(result)}`, () => void runTest());
+      setBanner(`Provider test failed: ${payload.name}: ${formatProviderTestResult(result)}`, () => void runTest(), "provider-test");
     } finally {
       setTesting(false);
     }

@@ -4,7 +4,7 @@ import type { ComponentChildren } from "preact";
 
 export interface UiApi {
   toast: (message: string, kind?: "ok" | "bad") => void;
-  setBanner: (message: string | null, retry?: () => void) => void;
+  setBanner: (message: string | null, retry?: () => void, owner?: string) => void;
 }
 
 export const UiContext = createContext<UiApi>({

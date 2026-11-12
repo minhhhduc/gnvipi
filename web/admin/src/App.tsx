@@ -17,7 +17,7 @@ export function App() {
   );
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsUpdated, setStatsUpdated] = useState<number | null>(null);
-  const [banner, setBannerState] = useState<{ message: string; retry?: () => void } | null>(null);
+  const [banner, setBannerState] = useState<{ message: string; retry?: () => void; owner?: string } | null>(null);
   const [toasts, setToasts] = useState<{ id: number; message: string; kind: "ok" | "bad" }[]>([]);
   const toastId = useRef(0);
   const statsErrorShown = useRef(false);
@@ -53,6 +53,7 @@ export function App() {
         setBannerState({
           message: `Stats unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
           retry: refreshStats,
+          owner: "stats",
         });
       });
   }, []);
@@ -92,7 +93,8 @@ export function App() {
       setToasts((prev) => [...prev, { id, message, kind }]);
       setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
     },
-    setBanner: (message, retry) => setBannerState(message ? { message, retry } : null),
+    setBanner: (message, retry, owner) =>
+      setBannerState((current) => message ? { message, retry, owner } : !owner || current?.owner === owner ? null : current),
   };
 
   const body =
