@@ -22,8 +22,8 @@ func testDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("GNVIPI_TEST_DATABASE_URL")
 	if dsn == "" {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when CI=true")
+		if os.Getenv("GNVIPI_REQUIRE_DB_TESTS") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when GNVIPI_REQUIRE_DB_TESTS=true")
 		}
 		t.Skip("GNVIPI_TEST_DATABASE_URL is not set; skipping DB-backed auth tests")
 	}

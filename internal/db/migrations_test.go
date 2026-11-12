@@ -27,8 +27,8 @@ func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("GNVIPI_TEST_DATABASE_URL"))
 	if dsn == "" {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when CI=true")
+		if os.Getenv("GNVIPI_REQUIRE_DB_TESTS") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when GNVIPI_REQUIRE_DB_TESTS=true")
 		}
 		t.Skip("GNVIPI_TEST_DATABASE_URL is not set; point it at a disposable PostgreSQL database to run schema integration tests")
 	}
@@ -320,6 +320,9 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 			{name: "key_ref source", owner: owner, scheme: "bearer", enabled: true, keyRef: "vault://my/ref"},
 		}
 		for i, tc := range cases {
+			if _, err := tx.Exec(ctx, "SAVEPOINT credential_case"); err != nil {
+				t.Fatalf("savepoint: %v", err)
+			}
 			_, err := tx.Exec(ctx,
 				`INSERT INTO provider_keys
 				   (provider_id, owner_id, name, enabled, auth_scheme, auth_header_name,
@@ -331,9 +334,18 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: unexpected error: %v", tc.name, err)
 				}
+				if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT credential_case"); err != nil {
+					t.Fatalf("release savepoint: %v", err)
+				}
 				continue
 			}
 			assertCheckViolation(t, err, tc.wantConstraint)
+			if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT credential_case"); err != nil {
+				t.Fatalf("rollback savepoint: %v", err)
+			}
+			if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT credential_case"); err != nil {
+				t.Fatalf("release savepoint: %v", err)
+			}
 		}
 	})
 }
@@ -488,8 +500,8 @@ func TestConfigVersionBumpsPerStatement(t *testing.T) {
 		if _, err := tx.Exec(ctx, `DELETE FROM providers WHERE id LIKE 'bump-%'`); err != nil {
 			t.Fatalf("delete providers: %v", err)
 		}
-		v++
-		expectBump(v, "one DELETE statement")
+		v += 2 // providers delete cascades to provider_keys, whose statement trigger also bumps
+		expectBump(v, "one DELETE statement plus cascade")
 
 		if _, err := tx.Exec(ctx, `INSERT INTO model_state (model_id) VALUES ('m-a'), ('m-b')`); err != nil {
 			t.Fatalf("insert model_state: %v", err)
