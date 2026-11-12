@@ -45,7 +45,7 @@ export function Shell({
   const { navigate } = useGateway();
   return (
     <div class="flex min-h-screen">
-      <aside class="flex w-[220px] flex-none flex-col gap-1 border-r border-line bg-panel px-[14px] py-[18px]">
+      <aside class="sticky top-0 flex h-screen w-[220px] flex-none flex-col gap-1 self-start overflow-y-auto border-r border-line bg-panel px-[14px] py-[18px]">
         <div class="mb-4 flex items-center gap-2 px-1.5 pt-0.5">
           <span class="grid size-[30px] place-items-center rounded-[9px] bg-accent text-xs font-extrabold text-white">
             GW
