@@ -53,6 +53,45 @@ if ($busy) {
   throw "Port $Port is in use by $owner (PID $($busy[0].OwningProcess)) - terminate it or specify another -Port"
 }
 
+# -Claude authenticates with a real gateway token; the old hardcoded literal is
+# rejected. Never print the token.
+$gatewayToken = $env:GNVIPI_GATEWAY_TOKEN
+if ($gatewayToken) { $gatewayToken = $gatewayToken.Trim() }
+if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
+  Write-Host "GNVIPI_GATEWAY_TOKEN is required for -Claude; 'local-gateway' is rejected." -ForegroundColor Red
+  Write-Host "Create one with: .\bin\serve.exe admin create-owner --username <owner> --with-gateway-token"
+  Write-Host "then set: `$env:GNVIPI_GATEWAY_TOKEN='gw_...'"
+  throw "GNVIPI_GATEWAY_TOKEN is not set"
+}
+
+# Check PostgreSQL readiness before building or starting when a DSN is configured.
+if ($env:GNVIPI_DATABASE_URL) {
+  $dbHost, $dbPort = 'localhost', 5432
+  try {
+    $dbUri = [Uri]$env:GNVIPI_DATABASE_URL
+    if ($dbUri.Host) { $dbHost = $dbUri.Host }
+    if ($dbUri.Port -gt 0) { $dbPort = $dbUri.Port }
+  } catch {
+    Write-Host "could not parse GNVIPI_DATABASE_URL; skipping DB readiness check" -ForegroundColor Yellow
+  }
+  $ready = $false
+  $client = New-Object System.Net.Sockets.TcpClient
+  try {
+    $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
+    if ($async.AsyncWaitHandle.WaitOne(2000)) {
+      $client.EndConnect($async)
+      $ready = $true
+    }
+  } catch {
+    $ready = $false
+  } finally {
+    $client.Close()
+  }
+  if (-not $ready) {
+    throw "PostgreSQL is not ready. Start it with: docker compose up -d db"
+  }
+}
+
 # Configure model environment overrides
 if ($Opus)   { $env:MODEL_OPUS = $Opus }     else { Remove-Item Env:MODEL_OPUS   -ErrorAction SilentlyContinue }
 if ($Sonnet) { $env:MODEL_SONNET = $Sonnet } else { Remove-Item Env:MODEL_SONNET -ErrorAction SilentlyContinue }
@@ -119,7 +158,7 @@ while ((Get-Date) -lt $deadline) {
   } catch { Start-Sleep -Milliseconds 500 }
 }
 $env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
-$env:ANTHROPIC_AUTH_TOKEN = "local-gateway"
+$env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
 $env:ANTHROPIC_API_KEY = ""
 Write-Host "  claude  : base=$env:ANTHROPIC_BASE_URL (skip login)" -ForegroundColor Green
 try {

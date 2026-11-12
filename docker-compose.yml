@@ -1,4 +1,25 @@
 services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      # Loopback only: the host needs it for scripts/run.ps1 readiness checks.
+      - "127.0.0.1:${GNVIPI_DB_PORT:-5432}:5432"
+    environment:
+      # Dev-only defaults; override these for anything that is not a local
+      # sandbox. Never commit a production password here.
+      POSTGRES_USER: ${GNVIPI_DB_USER:-gnvipi_dev}
+      POSTGRES_PASSWORD: ${GNVIPI_DB_PASSWORD:-gnvipi_dev_only}
+      POSTGRES_DB: ${GNVIPI_DB_NAME:-gnvipi}
+    volumes:
+      - gnvipi_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   serve:
     build:
       context: .
@@ -12,7 +33,22 @@ services:
     shm_size: "2gb"
     restart: unless-stopped
     command: ["-auto", "-addr", ":8080"]
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       CHROME_PROXY: ${CHROME_PROXY:-}
+      # Dev-only DSN; the password lives only in the runtime environment (or
+      # the ${GNVIPI_DB_PASSWORD} override above), never in the image.
+      GNVIPI_DATABASE_URL: ${GNVIPI_DATABASE_URL:-postgres://gnvipi_dev:gnvipi_dev_only@db:5432/gnvipi?sslmode=disable}
+      # Base64 32-byte AES key. Generate one; the empty default is a placeholder.
+      GNVIPI_MASTER_KEY: ${GNVIPI_MASTER_KEY:-}
+      GNVIPI_MASTER_KEY_VERSION: ${GNVIPI_MASTER_KEY_VERSION:-1}
+      GNVIPI_DB_MAX_CONNS: ${GNVIPI_DB_MAX_CONNS:-10}
+      # Separate DDL role for `serve migrate`; placeholder only here.
+      # GNVIPI_MIGRATION_DATABASE_URL: ${GNVIPI_MIGRATION_DATABASE_URL:-}
       # Uncomment to enable /admin when publishing on non-loopback addresses.
       # GNVIPI_ADMIN_TOKEN: ${GNVIPI_ADMIN_TOKEN:-}
+
+volumes:
+  gnvipi_db:
