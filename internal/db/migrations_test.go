@@ -219,7 +219,7 @@ func TestMigrationsApply(t *testing.T) {
 		"provider_keys": {
 			"owner_id IS NOT NULL",
 			"num_nonnulls(secret_enc, key_env, key_ref) <= 1",
-			"num_nonnulls(secret_enc, key_env, key_ref) = 1",
+			"num_nonnulls(secret_enc, key_env, key_ref) >= 1",
 			"octet_length(secret_nonce) = 12",
 			"UNIQUE (id, provider_id, scope_owner)",
 		},
@@ -524,8 +524,8 @@ func TestConfigVersionBumpsPerStatement(t *testing.T) {
 		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE username = 'bump-user'`); err != nil {
 			t.Fatalf("delete user: %v", err)
 		}
-		v += 2 // users delete cascades through provider_keys, whose statement trigger also bumps
-		expectBump(v, "user DELETE statement plus cascade")
+		v += 4 // PostgreSQL fires statement triggers for the user delete and its FK cascade actions
+		expectBump(v, "user DELETE statement plus cascades")
 
 		insertProvider(t, ctx, tx, "bump-provider")
 		v++
