@@ -16,6 +16,11 @@ export function useUi(): UiApi {
   return useContext(UiContext);
 }
 
+export const ThemeContext = createContext<{ theme: "light" | "dark"; toggle: () => void }>({
+  theme: "light",
+  toggle: () => {},
+});
+
 export function IconChevronUp() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
@@ -100,13 +105,28 @@ export function PageHeader({
   sub: string;
   children?: ComponentChildren;
 }) {
+  const { theme, toggle } = useContext(ThemeContext);
   return (
     <div class="mb-4 flex items-start gap-4">
       <div>
         <h1 class="text-[23px] font-bold tracking-[-0.03em]">{title}</h1>
         <div class="mt-0.5 text-[13px] text-dim">{sub}</div>
       </div>
-      <div class="ml-auto flex flex-wrap items-center justify-end gap-2.5">{children}</div>
+      <div class="ml-auto flex flex-wrap items-center justify-end gap-2.5">
+        {children}
+        <span class="flex items-center gap-1.5 text-xs text-dim">
+          {theme === "dark" ? "Dark" : "Light"}
+          <button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-checked={theme === "dark"}
+            aria-label="Toggle dark theme"
+            title="Toggle dark theme"
+            onClick={toggle}
+          />
+        </span>
+      </div>
     </div>
   );
 }

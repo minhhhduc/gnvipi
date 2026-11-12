@@ -3,7 +3,7 @@ import { api } from "./lib/api";
 import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { Shell } from "./components/Shell";
-import { UiContext, type UiApi } from "./components/ui";
+import { ThemeContext, UiContext, type UiApi } from "./components/ui";
 import { StatsView } from "./views/Stats";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
@@ -98,7 +98,8 @@ export function App() {
   return (
     <UiContext.Provider value={ui}>
       <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate }}>
-        <Shell page={page} theme={theme} onTheme={toggleTheme}>
+        <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
+        <Shell page={page}>
           {banner && (
             <div class="mb-3 flex items-start gap-2.5 rounded-[10px] border border-bad bg-bad-soft px-[13px] py-2.5 text-xs">
               <span class="text-bad">⚠</span>
@@ -122,6 +123,7 @@ export function App() {
             ))}
           </div>
         )}
+        </ThemeContext.Provider>
       </GatewayContext.Provider>
     </UiContext.Provider>
   );

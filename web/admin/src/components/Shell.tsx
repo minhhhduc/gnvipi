@@ -33,13 +33,9 @@ export function HealthPill() {
 
 export function Shell({
   page,
-  theme,
-  onTheme,
   children,
 }: {
   page: Page;
-  theme: "light" | "dark";
-  onTheme: () => void;
   children: ComponentChildren;
 }) {
   const { navigate } = useGateway();
@@ -71,17 +67,6 @@ export function Shell({
             </a>
           ))}
         </nav>
-        <div class="mt-auto flex items-center justify-between border-t border-line px-1.5 pt-2.5 text-xs text-dim">
-          <span>{theme === "dark" ? "Dark" : "Light"} theme</span>
-          <button
-            type="button"
-            class="switch"
-            role="switch"
-            aria-checked={theme === "dark"}
-            aria-label="Toggle dark theme"
-            onClick={onTheme}
-          />
-        </div>
       </aside>
       <main class="min-w-0 max-w-[1240px] flex-1 px-[26px] pt-[22px] pb-[60px]">{children}</main>
     </div>
