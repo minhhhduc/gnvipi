@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { computeAutoModeOptions, computeCycleAvailableOptions, computeCycleUnselected } from "../lib/helpers";
@@ -14,6 +14,25 @@ const ENGINES: [string, string][] = [
   ["https://www.duckduckgo.com/html/?q={query}", "DuckDuckGo"],
   ["custom", "Custom URL"],
 ];
+
+interface SearchSelection {
+  engine: string;
+  url: string;
+}
+
+export function engineForSearchUrl(url: string): string {
+  return ENGINES.some(([value]) => value !== "custom" && value === url) ? url : "custom";
+}
+
+export function syncSearchUrl(url: string): SearchSelection {
+  return { engine: "custom", url };
+}
+
+export function syncSearchEngine(engine: string, currentUrl: string): SearchSelection & { save: boolean } {
+  return engine === "custom"
+    ? { engine, url: currentUrl, save: false }
+    : { engine, url: engine, save: true };
+}
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -34,6 +53,9 @@ export function ConfigView() {
   const [engine, setEngine] = useState("");
   const [searchUrl, setSearchUrl] = useState("");
   const [searchState, setSearchState] = useState<SaveState>("idle");
+  const confirmedAuto = useRef("");
+  const confirmedCycleModels = useRef<string[]>([]);
+  const confirmedSearch = useRef<SearchSelection>({ engine: "", url: "" });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,11 +66,18 @@ export function ConfigView() {
       api<{ url: string }>("/admin/api/config/search"),
     ])
       .then(([m, a, c, s]) => {
+        const model = a.model || "";
+        const models = c.models || [];
+        const url = s.url || "";
+        const search = { engine: engineForSearchUrl(url), url };
+        confirmedAuto.current = model;
+        confirmedCycleModels.current = models;
+        confirmedSearch.current = search;
         setCatalog(m);
-        setAuto(a.model || "");
-        setCycle({ ...c, models: c.models || [], available: c.available || [] });
-        setSearchUrl(s.url || "");
-        setEngine(ENGINES.some(([v]) => v === (s.url || "")) ? s.url || "" : s.url ? "custom" : "");
+        setAuto(model);
+        setCycle({ ...c, models, available: c.available || [] });
+        setSearchUrl(search.url);
+        setEngine(search.engine);
         setLoading(false);
       })
       .catch((err) => {
@@ -62,23 +91,38 @@ export function ConfigView() {
     setAutoState("saving");
     try {
       await api("/admin/api/config/automode", { method: "POST", body: { model } });
+      confirmedAuto.current = model;
+      setAuto(model);
       setAutoState("saved");
     } catch (err) {
+      setAuto(confirmedAuto.current);
       setAutoState("error");
       toast(`Auto model save failed: ${err instanceof Error ? err.message : "unknown"}`, "bad");
     }
   };
 
-  const saveSearch = async (url: string) => {
+  const saveSearch = async (next: SearchSelection) => {
     setSearchState("saving");
     try {
-      await api("/admin/api/config/search", { method: "POST", body: { url } });
+      await api("/admin/api/config/search", { method: "POST", body: { url: next.url } });
+      confirmedSearch.current = next;
+      setEngine(next.engine);
+      setSearchUrl(next.url);
       setSearchState("saved");
       toast("Search setting saved");
     } catch (err) {
+      setEngine(confirmedSearch.current.engine);
+      setSearchUrl(confirmedSearch.current.url);
       setSearchState("error");
       toast(`Search save failed: ${err instanceof Error ? err.message : "unknown"}`, "bad");
     }
+  };
+
+  const chooseSearchEngine = (selectedEngine: string) => {
+    const next = syncSearchEngine(selectedEngine, searchUrl);
+    setEngine(next.engine);
+    setSearchUrl(next.url);
+    if (next.save) void saveSearch(next);
   };
 
   const saveCycle = async (models: string[]) => {
@@ -86,8 +130,11 @@ export function ConfigView() {
     setCycleState("saving");
     try {
       await api("/admin/api/config/cycle", { method: "POST", body: { models } });
+      confirmedCycleModels.current = models;
+      setCycle((prev) => ({ ...prev, models }));
       setCycleState("saved");
     } catch (err) {
+      setCycle((prev) => ({ ...prev, models: confirmedCycleModels.current }));
       setCycleState("error");
       toast(`Cycle save failed: ${err instanceof Error ? err.message : "unknown"}`, "bad");
     }
@@ -143,20 +190,26 @@ export function ConfigView() {
             <select
               class="input"
               value={engine}
-              onChange={(e) => {
-                const v = (e.target as HTMLSelectElement).value;
-                setEngine(v);
-                if (v !== "custom") {
-                  setSearchUrl(v);
-                  void saveSearch(v);
-                }
+              onChange={(e) => chooseSearchEngine((e.target as HTMLSelectElement).value)}
+              onClick={(e) => {
+                const selectedEngine = (e.currentTarget as HTMLSelectElement).value;
+                const next = syncSearchEngine(selectedEngine, searchUrl);
+                if (selectedEngine === engine && next.save) void saveSearch(next);
               }}
             >
               {ENGINES.map(([value, label]) => <option key={label} value={value}>{label}</option>)}
             </select>
             <label class="mb-1 mt-2.5 block text-xs font-semibold">Search URL</label>
-            <input class="input mono" value={searchUrl} onInput={(e) => setSearchUrl((e.target as HTMLInputElement).value)} />
-            <div class="mt-2 flex justify-end"><button class="btn btn-sm" onClick={() => void saveSearch(searchUrl)}>Save URL</button></div>
+            <input
+              class="input mono"
+              value={searchUrl}
+              onInput={(e) => {
+                const next = syncSearchUrl((e.target as HTMLInputElement).value);
+                setEngine(next.engine);
+                setSearchUrl(next.url);
+              }}
+            />
+            <div class="mt-2 flex justify-end"><button class="btn btn-sm" onClick={() => void saveSearch({ engine: "custom", url: searchUrl })}>Save URL</button></div>
           </div>
         </Card>
       </div>
