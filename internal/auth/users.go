@@ -100,7 +100,7 @@ func CreateUser(ctx context.Context, q Querier, in CreateUserInput) (*User, erro
 	if in.PasswordHash == "" {
 		return nil, errors.New("auth: password hash must not be empty")
 	}
-	return scanUser(q.QueryRow(ctx, `
+	u, err := scanUser(q.QueryRow(ctx, `
 		INSERT INTO users (username, email, display_name, role, status,
 		                   password_hash, must_change_password, created_by)
 		VALUES ($1::citext, NULLIF($2, '')::citext, $3, $4, 'active', $5, $6,
@@ -108,6 +108,10 @@ func CreateUser(ctx context.Context, q Querier, in CreateUserInput) (*User, erro
 		RETURNING `+userColumns,
 		username, in.Email, in.DisplayName, string(in.Role), in.PasswordHash,
 		in.MustChangePassword, in.CreatedBy))
+	if err != nil {
+		return nil, mapUserWriteError(err)
+	}
+	return u, nil
 }
 
 // UpdateUserInput patches a user. A nil field is unchanged. Email points to ""

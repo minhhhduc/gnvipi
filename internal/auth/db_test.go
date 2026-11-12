@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -385,7 +386,7 @@ func TestSessionsDB(t *testing.T) {
 	if sess.ExpiresAt.Sub(now) != cfg.AbsoluteTimeout {
 		t.Fatalf("absolute expiry: %v", sess.ExpiresAt)
 	}
-	v, err := ValidateSession(ctx, db, raw, now.Add(time.Minute), cfg)
+	v, err := ValidateSession(ctx, db, raw, now.Add(cfg.TouchInterval/2), cfg)
 	if err != nil || v.UserID != u.ID || v.Username != u.Username {
 		t.Fatalf("validate: %v %+v", err, v)
 	}
@@ -713,7 +714,11 @@ func TestAuditWriteDB(t *testing.T) {
 			t.Fatalf("audit row contains %q: %s", forbidden, raw)
 		}
 	}
-	if !bytes.Contains(details, []byte(`"role":"user"`)) {
+	var got map[string]any
+	if err := json.Unmarshal(details, &got); err != nil {
+		t.Fatalf("decode audit details: %v", err)
+	}
+	if got["role"] != "user" {
 		t.Fatalf("audit row lost metadata: %s", raw)
 	}
 }
