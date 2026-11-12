@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api } from "./lib/api";
+import { pageFromUrl } from "./lib/router";
 import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { Shell } from "./components/Shell";
@@ -9,15 +10,8 @@ import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
 
-const PAGES: Page[] = ["stats", "models", "config", "chromes"];
-
-function pageFromUrl(): Page {
-  const value = new URLSearchParams(location.search).get("page") as Page | null;
-  return value && PAGES.includes(value) ? value : "stats";
-}
-
 export function App() {
-  const [page, setPage] = useState<Page>(pageFromUrl);
+  const [page, setPage] = useState<Page>(() => pageFromUrl(location.search));
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
   );
@@ -37,7 +31,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const onPop = () => setPage(pageFromUrl());
+    const onPop = () => setPage(pageFromUrl(location.search));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -64,9 +58,21 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    refreshStats();
-    const timer = setInterval(refreshStats, 2000);
-    return () => clearInterval(timer);
+    let timer: number | undefined;
+    const syncPolling = () => {
+      clearInterval(timer);
+      timer = undefined;
+      if (document.hidden) return;
+      refreshStats();
+      timer = setInterval(refreshStats, 2000);
+    };
+
+    syncPolling();
+    document.addEventListener("visibilitychange", syncPolling);
+    return () => {
+      document.removeEventListener("visibilitychange", syncPolling);
+      clearInterval(timer);
+    };
   }, [refreshStats]);
 
   const toggleTheme = () => {
