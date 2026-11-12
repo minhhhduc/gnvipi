@@ -33,3 +33,10 @@ __pycache__/
 .pi/
 .tmp-smoke/
 scripts/Microsoft/
+
+# superpowers brainstorm artifacts
+.superpowers/
+
+# admin frontend build inputs
+web/admin/node_modules/
+web/admin/dist/

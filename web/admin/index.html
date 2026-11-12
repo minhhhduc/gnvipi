@@ -1,29 +1,24 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Gateway admin</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light">
-<link rel="stylesheet" href="/admin/app.css">
-</head>
-<body>
-<nav class="rail" aria-label="Admin sections">
-  <div class="rail-brand"><span class="mark">GW</span><span class="rail-name">Gateway</span></div>
-  <div class="rail-links">
-    <a class="tab" data-page="dashboard" href="?page=dashboard">Stats</a>
-    <a class="tab" data-page="models" href="?page=models">Models</a>
-    <a class="tab" data-page="config" href="?page=config">Config</a>
-    <a class="tab" data-page="chromes" href="?page=chromes">Chrome</a>
-  </div>
-</nav>
-<header><div class="wrap">
-  <h1 id="title">Stats</h1>
-  <div id="sub" class="sub"></div>
-</div></header>
-<main id="view"><div class="sub">Loading…</div></main>
-<div id="toast" role="status" aria-live="polite"></div>
-<noscript><p class="sub" style="padding:1.5rem">The admin console needs JavaScript enabled.</p></noscript>
-<script type="module" src="/admin/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gateway Admin</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("gw-theme");
+          if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/admin/app.js"></script>
+    <link rel="stylesheet" crossorigin href="/admin/app.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
 </html>
