@@ -298,7 +298,7 @@ export function ProviderEditor({
             <div class="grid grid-cols-2 gap-3">
               <Field label="Protocol">
                 <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
-                  {getProtocolOptions(f.protocol).map((p) => (
+                  {getProtocolOptions(f.protocol, provider?.protocol).map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>

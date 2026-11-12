@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
-import { computeAutoModeOptions, computeCycleAvailableOptions } from "../lib/helpers";
+import { computeAutoModeOptions, computeCycleAvailableOptions, computeCycleUnselected } from "../lib/helpers";
 import type { CycleConfig, ModelsResponse } from "../lib/types";
 import { Card, CardHead, Empty, IconChevronDown, IconChevronUp, IconX, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
@@ -109,7 +109,10 @@ export function ConfigView() {
     () => computeCycleAvailableOptions(catalog.models || [], cycle.models || [], cycle.available || []),
     [catalog.models, cycle.models, cycle.available],
   );
-  const unselected = cyclePool.filter((id) => !(cycle.models || []).includes(id));
+  const unselected = useMemo(
+    () => computeCycleUnselected(catalog.models || [], cycle.models || [], cycle.available || []),
+    [catalog.models, cycle.models, cycle.available],
+  );
 
   if (loading) return <><PageHeader title="Config" sub="Auto model, web search and the cycle chain"><HealthPill /></PageHeader><Card><Empty title="Loading…" body="Reading configuration." /></Card></>;
 

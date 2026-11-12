@@ -21,6 +21,7 @@ export function ModelsView() {
   const [deletedOpen, setDeletedOpen] = useState(false);
   const [tests, setTests] = useState<Record<string, TestResult>>({});
   const [localHidden, setLocalHidden] = useState<Record<string, boolean>>({});
+  const localHiddenRef = useRef<Record<string, boolean>>({});
   const pendingTargetRef = useRef<{ hiddenIds: string[]; localState: Record<string, boolean> } | null>(null);
   const activeSaveRef = useRef<boolean>(false);
   const confirmedStateRef = useRef<Record<string, boolean>>({});
@@ -30,6 +31,7 @@ export function ModelsView() {
       const [p, m] = await Promise.all([api<Provider[]>("/admin/api/providers"), api<ModelsResponse>("/admin/api/models")]);
       setProviders(p);
       setCatalog(m);
+      localHiddenRef.current = {};
       setLocalHidden({});
       confirmedStateRef.current = {};
       pendingTargetRef.current = null;
@@ -61,6 +63,7 @@ export function ModelsView() {
         confirmedStateRef.current = target.localState;
       } catch (err) {
         if (!pendingTargetRef.current) {
+          localHiddenRef.current = confirmedStateRef.current;
           setLocalHidden(confirmedStateRef.current);
           await load();
         }
@@ -71,7 +74,8 @@ export function ModelsView() {
   };
 
   const toggleModel = (id: string, visible: boolean) => {
-    const next = { ...localHidden, [id]: !visible };
+    const next = { ...localHiddenRef.current, [id]: !visible };
+    localHiddenRef.current = next;
     setLocalHidden(next);
     const hidden = models.filter((m) => next[m.id] ?? m.hidden).map((m) => m.id);
     pendingTargetRef.current = { hiddenIds: hidden, localState: next };

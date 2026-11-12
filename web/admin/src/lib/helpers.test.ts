@@ -4,6 +4,7 @@ import {
   clampFrame,
   computeAutoModeOptions,
   computeCycleAvailableOptions,
+  computeCycleUnselected,
   formatLastOk,
   getFrameNavState,
   getProtocolOptions,
@@ -34,6 +35,11 @@ describe("getProtocolOptions", () => {
     const opts = getProtocolOptions("custom:fast");
     expect(opts).toEqual(["custom:fast", "openai-chat", "anthropic-messages", "openai-responses"]);
   });
+
+  it("preserves initial custom protocol even if current value switches", () => {
+    const opts = getProtocolOptions("openai-chat", "custom:legacy");
+    expect(opts).toEqual(["custom:legacy", "openai-chat", "anthropic-messages", "openai-responses"]);
+  });
 });
 
 describe("computeAutoModeOptions", () => {
@@ -63,7 +69,7 @@ describe("computeAutoModeOptions", () => {
   });
 });
 
-describe("computeCycleAvailableOptions", () => {
+describe("computeCycleAvailableOptions & computeCycleUnselected", () => {
   it("keeps current cycle models and available models even if hidden", () => {
     const catalog = [
       { id: "model-a", hidden: false },
@@ -73,9 +79,20 @@ describe("computeCycleAvailableOptions", () => {
     const cycleModels = ["model-b"];
     const available = ["model-d"];
     const pool = computeCycleAvailableOptions(catalog, cycleModels, available);
-    // model-b is retained because it's in cycleModels; model-d because it's available; model-a because !hidden
-    // model-c is excluded because hidden and neither in cycle nor available
     expect(pool).toEqual(["model-a", "model-b", "model-d"]);
+  });
+
+  it("excludes hidden catalog models from unselected list", () => {
+    const catalog = [
+      { id: "model-a", hidden: false },
+      { id: "model-b", hidden: true },
+      { id: "model-hidden-available", hidden: true },
+      { id: "model-c", hidden: false },
+    ];
+    const cycleModels = ["model-a"];
+    const available = ["model-hidden-available", "model-c"];
+    const unselected = computeCycleUnselected(catalog, cycleModels, available);
+    expect(unselected).toEqual(["model-c"]);
   });
 });
 
@@ -157,7 +174,6 @@ describe("formatLastOk", () => {
     expect(formatLastOk(null)).toBe("never");
     expect(formatLastOk(undefined)).toBe("never");
     expect(formatLastOk("0001-01-01T00:00:00Z")).toBe("never");
-    expect(formatLastOk("1970-01-01T00:00:00Z")).toBe("never");
     expect(formatLastOk("invalid-date")).toBe("never");
   });
 

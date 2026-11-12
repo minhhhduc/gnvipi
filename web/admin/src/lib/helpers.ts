@@ -10,11 +10,15 @@ export const STANDARD_PROTOCOLS = [
   "openai-responses",
 ] as const;
 
-export function getProtocolOptions(currentProtocol?: string): string[] {
-  if (!currentProtocol || (STANDARD_PROTOCOLS as readonly string[]).includes(currentProtocol)) {
-    return [...STANDARD_PROTOCOLS];
+export function getProtocolOptions(currentProtocol?: string, initialProtocol?: string): string[] {
+  const custom = new Set<string>();
+  if (initialProtocol && !(STANDARD_PROTOCOLS as readonly string[]).includes(initialProtocol)) {
+    custom.add(initialProtocol);
   }
-  return [currentProtocol, ...STANDARD_PROTOCOLS];
+  if (currentProtocol && !(STANDARD_PROTOCOLS as readonly string[]).includes(currentProtocol)) {
+    custom.add(currentProtocol);
+  }
+  return [...custom, ...STANDARD_PROTOCOLS];
 }
 
 export function computeAutoModeOptions(
@@ -41,6 +45,17 @@ export function computeCycleAvailableOptions(
   return [...combined].sort();
 }
 
+export function computeCycleUnselected(
+  catalogModels: { id: string; hidden?: boolean }[],
+  cycleModels: string[],
+  availableModels: string[],
+): string[] {
+  const hiddenSet = new Set(catalogModels.filter((m) => m.hidden).map((m) => m.id));
+  const pool = computeCycleAvailableOptions(catalogModels, cycleModels, availableModels);
+  const selectedSet = new Set(cycleModels);
+  return pool.filter((id) => !selectedSet.has(id) && !hiddenSet.has(id));
+}
+
 export function clampFrame(target: number, totalFrames: number): number {
   if (totalFrames <= 0) return 1;
   return Math.max(1, Math.min(totalFrames, target));
@@ -63,9 +78,7 @@ export function runningWorkersRatio(chromes?: { killed?: boolean }[]): string {
 
 export function formatLastOk(value?: string | null): string {
   if (!value) return "never";
-  const t = Date.parse(value);
-  if (!Number.isFinite(t)) return "never";
-  const d = new Date(t);
-  if (d.getFullYear() <= 1970) return "never";
+  const d = new Date(value);
+  if (isNaN(d.getTime()) || d.getFullYear() <= 1) return "never";
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }

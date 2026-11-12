@@ -92,9 +92,10 @@ export function StatsView() {
 
     const targetFrame = clampFrame(frame, totalFrames);
     let aborted = false;
+    const ctrl = new AbortController();
 
     const doFetch = async () => {
-      if (aborted || frameRef.current !== targetFrame) return;
+      if (aborted || ctrl.signal.aborted || frameRef.current !== targetFrame) return;
 
       const now = Date.now();
       const elapsed = now - lastReadAtRef.current;
@@ -111,13 +112,13 @@ export function StatsView() {
       const thisReq = ++reqIdRef.current;
 
       try {
-        const d = await api<FrameResponse>(`/admin/api/stats?frames=${targetFrame}`);
-        if (aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
+        const d = await api<FrameResponse>(`/admin/api/stats?frames=${targetFrame}`, { signal: ctrl.signal });
+        if (aborted || ctrl.signal.aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
         setFrameData(d);
         setFrameError(null);
         setRetryAt(0);
       } catch (err) {
-        if (aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
+        if (aborted || ctrl.signal.aborted || reqIdRef.current !== thisReq || frameRef.current !== targetFrame) return;
         const msg = err instanceof Error ? err.message : "Frame read failed";
         setFrameError(msg);
 
@@ -145,6 +146,7 @@ export function StatsView() {
 
     return () => {
       aborted = true;
+      ctrl.abort();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [frame, totalFrames]);
