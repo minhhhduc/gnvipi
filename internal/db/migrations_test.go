@@ -52,7 +52,7 @@ func testConn(t *testing.T) (*pgx.Conn, context.Context) {
 	if err != nil {
 		t.Fatalf("connect test database: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) }) //nolint:errcheck // best-effort cleanup/best-effort parse
 	return conn, ctx
 }
 
@@ -64,7 +64,7 @@ func withRollback(t *testing.T, ctx context.Context, conn *pgx.Conn, fn func(pgx
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 	fn(tx)
 }
 

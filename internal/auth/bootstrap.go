@@ -31,7 +31,7 @@ type CreateOwnerInput struct {
 }
 
 // CreateFirstOwner creates the first owner only when users is empty. The
-// advisory lock makes concurrent bootstraps serialise; the loser sees the
+// advisory lock makes concurrent bootstraps serialize; the loser sees the
 // committed user and returns ErrUsersExist. The user and audit row commit in
 // one transaction.
 func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
@@ -52,7 +52,7 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('gnvipi:bootstrap'))`); err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func ResetPassword(ctx context.Context, db DB, userID, newPassword string, cfg B
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE users SET password_hash = $2, password_updated_at = now(),
@@ -175,7 +175,7 @@ func ChangePassword(ctx context.Context, db DB, userID, currentSessionToken, old
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	tag, err := tx.Exec(ctx, `
 		UPDATE users SET password_hash = $2, password_updated_at = now(),

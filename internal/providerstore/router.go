@@ -128,7 +128,7 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 	if len(routes) == 0 {
 		r.auditUnavailable(userID, clientModel, chain)
 		if credentialErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrCredentialUnavailable, credentialErr)
+			return nil, fmt.Errorf("%w: %w", ErrCredentialUnavailable, credentialErr)
 		}
 		return nil, ErrCredentialUnavailable
 	}

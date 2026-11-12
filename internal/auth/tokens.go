@@ -247,6 +247,7 @@ func ValidateAPIToken(ctx context.Context, q Querier, raw string, want TokenKind
 	}
 	v.Kind, v.Scope, v.Role, v.Status = TokenKind(kind), Scope(scope), Role(role), Status(status)
 	if lastUsedAt == nil || now.Sub(*lastUsedAt) >= tokenTouchInterval {
+		//nolint:errcheck // best-effort last-used touch
 		_, _ = q.Exec(ctx, `
 			UPDATE api_tokens SET last_used_at = $2
 			WHERE id = $1::uuid

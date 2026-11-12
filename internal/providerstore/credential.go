@@ -220,7 +220,7 @@ func ApplyKeyPatch(cur KeyRow, patch KeyPatch, keyring *Keyring) (KeyRow, error)
 
 	if err := ValidateKeyRow(next); err != nil {
 		if patch.ClearSecret {
-			return KeyRow{}, fmt.Errorf("%w: %v", ErrClearSecretNotAllowed, err)
+			return KeyRow{}, fmt.Errorf("%w: %w", ErrClearSecretNotAllowed, err)
 		}
 		return KeyRow{}, err
 	}

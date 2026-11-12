@@ -86,7 +86,7 @@ func RecordLoginAttempt(ctx context.Context, db DB, in LoginAttempt, cfg Lockout
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO login_attempts (ts, username, ip, success)
@@ -182,7 +182,7 @@ func Login(ctx context.Context, db DB, username, password, ip string, now time.T
 	u, err := GetUserByUsername(ctx, db, username)
 	if errors.Is(err, ErrUserNotFound) {
 		dummyVerification(password, cfg.Pepper)
-		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout)
+		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, false, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -190,7 +190,7 @@ func Login(ctx context.Context, db DB, username, password, ip string, now time.T
 	}
 	ok, needsRehash, verifyErr := VerifyPassword(password, u.PasswordHash, cfg.Params, cfg.Pepper)
 	if verifyErr != nil || !ok || u.Status != StatusActive {
-		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout)
+		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, false, ErrInvalidCredentials
 	}
 	if err := RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Success: true, Now: now}, cfg.Lockout); err != nil {

@@ -29,12 +29,12 @@ func Migrate(ctx context.Context, databaseURL string) error {
 	if err != nil {
 		return fmt.Errorf("connect for migration: %w", redactError(err, databaseURL))
 	}
-	defer lockConn.Close(context.Background())
+	defer lockConn.Close(context.Background()) //nolint:errcheck // best-effort cleanup/best-effort parse
 	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock(hashtext('gnvipi:migrations'))`); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", redactError(err, databaseURL))
 	}
 	defer func() {
-		_, _ = lockConn.Exec(context.Background(),
+		_, _ = lockConn.Exec(context.Background(), //nolint:errcheck // best-effort cleanup/best-effort parse
 			`SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`)
 	}()
 
@@ -46,7 +46,7 @@ func Migrate(ctx context.Context, databaseURL string) error {
 	if err != nil {
 		return fmt.Errorf("open migration database: %w", redactError(err, databaseURL))
 	}
-	defer sqlDB.Close()
+	defer sqlDB.Close() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	driver, err := pgx5.WithInstance(sqlDB, &pgx5.Config{})
 	if err != nil {

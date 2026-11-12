@@ -28,6 +28,13 @@ linters:
       locale: US
     errcheck:
       check-blank: true
+  exclusions:
+    rules:
+      # Immutable row values are passed by value deliberately; pointer churn
+      # would obscure ownership and expand the API diff.
+      - path: internal[\\/](auth|providerstore)[\\/]
+        text: "hugeParam|rangeValCopy"
+        linters: [gocritic]
 
 formatters:
   enable:

@@ -106,8 +106,8 @@ func legacyModels(rows []KeyModelRow, visibleKeys map[string]bool) []provider.Mo
 			continue
 		}
 		seen[row.Alias] = true
-		fallbacks, _ := decodeFallbacks(row.Fallbacks)
-		statuses, _ := decodeFallbackStatuses(row.FallbackStatuses)
+		fallbacks, _ := decodeFallbacks(row.Fallbacks)              //nolint:errcheck // best-effort cleanup/best-effort parse
+		statuses, _ := decodeFallbackStatuses(row.FallbackStatuses) //nolint:errcheck // best-effort cleanup/best-effort parse
 		out = append(out, provider.ModelMapping{
 			Alias:            row.Alias,
 			UpstreamModel:    row.UpstreamModel,

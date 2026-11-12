@@ -51,7 +51,7 @@ func LoadConfig() (Config, error) {
 
 // LoadConfigFrom reads configuration from lookup, allowing tests and callers to
 // inject an environment. GNVIPI_DATABASE_URL is required; no default password
-// is ever synthesised. In development GNVIPI_MIGRATION_DATABASE_URL falls back
+// is ever synthesized. In development GNVIPI_MIGRATION_DATABASE_URL falls back
 // to the application DSN; in production it is required (spec §5).
 func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 	appURL := strings.TrimSpace(envValue(lookup, "GNVIPI_DATABASE_URL"))

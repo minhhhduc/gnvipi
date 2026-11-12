@@ -174,7 +174,7 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 			return nil, fmt.Errorf("%w: duplicate provider key %q", ErrInvalidConfig, key.ID)
 		}
 		if err := ValidateKeyRow(key); err != nil {
-			return nil, fmt.Errorf("%w: key %q: %v", ErrInvalidConfig, key.ID, err)
+			return nil, fmt.Errorf("%w: key %q: %w", ErrInvalidConfig, key.ID, err)
 		}
 		if _, ok := snap.providers[key.ProviderID]; !ok {
 			return nil, fmt.Errorf("%w: key %q references unknown provider %q", ErrInvalidConfig, key.ID, key.ProviderID)
@@ -197,8 +197,8 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 			return nil, fmt.Errorf("%w: key model %q owner drift", ErrInvalidConfig, model.Alias)
 		}
 		definition := snap.providers[key.ProviderID]
-		fallbacks, _ := decodeFallbacks(model.Fallbacks)
-		statuses, _ := decodeFallbackStatuses(model.FallbackStatuses)
+		fallbacks, _ := decodeFallbacks(model.Fallbacks)              //nolint:errcheck // best-effort cleanup/best-effort parse
+		statuses, _ := decodeFallbackStatuses(model.FallbackStatuses) //nolint:errcheck // best-effort cleanup/best-effort parse
 		c := &candidate{
 			definition:       definition,
 			providerID:       key.ProviderID,

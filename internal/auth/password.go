@@ -141,6 +141,7 @@ func NeedsRehash(encoded string, params Params) bool {
 		uint32(len(key)) != params.KeyLength
 }
 
+//nolint:gocritic // named results add no clarity here
 func parsePHC(encoded string) (Params, []byte, []byte, error) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
@@ -238,7 +239,7 @@ func dummyVerification(password string, pepper []byte) {
 	dummyHashOnce.Do(func() {
 		// Params match DefaultParams; a deployment using custom params sees a
 		// slightly different cost on unknown users only.
-		dummyHash, _ = HashPassword("gnvipi-dummy-password", DefaultParams(), nil)
+		dummyHash, _ = HashPassword("gnvipi-dummy-password", DefaultParams(), nil) //nolint:errcheck // best-effort cleanup/best-effort parse
 	})
-	_, _, _ = VerifyPassword(password, dummyHash, DefaultParams(), pepper)
+	_, _, _ = VerifyPassword(password, dummyHash, DefaultParams(), pepper) //nolint:errcheck // best-effort cleanup/best-effort parse
 }

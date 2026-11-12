@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -44,24 +45,24 @@ func TestResolveTokenExpiry(t *testing.T) {
 	if err != nil || !adminDefault.Equal(now.Add(AdminTokenDefaultExpiry)) {
 		t.Fatalf("admin default: %v %v", adminDefault, err)
 	}
-	if _, err := resolveTokenExpiry(TokenKindAdmin, ScopeRead, TokenExpiry{NoExpiry: true}, now); err != ErrTokenNoExpiryNotAllowed {
+	if _, err := resolveTokenExpiry(TokenKindAdmin, ScopeRead, TokenExpiry{NoExpiry: true}, now); !errors.Is(err, ErrTokenNoExpiryNotAllowed) {
 		t.Fatalf("admin no-expiry: %v", err)
 	}
-	if _, err := resolveTokenExpiry(TokenKindAdmin, "", TokenExpiry{}, now); err != ErrInvalidTokenScope {
+	if _, err := resolveTokenExpiry(TokenKindAdmin, "", TokenExpiry{}, now); !errors.Is(err, ErrInvalidTokenScope) {
 		t.Fatalf("admin without scope: %v", err)
 	}
-	if _, err := resolveTokenExpiry(TokenKindGateway, ScopeRead, TokenExpiry{}, now); err != ErrInvalidTokenScope {
+	if _, err := resolveTokenExpiry(TokenKindGateway, ScopeRead, TokenExpiry{}, now); !errors.Is(err, ErrInvalidTokenScope) {
 		t.Fatalf("gateway with scope: %v", err)
 	}
 	if at, err := resolveTokenExpiry(TokenKindGateway, "", TokenExpiry{NoExpiry: true}, now); err != nil || at != nil {
 		t.Fatalf("gateway no-expiry: %v %v", at, err)
 	}
 	tooLate := now.Add(GatewayTokenDefaultExpiry + time.Hour)
-	if _, err := resolveTokenExpiry(TokenKindGateway, "", TokenExpiry{At: &tooLate}, now); err != ErrInvalidTokenExpiry {
+	if _, err := resolveTokenExpiry(TokenKindGateway, "", TokenExpiry{At: &tooLate}, now); !errors.Is(err, ErrInvalidTokenExpiry) {
 		t.Fatalf("gateway over 365d: %v", err)
 	}
 	past := now.Add(-time.Hour)
-	if _, err := resolveTokenExpiry(TokenKindAdmin, ScopeRead, TokenExpiry{At: &past}, now); err != ErrInvalidTokenExpiry {
+	if _, err := resolveTokenExpiry(TokenKindAdmin, ScopeRead, TokenExpiry{At: &past}, now); !errors.Is(err, ErrInvalidTokenExpiry) {
 		t.Fatalf("past expiry: %v", err)
 	}
 }
@@ -71,7 +72,7 @@ func TestScopeHelpers(t *testing.T) {
 		!ScopeAllows(ScopeRead, ScopeRead) || ScopeAllows(ScopeRead, ScopeWrite) {
 		t.Fatal("scope matrix wrong")
 	}
-	if err := RequireScope(ScopeRead, ScopeWrite); err != ErrInsufficientScope {
+	if err := RequireScope(ScopeRead, ScopeWrite); !errors.Is(err, ErrInsufficientScope) {
 		t.Fatalf("RequireScope: %v", err)
 	}
 }

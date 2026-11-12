@@ -266,7 +266,7 @@ func rowErr(id, field string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w: provider %q %s: %v", ErrInvalidConfig, id, field, err)
+	return fmt.Errorf("%w: provider %q %s: %w", ErrInvalidConfig, id, field, err)
 }
 
 // ValidateKeyRow enforces the credential-source and scheme contracts before a
@@ -347,7 +347,7 @@ func ValidateKeyModelRow(m KeyModelRow) error {
 	}
 	fallbacks, err := decodeFallbacks(m.Fallbacks)
 	if err != nil {
-		return fmt.Errorf("%w: alias %q: %v", ErrInvalidConfig, m.Alias, err)
+		return fmt.Errorf("%w: alias %q: %w", ErrInvalidConfig, m.Alias, err)
 	}
 	for _, fallback := range fallbacks {
 		if fallback == m.Alias {
@@ -355,7 +355,7 @@ func ValidateKeyModelRow(m KeyModelRow) error {
 		}
 	}
 	if _, err := decodeFallbackStatuses(m.FallbackStatuses); err != nil {
-		return fmt.Errorf("%w: alias %q: %v", ErrInvalidConfig, m.Alias, err)
+		return fmt.Errorf("%w: alias %q: %w", ErrInvalidConfig, m.Alias, err)
 	}
 	if m.LegacyPosition < 0 {
 		return fmt.Errorf("%w: alias %q has negative legacy_position", ErrInvalidConfig, m.Alias)
@@ -423,11 +423,11 @@ func DecodeSettings(rows []SettingRow) (Settings, error) {
 		switch row.Key {
 		case "automode":
 			if err := decodeSettingObject(row.Value, &settings.Automode); err != nil {
-				return Settings{}, fmt.Errorf("%w: settings.automode: %v", ErrInvalidConfig, err)
+				return Settings{}, fmt.Errorf("%w: settings.automode: %w", ErrInvalidConfig, err)
 			}
 		case "cycle":
 			if err := decodeSettingObject(row.Value, &settings.Cycle); err != nil {
-				return Settings{}, fmt.Errorf("%w: settings.cycle: %v", ErrInvalidConfig, err)
+				return Settings{}, fmt.Errorf("%w: settings.cycle: %w", ErrInvalidConfig, err)
 			}
 			if len(settings.Cycle.Models) == 0 {
 				return Settings{}, fmt.Errorf("%w: settings.cycle.models must not be empty", ErrInvalidConfig)
@@ -441,7 +441,7 @@ func DecodeSettings(rows []SettingRow) (Settings, error) {
 			}
 		case "search":
 			if err := decodeSettingObject(row.Value, &settings.Search); err != nil {
-				return Settings{}, fmt.Errorf("%w: settings.search: %v", ErrInvalidConfig, err)
+				return Settings{}, fmt.Errorf("%w: settings.search: %w", ErrInvalidConfig, err)
 			}
 			if settings.Search.URL != "" {
 				parsed, err := url.Parse(settings.Search.URL)

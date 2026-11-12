@@ -62,7 +62,7 @@ func testDB(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(func() {
 		pool.Close()
-		_, _ = admin.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		_, _ = admin.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE") //nolint:errcheck // best-effort cleanup/best-effort parse
 		admin.Close()
 	})
 	return pool
@@ -176,6 +176,7 @@ BEFORE DELETE ON users
 FOR EACH ROW EXECUTE FUNCTION users_guard_last_owner();
 `
 
+//nolint:unparam // test helper keeps explicit call-site shape
 func createTestUser(t *testing.T, db *pgxpool.Pool, username string, role Role, password string) *User {
 	t.Helper()
 	hash, err := HashPassword(password, fastParams(), nil)

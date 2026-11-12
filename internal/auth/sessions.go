@@ -155,7 +155,7 @@ func ValidateSession(ctx context.Context, q Querier, raw string, now time.Time, 
 		return nil, ErrInvalidSession
 	}
 	if now.Sub(v.LastSeenAt) >= cfg.TouchInterval {
-		_, _ = q.Exec(ctx, `UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1`,
+		_, _ = q.Exec(ctx, `UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1`, //nolint:errcheck // best-effort cleanup/best-effort parse
 			HashToken(raw), now)
 	}
 	return &v, nil

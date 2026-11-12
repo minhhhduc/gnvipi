@@ -51,7 +51,7 @@ func ValidateSensitiveConfig(row ProviderRow, p provider.Provider) []ConfigProbl
 		}
 	}
 	if len(p.ExtraBody) > 0 {
-		if err := scanCredentialLikeKeys(json.RawMessage(p.ExtraBody), "extra_body", add); err != nil {
+		if err := scanCredentialLikeKeys(p.ExtraBody, "extra_body", add); err != nil {
 			add("extra_body", "must be a JSON object")
 		}
 	}

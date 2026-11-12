@@ -41,6 +41,7 @@ func sealKey(t *testing.T, ring *Keyring, key KeyRow, plaintext []byte) KeyRow {
 	return key
 }
 
+//nolint:unparam // test helper keeps explicit call-site shape
 func validProviderRow(id string, enabled bool) ProviderRow {
 	return ProviderRow{
 		ID:       id,

@@ -16,12 +16,13 @@ import (
 func exactModel(keyID, providerID, owner, alias, upstream string, fallbacks ...string) KeyModelRow {
 	row := KeyModelRow{KeyID: keyID, ProviderID: providerID, OwnerID: owner, Alias: alias, UpstreamModel: upstream}
 	if len(fallbacks) > 0 {
-		raw, _ := json.Marshal(fallbacks)
+		raw, _ := json.Marshal(fallbacks) //nolint:errcheck // best-effort cleanup/best-effort parse
 		row.Fallbacks = raw
 	}
 	return row
 }
 
+//nolint:unparam // test helper keeps explicit call-site shape
 func wildcardModel(keyID, providerID, owner, alias, upstream string) KeyModelRow {
 	return KeyModelRow{KeyID: keyID, ProviderID: providerID, OwnerID: owner, Alias: alias, UpstreamModel: upstream}
 }
@@ -276,7 +277,7 @@ func TestRouterFallbacksAreExactOnlyAndCycleSafe(t *testing.T) {
 	}
 
 	// A fallback alias is never satisfied by a wildcard mapping.
-	rows.KeyModels[0].Fallbacks, _ = json.Marshal([]string{"wild/thing"})
+	rows.KeyModels[0].Fallbacks, _ = json.Marshal([]string{"wild/thing"}) //nolint:errcheck // best-effort cleanup/best-effort parse
 	route, err = routerFor(t, rows, StoreOptions{}).Resolve(context.Background(), "u1", "main", "openai-chat")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -374,7 +375,7 @@ func TestRouterAuditEvents(t *testing.T) {
 	if len(events) != 2 || events[1].Code != AuditDecryptFailed || events[1].KeyIDs[0] != "k1" {
 		t.Fatalf("events = %+v", events)
 	}
-	if rendered := fmt.Sprintf("%+v", events[1]); len(rendered) > 0 && strings.Contains(rendered, "sk-secret") {
+	if rendered := fmt.Sprintf("%+v", events[1]); rendered != "" && strings.Contains(rendered, "sk-secret") {
 		t.Fatalf("audit event leaks a secret: %s", rendered)
 	}
 }

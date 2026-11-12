@@ -236,8 +236,8 @@ func (k *Keyring) Decrypt(ciphertext, nonce []byte, keyID, scopeOwner, scheme st
 
 func (k *Keyring) gcm(version int) (cipher.AEAD, error) {
 	var key masterKey
-	switch {
-	case version == k.current.version:
+	switch version {
+	case k.current.version:
 		key = k.current
 	default:
 		previous, ok := k.previous[version]

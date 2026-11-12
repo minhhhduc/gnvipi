@@ -151,7 +151,7 @@ func UpdateUser(ctx context.Context, db DB, id string, in UpdateUserInput) (*Use
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	u, err := scanUser(tx.QueryRow(ctx, `
 		UPDATE users SET
@@ -233,6 +233,7 @@ func CountUsers(ctx context.Context, q Querier) (int, error) {
 	return n, err
 }
 
+//nolint:gocritic // named results add no clarity here
 func clampPage(limit, offset int) (int, int) {
 	if limit <= 0 {
 		limit = 50

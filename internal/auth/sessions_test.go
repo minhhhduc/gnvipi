@@ -43,8 +43,8 @@ func TestSessionCookie(t *testing.T) {
 	if plain.Secure {
 		t.Fatal("non-TLS cookie must not set Secure")
 	}
-	clear := ClearSessionCookie(true)
-	if clear.MaxAge != -1 || clear.Value != "" {
-		t.Fatalf("unexpected clear cookie: %+v", clear)
+	cookie := ClearSessionCookie(true)
+	if cookie.MaxAge != -1 || cookie.Value != "" {
+		t.Fatalf("unexpected clear cookie: %+v", cookie)
 	}
 }

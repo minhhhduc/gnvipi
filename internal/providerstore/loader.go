@@ -59,7 +59,7 @@ func (s *DBRowSource) LoadConfig(ctx context.Context) (Rows, int64, error) {
 	if err != nil {
 		return Rows{}, 0, fmt.Errorf("providerstore: begin snapshot transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	var version int64
 	if err := tx.QueryRow(ctx, versionQuery).Scan(&version); err != nil {
@@ -239,7 +239,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			w.report(reloadErr)
 		}
 		listenErr := w.listen(ctx, conn, poll)
-		_ = conn.Close(context.Background())
+		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup/best-effort parse
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -260,7 +260,7 @@ func (w *Watcher) connect(ctx context.Context) (*pgx.Conn, error) {
 		return nil, fmt.Errorf("providerstore: listen connection: %w", err)
 	}
 	if _, err := conn.Exec(ctx, "LISTEN gnvipi_config"); err != nil {
-		_ = conn.Close(context.Background())
+		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, fmt.Errorf("providerstore: LISTEN gnvipi_config: %w", err)
 	}
 	return conn, nil
@@ -319,10 +319,10 @@ func (w *Watcher) report(err error) {
 	}
 }
 
-func nextBackoff(current, max time.Duration) time.Duration {
+func nextBackoff(current, limit time.Duration) time.Duration {
 	next := current * 2
-	if next > max {
-		return max
+	if next > limit {
+		return limit
 	}
 	return next
 }

@@ -1,6 +1,7 @@
 package providerstore
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"strings"
@@ -20,14 +21,14 @@ func TestEnvelopeRoundTripAndVersion(t *testing.T) {
 	if len(nonce) != SecretNonceSize {
 		t.Fatalf("nonce length = %d, want %d", len(nonce), SecretNonceSize)
 	}
-	if string(ciphertext) == string(plaintext) {
+	if bytes.Equal(ciphertext, plaintext) {
 		t.Fatal("ciphertext equals plaintext")
 	}
 	got, err := ring.Decrypt(ciphertext, nonce, "key-1", "user-1", SchemeBearer, version)
 	if err != nil {
 		t.Fatalf("decrypt: %v", err)
 	}
-	if string(got) != string(plaintext) {
+	if !bytes.Equal(got, plaintext) {
 		t.Fatalf("plaintext = %q, want %q", got, plaintext)
 	}
 }

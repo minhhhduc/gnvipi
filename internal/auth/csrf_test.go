@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -51,7 +53,7 @@ func TestCheckOrigin(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest("POST", "https://admin.example.com/admin/api/users", nil)
+			r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://admin.example.com/admin/api/users", http.NoBody)
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
@@ -66,7 +68,7 @@ func TestCheckOrigin(t *testing.T) {
 }
 
 func TestCheckOriginRejectsRepeatedHeaders(t *testing.T) {
-	r := httptest.NewRequest("POST", "https://admin.example.com/admin", nil)
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://admin.example.com/admin", http.NoBody)
 	r.Header["Origin"] = []string{"https://admin.example.com", "https://admin.example.com"}
 	if CheckOrigin(r, "https://admin.example.com") {
 		t.Fatal("repeated Origin accepted")
