@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
@@ -307,6 +309,73 @@ func TestRouterFallbackChainIsCappedAtEight(t *testing.T) {
 	}
 	if len(route.Candidates) != 8 {
 		t.Fatalf("candidates = %d, want 8", len(route.Candidates))
+	}
+}
+
+func TestRouterTriesAllCandidatesInWinningTier(t *testing.T) {
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys: []KeyRow{
+			{ID: "k1-env", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_ROUTER_TEST_UNSET"},
+			testKey("k2-ok", "p1", "u1", SchemeNone),
+		},
+		KeyModels: []KeyModelRow{
+			exactModel("k1-env", "p1", "u1", "m", "up-env"),
+			exactModel("k2-ok", "p1", "u1", "m", "up-ok"),
+		},
+	}
+	route, err := routerFor(t, rows, StoreOptions{}).Resolve(context.Background(), "u1", "m", "openai-chat")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if route.KeyID != "k2-ok" || route.UpstreamModel != "up-ok" {
+		t.Fatalf("route = %+v", route)
+	}
+	if len(route.Candidates) != 1 {
+		t.Fatalf("candidates = %+v", route.Candidates)
+	}
+}
+
+func TestRouterAuditEvents(t *testing.T) {
+	var events []AuditEvent
+	audit := func(event AuditEvent) { events = append(events, event) }
+
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys: []KeyRow{
+			{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "env", Enabled: true, AuthScheme: SchemeBearer, KeyEnv: "GNVIPI_ROUTER_TEST_UNSET"},
+		},
+		KeyModels: []KeyModelRow{exactModel("k1", "p1", "u1", "m", "up")},
+	}
+	router := routerFor(t, rows, StoreOptions{Audit: audit})
+	if _, err := router.Resolve(context.Background(), "u1", "m", "openai-chat"); !errors.Is(err, ErrCredentialUnavailable) {
+		t.Fatalf("resolve error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].Code != AuditCredentialUnavailable || events[0].UserID != "u1" || events[0].Model != "m" {
+		t.Fatalf("event = %+v", events[0])
+	}
+	if len(events[0].KeyIDs) != 1 || events[0].KeyIDs[0] != "k1" || events[0].ProviderIDs[0] != "p1" {
+		t.Fatalf("event IDs = %+v", events[0])
+	}
+
+	// Snapshot-time decrypt failures emit the decrypt code with IDs only.
+	ring := testKeyring(t)
+	key := sealKey(t, ring, testKey("k1", "p1", "u1", SchemeBearer), []byte("sk-secret"))
+	key.SecretEnc[0] ^= 0xff
+	rows = Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys:      []KeyRow{key},
+		KeyModels: []KeyModelRow{exactModel("k1", "p1", "u1", "m", "up")},
+	}
+	mustBuildSnapshot(t, rows, 1, BuildOptions{Keyring: ring, Audit: audit})
+	if len(events) != 2 || events[1].Code != AuditDecryptFailed || events[1].KeyIDs[0] != "k1" {
+		t.Fatalf("events = %+v", events)
+	}
+	if rendered := fmt.Sprintf("%+v", events[1]); len(rendered) > 0 && strings.Contains(rendered, "sk-secret") {
+		t.Fatalf("audit event leaks a secret: %s", rendered)
 	}
 }
 

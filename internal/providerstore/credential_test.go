@@ -213,16 +213,10 @@ func TestApplyKeyPatchSchemeTransitions(t *testing.T) {
 	if _, err := ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeHeader)}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
 		t.Fatalf("header without name error = %v", err)
 	}
-	next, err = ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeHeader), AuthHeaderName: ptr("X-Custom")}, ring)
-	if err != nil {
-		t.Fatalf("to header: %v", err)
-	}
-	if next.AuthHeaderName != "X-Custom" {
-		t.Fatalf("header name = %q", next.AuthHeaderName)
-	}
-	// The existing secret was encrypted for bearer, so the AAD no longer matches.
-	if _, err := ResolveKeyCredential(context.Background(), next, ring, nil); !errors.Is(err, ErrDecrypt) {
-		t.Fatalf("scheme change without re-encrypt error = %v", err)
+	// An existing ciphertext is bound to the bearer AAD, so changing the
+	// scheme without re-entering the secret must be rejected.
+	if _, err := ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeHeader), AuthHeaderName: ptr("X-Custom")}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("scheme change without secret error = %v", err)
 	}
 
 	// Supplying both a new scheme and a new secret seals for the final scheme.
@@ -230,9 +224,32 @@ func TestApplyKeyPatchSchemeTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("to header with secret: %v", err)
 	}
+	if next.AuthHeaderName != "X-Custom" {
+		t.Fatalf("header name = %q", next.AuthHeaderName)
+	}
 	got, err := ResolveKeyCredential(context.Background(), next, ring, nil)
 	if err != nil || got.Raw != "hdr-secret" {
 		t.Fatalf("resolve header = %+v, %v", got, err)
+	}
+}
+
+func TestApplyKeyPatchValidatesBasicPlaintext(t *testing.T) {
+	ring := testKeyring(t)
+	cur, _ := sealedKey(t, SchemeBearer, "secret")
+
+	if _, err := ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeBasic), Secret: []byte("not-json")}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("invalid basic plaintext error = %v", err)
+	}
+	if _, err := ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeBasic), Secret: []byte(`{"username":"","password":"x"}`)}, ring); !errors.Is(err, ErrInvalidCredentialSource) {
+		t.Fatalf("empty basic username error = %v", err)
+	}
+	next, err := ApplyKeyPatch(cur, KeyPatch{AuthScheme: ptr(SchemeBasic), Secret: []byte(`{"username":"alice","password":"p@ss"}`)}, ring)
+	if err != nil {
+		t.Fatalf("valid basic patch: %v", err)
+	}
+	got, err := ResolveKeyCredential(context.Background(), next, ring, nil)
+	if err != nil || got.Basic.Username != "alice" || got.Basic.Password != "p@ss" {
+		t.Fatalf("resolve basic = %+v, %v", got, err)
 	}
 }
 

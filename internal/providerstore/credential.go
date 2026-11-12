@@ -177,6 +177,11 @@ func ApplyKeyPatch(cur KeyRow, patch KeyPatch, keyring *Keyring) (KeyRow, error)
 		}
 	}
 	if len(patch.Secret) > 0 {
+		if next.AuthScheme == SchemeBasic {
+			if _, err := parseBasicSecret(patch.Secret); err != nil {
+				return KeyRow{}, err
+			}
+		}
 		if keyring == nil {
 			return KeyRow{}, ErrMissingMasterKey
 		}
@@ -205,6 +210,12 @@ func ApplyKeyPatch(cur KeyRow, patch KeyPatch, keyring *Keyring) (KeyRow, error)
 		}
 	case SchemeBearer, SchemeBasic:
 		next.AuthHeaderName = ""
+	}
+
+	// The ciphertext AAD binds the auth scheme. An unchanged stored secret with
+	// a new scheme would never decrypt, so require re-entry of the secret.
+	if next.HasSecret() && len(patch.Secret) == 0 && next.AuthScheme != cur.AuthScheme {
+		return KeyRow{}, fmt.Errorf("%w: changing auth_scheme requires re-entering the secret", ErrInvalidCredentialSource)
 	}
 
 	if err := ValidateKeyRow(next); err != nil {

@@ -32,10 +32,43 @@ type Route struct {
 // and shared candidates only exist for auth_scheme none.
 type Router struct {
 	store *Store
+	audit AuditFunc
+}
+
+// RouterOptions configures routing. Audit overrides the Store callback.
+type RouterOptions struct {
+	Audit AuditFunc
 }
 
 // NewRouter constructs a key-aware router over a snapshot store.
-func NewRouter(store *Store) *Router { return &Router{store: store} }
+func NewRouter(store *Store) *Router {
+	router := &Router{store: store}
+	if store != nil {
+		router.audit = store.audit
+	}
+	return router
+}
+
+// NewRouterWithOptions constructs a router with an explicit audit callback.
+func NewRouterWithOptions(store *Store, opts RouterOptions) *Router {
+	router := NewRouter(store)
+	if opts.Audit != nil {
+		router.audit = opts.Audit
+	}
+	return router
+}
+
+func (r *Router) auditUnavailable(userID, model string, chain []selected) {
+	if r.audit == nil {
+		return
+	}
+	event := AuditEvent{Code: AuditCredentialUnavailable, UserID: userID, Model: model}
+	for _, selection := range chain {
+		event.ProviderIDs = append(event.ProviderIDs, selection.candidate.providerID)
+		event.KeyIDs = append(event.KeyIDs, selection.candidate.keyID)
+	}
+	r.audit(event)
+}
 
 type selected struct {
 	candidate *candidate
@@ -74,9 +107,11 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 	if err != nil {
 		return nil, err
 	}
-	chain := []selected{primary}
+	chain := append([]selected(nil), primary...)
 	visited := map[string]bool{clientModel: true}
-	appendFallbacks(snapshot, userID, primary.candidate.fallbacks, &chain, visited)
+	for _, selection := range primary {
+		appendFallbacks(snapshot, userID, selection.candidate.fallbacks, &chain, visited)
+	}
 
 	var routes []Route
 	var credentialErr error
@@ -91,6 +126,7 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 		routes = append(routes, route)
 	}
 	if len(routes) == 0 {
+		r.auditUnavailable(userID, clientModel, chain)
 		if credentialErr != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCredentialUnavailable, credentialErr)
 		}
@@ -110,66 +146,92 @@ func appendFallbacks(snapshot *Snapshot, userID string, aliases []string, chain 
 			continue
 		}
 		visited[alias] = true
-		selection, err := selectExactOnly(snapshot, userID, alias, true)
+		selections, err := selectExactOnly(snapshot, userID, alias, true)
 		if err != nil {
 			continue
 		}
-		*chain = append(*chain, selection)
-		appendFallbacks(snapshot, userID, selection.candidate.fallbacks, chain, visited)
+		for _, selection := range selections {
+			if len(*chain) >= maxCandidates {
+				return
+			}
+			*chain = append(*chain, selection)
+			appendFallbacks(snapshot, userID, selection.candidate.fallbacks, chain, visited)
+		}
 	}
 }
 
 // selectPrimary implements the normative precedence: personal exact, personal
 // wildcard (longest prefix), shared none exact, shared none wildcard. exactOnly
-// is used for fallback aliases, which never match wildcards.
-func selectPrimary(snapshot *Snapshot, userID, model string) (selected, error) {
+// is used for fallback aliases, which never match wildcards. A tier can yield
+// several candidates; all of them are tried before the next tier or fallback.
+func selectPrimary(snapshot *Snapshot, userID, model string) ([]selected, error) {
 	return selectExactOnly(snapshot, userID, model, false)
 }
 
-func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) (selected, error) {
+func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) ([]selected, error) {
 	if state, ok := snapshot.modelState[model]; ok && (state.Hidden || state.Deleted) {
-		return selected{}, ErrModelHidden
+		return nil, ErrModelHidden
 	}
 	if list := snapshot.personalEx[userID][model]; len(list) > 0 {
-		if selection, ok, err := pickExact(list, model, snapshot.isProtected); ok || err != nil {
-			return selection, err
+		if selections, err := pickExact(list, model, snapshot.isProtected); err != nil {
+			return nil, err
+		} else if len(selections) > 0 {
+			return selections, nil
 		}
 	}
 	if !exactOnly {
-		if selection, ok, err := pickWildcard(snapshot.personalWc[userID], model, snapshot.isProtected); ok || err != nil {
-			return selection, err
+		if selections, err := pickWildcard(snapshot.personalWc[userID], model, snapshot.isProtected); err != nil {
+			return nil, err
+		} else if len(selections) > 0 {
+			return selections, nil
 		}
 	}
 	if list := snapshot.sharedEx[model]; len(list) > 0 {
-		if selection, ok, err := pickExact(list, model, snapshot.isProtected); ok || err != nil {
-			return selection, err
+		if selections, err := pickExact(list, model, snapshot.isProtected); err != nil {
+			return nil, err
+		} else if len(selections) > 0 {
+			return selections, nil
 		}
 	}
 	if !exactOnly {
-		if selection, ok, err := pickWildcard(snapshot.sharedWc, model, snapshot.isProtected); ok || err != nil {
-			return selection, err
+		if selections, err := pickWildcard(snapshot.sharedWc, model, snapshot.isProtected); err != nil {
+			return nil, err
+		} else if len(selections) > 0 {
+			return selections, nil
 		}
 	}
 	if snapshot.aliasKnown(model) {
-		return selected{}, ErrKeyRequired
+		return nil, ErrKeyRequired
 	}
-	return selected{}, ErrModelNotFound
+	return nil, ErrModelNotFound
 }
 
-func pickExact(list []*candidate, model string, isProtected func(string) bool) (selected, bool, error) {
+func pickExact(list []*candidate, model string, isProtected func(string) bool) ([]selected, error) {
+	var out []selected
+	hidden := false
 	for _, c := range list {
 		if isProtected != nil && isProtected(model) && !c.allowShadow {
 			continue
 		}
 		if c.hidden {
-			return selected{}, false, ErrModelHidden
+			hidden = true
+			continue
 		}
-		return selected{candidate: c, upstream: c.upstreamModel, alias: model}, true, nil
+		out = append(out, selected{candidate: c, upstream: c.upstreamModel, alias: model})
 	}
-	return selected{}, false, nil
+	if len(out) > 0 {
+		return out, nil
+	}
+	if hidden {
+		return nil, ErrModelHidden
+	}
+	return nil, nil
 }
 
-func pickWildcard(list []*candidate, model string, isProtected func(string) bool) (selected, bool, error) {
+func pickWildcard(list []*candidate, model string, isProtected func(string) bool) ([]selected, error) {
+	var out []selected
+	bestPrefix := -1
+	hidden := false
 	for _, c := range list {
 		prefix := strings.TrimSuffix(c.alias, "*")
 		if !strings.HasPrefix(model, prefix) || len(model) <= len(prefix) {
@@ -179,20 +241,38 @@ func pickWildcard(list []*candidate, model string, isProtected func(string) bool
 			continue
 		}
 		if c.hidden {
-			return selected{}, false, ErrModelHidden
+			hidden = true
+			continue
 		}
-		suffix := model[len(prefix):]
-		upstream := suffix
-		if c.upstreamModel != "" && c.upstreamModel != "*" {
-			if strings.HasSuffix(c.upstreamModel, "/*") {
-				upstream = strings.TrimSuffix(c.upstreamModel, "*") + suffix
-			} else {
-				upstream = c.upstreamModel
-			}
+		if bestPrefix < 0 {
+			bestPrefix = len(prefix)
 		}
-		return selected{candidate: c, upstream: upstream, alias: model}, true, nil
+		if len(prefix) != bestPrefix {
+			continue
+		}
+		out = append(out, selected{
+			candidate: c,
+			upstream:  wildcardUpstream(c, model[len(prefix):]),
+			alias:     model,
+		})
 	}
-	return selected{}, false, nil
+	if len(out) > 0 {
+		return out, nil
+	}
+	if hidden {
+		return nil, ErrModelHidden
+	}
+	return nil, nil
+}
+
+func wildcardUpstream(c *candidate, suffix string) string {
+	if c.upstreamModel == "" || c.upstreamModel == "*" {
+		return suffix
+	}
+	if strings.HasSuffix(c.upstreamModel, "/*") {
+		return strings.TrimSuffix(c.upstreamModel, "*") + suffix
+	}
+	return c.upstreamModel
 }
 
 func (s *Snapshot) aliasKnown(model string) bool {

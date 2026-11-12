@@ -101,12 +101,32 @@ func (s *Snapshot) Provider(id string) (provider.Provider, bool) {
 	return provider.Clone(p), true
 }
 
+// Audit codes reported for key-level routing failures.
+const (
+	AuditCredentialUnavailable = "provider_key_credential_unavailable"
+	AuditDecryptFailed         = "provider_key_decrypt_failed"
+)
+
+// AuditEvent reports a key-level routing failure. It carries identifiers only,
+// never credential material.
+type AuditEvent struct {
+	Code        string
+	UserID      string
+	Model       string
+	ProviderIDs []string
+	KeyIDs      []string
+}
+
+// AuditFunc receives key-level routing failure events.
+type AuditFunc func(AuditEvent)
+
 // BuildOptions injects the process keyring and secret reference resolver.
 type BuildOptions struct {
 	Keyring     *Keyring
 	Refs        RefResolver
 	IsProtected func(string) bool
 	Now         func() time.Time
+	Audit       AuditFunc
 }
 
 // BuildSnapshot validates every row and JSONB contract before returning a
@@ -205,9 +225,16 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 				snap.diagnostic = append(snap.diagnostic, KeyDiagnostic{
 					KeyID:      key.ID,
 					ProviderID: key.ProviderID,
-					Code:       "provider_key_decrypt_failed",
+					Code:       AuditDecryptFailed,
 					Message:    "stored provider secret cannot be decrypted; key excluded from routing",
 				})
+				if opts.Audit != nil {
+					opts.Audit(AuditEvent{
+						Code:        AuditDecryptFailed,
+						ProviderIDs: []string{key.ProviderID},
+						KeyIDs:      []string{key.ID},
+					})
+				}
 			} else {
 				c.applyCredential(credential)
 			}
@@ -352,6 +379,7 @@ type StoreOptions struct {
 	Refs        RefResolver
 	IsProtected func(string) bool
 	Now         func() time.Time
+	Audit       AuditFunc
 }
 
 // Store loads and publishes snapshots. A failed reload keeps the last-known-good
@@ -362,6 +390,7 @@ type Store struct {
 	refs        RefResolver
 	isProtected func(string) bool
 	now         func() time.Time
+	audit       AuditFunc
 
 	current atomic.Pointer[Snapshot]
 	lastErr atomic.Pointer[errorBox]
@@ -380,6 +409,7 @@ func NewStore(source RowSource, opts StoreOptions) *Store {
 		refs:        opts.Refs,
 		isProtected: opts.IsProtected,
 		now:         now,
+		audit:       opts.Audit,
 	}
 }
 
@@ -428,6 +458,7 @@ func (s *Store) Reload(ctx context.Context) error {
 			Refs:        s.refs,
 			IsProtected: s.isProtected,
 			Now:         s.now,
+			Audit:       s.audit,
 		})
 		if err != nil {
 			s.recordError(err)
