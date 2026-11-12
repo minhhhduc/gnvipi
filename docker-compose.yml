@@ -27,12 +27,15 @@ services:
         VERSION: ${VERSION:-dev}
     image: gnvipi:local
     ports:
-      # Host-side loopback only; change to "8080:8080" to publish on all
-      # host interfaces (then set GNVIPI_ADMIN_TOKEN for /admin).
-      - "127.0.0.1:8080:8080"
+      # Host port is configurable so an existing gateway on :8080 is not
+      # displaced; the container always listens on 8080.
+      - "127.0.0.1:${GNVIPI_PORT:-8080}:8080"
     shm_size: "2gb"
     restart: unless-stopped
     command: ["-auto", "-addr", ":8080"]
+    # Migrations and owner bootstrap are not wired yet: `serve migrate` and
+    # `serve admin create-owner` do not exist in this tree, so compose only
+    # starts PostgreSQL and never runs schema or bootstrap steps.
     depends_on:
       db:
         condition: service_healthy
@@ -41,8 +44,9 @@ services:
       # Dev-only DSN; the password lives only in the runtime environment (or
       # the ${GNVIPI_DB_PASSWORD} override above), never in the image.
       GNVIPI_DATABASE_URL: ${GNVIPI_DATABASE_URL:-postgres://gnvipi_dev:gnvipi_dev_only@db:5432/gnvipi?sslmode=disable}
-      # Base64 32-byte AES key. Generate one; the empty default is a placeholder.
-      GNVIPI_MASTER_KEY: ${GNVIPI_MASTER_KEY:-}
+      # Required. Compose fails with "set GNVIPI_MASTER_KEY" instead of
+      # silently starting without the AES key.
+      GNVIPI_MASTER_KEY: "${GNVIPI_MASTER_KEY:?set GNVIPI_MASTER_KEY}"
       GNVIPI_MASTER_KEY_VERSION: ${GNVIPI_MASTER_KEY_VERSION:-1}
       GNVIPI_DB_MAX_CONNS: ${GNVIPI_DB_MAX_CONNS:-10}
       # Separate DDL role for `serve migrate`; placeholder only here.

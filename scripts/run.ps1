@@ -64,30 +64,86 @@ if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
   throw "GNVIPI_GATEWAY_TOKEN is not set"
 }
 
-# Check PostgreSQL readiness before building or starting when a DSN is configured.
-if ($env:GNVIPI_DATABASE_URL) {
-  $dbHost, $dbPort = 'localhost', 5432
+# Run a command with a bounded timeout and suppressed output. Returns $true on
+# exit code 0. Output is never echoed (it may contain DSN details).
+function Invoke-Bounded {
+  param([string]$FilePath, [string[]]$ArgumentList, [int]$TimeoutMs = 5000)
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $FilePath
+  $psi.Arguments = ($ArgumentList | ForEach-Object {
+    if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+  }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  try { $proc = [System.Diagnostics.Process]::Start($psi) } catch { return $false }
+  if (-not $proc.WaitForExit($TimeoutMs)) {
+    try { $proc.Kill() } catch {}
+    return $false
+  }
+  return $proc.ExitCode -eq 0
+}
+
+# PostgreSQL readiness. DB mode is expected when a DSN or master key is set;
+# file-backed mode skips the check. Prefer the compose service, then a real
+# `select 1` via psql, and only fall back to a bare TCP probe with a warning.
+$dbUrl = $env:GNVIPI_DATABASE_URL
+$expectDb = [bool]$dbUrl -or [bool]$env:GNVIPI_MASTER_KEY
+if ($expectDb) {
+  if (-not $dbUrl) {
+    $dbUrl = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+  }
+  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', ''
   try {
-    $dbUri = [Uri]$env:GNVIPI_DATABASE_URL
+    $dbUri = [Uri]$dbUrl
     if ($dbUri.Host) { $dbHost = $dbUri.Host }
     if ($dbUri.Port -gt 0) { $dbPort = $dbUri.Port }
-  } catch {
-    Write-Host "could not parse GNVIPI_DATABASE_URL; skipping DB readiness check" -ForegroundColor Yellow
-  }
-  $ready = $false
-  $client = New-Object System.Net.Sockets.TcpClient
-  try {
-    $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
-    if ($async.AsyncWaitHandle.WaitOne(2000)) {
-      $client.EndConnect($async)
-      $ready = $true
+    if ($dbUri.UserInfo) {
+      $parts = $dbUri.UserInfo -split ':', 2
+      if ($parts[0]) { $dbUser = [Uri]::UnescapeDataString($parts[0]) }
+      if ($parts.Count -gt 1) { $dbPassword = [Uri]::UnescapeDataString($parts[1]) }
     }
+    $name = $dbUri.AbsolutePath.Trim('/')
+    if ($name) { $dbName = $name }
   } catch {
-    $ready = $false
-  } finally {
-    $client.Close()
+    Write-Host "could not parse GNVIPI_DATABASE_URL; using dev defaults" -ForegroundColor Yellow
   }
-  if (-not $ready) {
+  # Keep values safe as bare command arguments.
+  if ($dbUser -notmatch '^[A-Za-z0-9_.-]+$') { $dbUser = 'gnvipi_dev' }
+  if ($dbName -notmatch '^[A-Za-z0-9_.-]+$') { $dbName = 'gnvipi' }
+  if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbPort = 5432 }
+
+  $dbReady = $false
+  if (Get-Command docker -ErrorAction SilentlyContinue) {
+    $dbReady = Invoke-Bounded 'docker' @('compose', 'exec', '-T', 'db', 'pg_isready', '-U', $dbUser, '-d', $dbName)
+  } elseif (Get-Command psql -ErrorAction SilentlyContinue) {
+    # select 1 proves the DSN works, not just that the port accepts a socket.
+    # The password travels in the child environment, never in the arguments.
+    $oldPgPassword = $env:PGPASSWORD
+    if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
+    try {
+      $dbReady = Invoke-Bounded 'psql' @('-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+    } finally {
+      if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+      else { $env:PGPASSWORD = $oldPgPassword }
+    }
+  } else {
+    Write-Host "neither docker nor psql found; falling back to a TCP readiness check" -ForegroundColor Yellow
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+      $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
+      if ($async.AsyncWaitHandle.WaitOne(2000)) {
+        $client.EndConnect($async)
+        $dbReady = $true
+      }
+    } catch {
+      $dbReady = $false
+    } finally {
+      $client.Close()
+    }
+  }
+  if (-not $dbReady) {
     throw "PostgreSQL is not ready. Start it with: docker compose up -d db"
   }
 }
