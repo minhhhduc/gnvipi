@@ -38,10 +38,15 @@ func ValidDoubleSubmit(cookie, header string) bool {
 
 // CheckOrigin accepts a cookie-authenticated write only when it carries an
 // Origin equal to allowedOrigin or, absent Origin, a same-origin
-// Sec-Fetch-Site. Requests with neither signal are rejected.
+// Sec-Fetch-Site. When both are present, Fetch Metadata must corroborate the
+// Origin; repeated or conflicting signals fail closed.
 func CheckOrigin(r *http.Request, allowedOrigin string) bool {
 	want, ok := normalizeOrigin(allowedOrigin)
 	if !ok {
+		return false
+	}
+	sites, hasSite := r.Header["Sec-Fetch-Site"]
+	if hasSite && (len(sites) != 1 || !strings.EqualFold(sites[0], "same-origin")) {
 		return false
 	}
 	origins, hasOrigin := r.Header["Origin"]
@@ -52,11 +57,7 @@ func CheckOrigin(r *http.Request, allowedOrigin string) bool {
 		got, ok := normalizeOrigin(origins[0])
 		return ok && got == want
 	}
-	sites, hasSite := r.Header["Sec-Fetch-Site"]
-	if !hasSite || len(sites) != 1 {
-		return false
-	}
-	return strings.EqualFold(sites[0], "same-origin")
+	return hasSite
 }
 
 func normalizeOrigin(raw string) (string, bool) {
