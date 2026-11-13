@@ -58,7 +58,8 @@ if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
 }
 
 # Run a command with a bounded timeout and suppressed output. Returns $true on
-# exit code 0. Output is never echoed (it may contain DSN details).
+# exit code 0. Output is drained to prevent verbose children from blocking, but
+# never echoed because it may contain connection details.
 function Invoke-Bounded {
   param([string]$FilePath, [string[]]$ArgumentList, [int]$TimeoutMs = 5000)
   $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -70,27 +71,42 @@ function Invoke-Bounded {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.CreateNoWindow = $true
-  try { $proc = [System.Diagnostics.Process]::Start($psi) } catch { return $false }
-  if (-not $proc.WaitForExit($TimeoutMs)) {
-    try { $proc.Kill() } catch {}
+  $proc = $null
+  try {
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEndAsync()
+    $timedOut = -not $proc.WaitForExit($TimeoutMs)
+    if ($timedOut) {
+      try { $proc.Kill() } catch {}
+      try { $proc.WaitForExit() } catch {}
+    }
+    [void]$stdout.GetAwaiter().GetResult()
+    [void]$stderr.GetAwaiter().GetResult()
+    return (-not $timedOut) -and $proc.ExitCode -eq 0
+  } catch {
     return $false
+  } finally {
+    if ($proc) { $proc.Dispose() }
   }
-  return $proc.ExitCode -eq 0
 }
 
 # PostgreSQL readiness. DB mode is expected when a DSN or master key is set;
-# file-backed mode skips the check. Prefer the compose service, then a real
-# `select 1` via psql, and only fall back to a bare TCP probe with a warning.
+# file-backed mode skips the check. psql validates the configured target. When
+# psql is absent, Docker is safe only for the matching local Compose database;
+# a bare TCP listener is never treated as PostgreSQL readiness.
 $dbUrl = $env:GNVIPI_DATABASE_URL
 $expectDb = [bool]$dbUrl -or [bool]$env:GNVIPI_MASTER_KEY
 if ($expectDb) {
   if (-not $dbUrl) {
     $dbUrl = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
   }
-  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', ''
+  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword, $dbSslMode = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', '', ''
+  $dbConfigValid = $true
   try {
     $dbUri = [Uri]$dbUrl
-    if ($dbUri.Host) { $dbHost = $dbUri.Host }
+    if (-not $dbUri.Host) { throw 'missing database host' }
+    $dbHost = $dbUri.Host
     if ($dbUri.Port -gt 0) { $dbPort = $dbUri.Port }
     if ($dbUri.UserInfo) {
       $parts = $dbUri.UserInfo -split ':', 2
@@ -99,41 +115,50 @@ if ($expectDb) {
     }
     $name = $dbUri.AbsolutePath.Trim('/')
     if ($name) { $dbName = $name }
+    if ($dbUri.Query -match '(?:^\?|&)sslmode=([^&]+)') {
+      $dbSslMode = [Uri]::UnescapeDataString($Matches[1])
+    }
   } catch {
-    Write-Host "could not parse GNVIPI_DATABASE_URL; using dev defaults" -ForegroundColor Yellow
+    $dbConfigValid = $false
+    Write-Host "could not parse GNVIPI_DATABASE_URL" -ForegroundColor Yellow
   }
-  # Keep values safe as bare command arguments.
-  if ($dbUser -notmatch '^[A-Za-z0-9_.-]+$') { $dbUser = 'gnvipi_dev' }
-  if ($dbName -notmatch '^[A-Za-z0-9_.-]+$') { $dbName = 'gnvipi' }
-  if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbPort = 5432 }
+  if ($dbUser -notmatch '^[A-Za-z0-9_.-]+$') { $dbConfigValid = $false }
+  if ($dbName -notmatch '^[A-Za-z0-9_.-]+$') { $dbConfigValid = $false }
+  if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbConfigValid = $false }
 
   $dbReady = $false
-  if (Get-Command docker -ErrorAction SilentlyContinue) {
-    $dbReady = Invoke-Bounded 'docker' @('compose', 'exec', '-T', 'db', 'pg_isready', '-U', $dbUser, '-d', $dbName)
-  } elseif (Get-Command psql -ErrorAction SilentlyContinue) {
-    # select 1 proves the DSN works, not just that the port accepts a socket.
-    # The password travels in the child environment, never in the arguments.
-    $oldPgPassword = $env:PGPASSWORD
+  $psql = Get-Command psql -ErrorAction SilentlyContinue
+  if ($dbConfigValid -and $psql) {
+    # The password and TLS mode travel in the child environment, never in the
+    # process arguments. --no-password prevents an interactive prompt.
+    $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+    $oldPgSslMode = [Environment]::GetEnvironmentVariable('PGSSLMODE', 'Process')
     if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
+    else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+    if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
+    else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
     try {
-      $dbReady = Invoke-Bounded 'psql' @('-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+      $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
     } finally {
       if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
       else { $env:PGPASSWORD = $oldPgPassword }
+      if ($null -eq $oldPgSslMode) { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+      else { $env:PGSSLMODE = $oldPgSslMode }
     }
-  } else {
-    Write-Host "neither docker nor psql found; falling back to a TCP readiness check" -ForegroundColor Yellow
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-      $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
-      if ($async.AsyncWaitHandle.WaitOne(2000)) {
-        $client.EndConnect($async)
-        $dbReady = $true
-      }
-    } catch {
-      $dbReady = $false
-    } finally {
-      $client.Close()
+  } elseif ($dbConfigValid) {
+    $composePort = 5432
+    if ($env:GNVIPI_DB_PORT -match '^\d+$') { $composePort = [int]$env:GNVIPI_DB_PORT }
+    $composeUser = if ($env:GNVIPI_DB_USER) { $env:GNVIPI_DB_USER } else { 'gnvipi_dev' }
+    $composePassword = if ($env:GNVIPI_DB_PASSWORD) { $env:GNVIPI_DB_PASSWORD } else { 'gnvipi_dev_only' }
+    $composeName = if ($env:GNVIPI_DB_NAME) { $env:GNVIPI_DB_NAME } else { 'gnvipi' }
+    $localHost = $dbHost -in @('localhost', '127.0.0.1', '::1')
+    $matchesCompose = $localHost -and $dbPort -eq $composePort -and
+      $dbUser -eq $composeUser -and $dbPassword -eq $composePassword -and $dbName -eq $composeName
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($matchesCompose -and $docker) {
+      $dbReady = Invoke-Bounded $docker.Source @('compose', 'exec', '-T', 'db', 'pg_isready', '-U', $dbUser, '-d', $dbName)
+    } else {
+      Write-Host "psql is required to check the configured PostgreSQL target" -ForegroundColor Yellow
     }
   }
   if (-not $dbReady) {

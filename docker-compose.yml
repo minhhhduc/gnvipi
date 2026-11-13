@@ -6,8 +6,9 @@ services:
       # Loopback only: the host needs it for scripts/run.ps1 readiness checks.
       - "127.0.0.1:${GNVIPI_DB_PORT:-5432}:5432"
     environment:
-      # Dev-only defaults; override these for anything that is not a local
-      # sandbox. Never commit a production password here.
+      # Dev-only defaults; never use this password outside a local sandbox.
+      # If any value is overridden, set GNVIPI_DATABASE_URL to matching,
+      # URI-encoded credentials for the serve service too.
       POSTGRES_USER: ${GNVIPI_DB_USER:-gnvipi_dev}
       POSTGRES_PASSWORD: ${GNVIPI_DB_PASSWORD:-gnvipi_dev_only}
       POSTGRES_DB: ${GNVIPI_DB_NAME:-gnvipi}
@@ -40,11 +41,11 @@ services:
         condition: service_healthy
     environment:
       CHROME_PROXY: ${CHROME_PROXY:-}
-      # Dev-only DSN; the password lives only in the runtime environment (or
-      # the ${GNVIPI_DB_PASSWORD} override above), never in the image.
+      # Dev-only DSN. Override the whole URL when changing any GNVIPI_DB_*
+      # value above; credentials are runtime-only and never baked into images.
       GNVIPI_DATABASE_URL: ${GNVIPI_DATABASE_URL:-postgres://gnvipi_dev:gnvipi_dev_only@db:5432/gnvipi?sslmode=disable}
-      # Required when starting serve. Keep this empty by default so
-      # `docker compose up -d db` does not require a serve-only secret.
+      # No default secret: keep interpolation optional for db-only selection,
+      # but set a real key before starting the serve service.
       GNVIPI_MASTER_KEY: "${GNVIPI_MASTER_KEY:-}"
       GNVIPI_MASTER_KEY_VERSION: ${GNVIPI_MASTER_KEY_VERSION:-1}
       GNVIPI_DB_MAX_CONNS: ${GNVIPI_DB_MAX_CONNS:-10}
