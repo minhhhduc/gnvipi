@@ -50,7 +50,8 @@ export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T
     body = JSON.stringify(inputBody);
   }
   const method = (requestInit.method || "GET").toUpperCase();
-  if (!SAFE_METHODS[method] && !headers.has("Authorization") && !headers.has("X-CSRF-Token")) {
+  const bearerRequest = /^Bearer\s+\S+$/i.test(headers.get("Authorization")?.trim() || "");
+  if (!SAFE_METHODS[method] && !bearerRequest && !headers.has("X-CSRF-Token")) {
     const csrf = cookieValue("gw_csrf");
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
@@ -65,7 +66,6 @@ export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T
     if (redirectOn401) location.assign("/admin/login");
     throw new ApiError("Unauthorized", 401);
   }
-
 
   const text = await res.text();
   let parsed: unknown = undefined;

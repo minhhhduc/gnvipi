@@ -15,6 +15,29 @@ export interface AuthSession {
   csrf_token: string;
 }
 
+const ADMIN_ROLES: Record<string, true> = { owner: true, admin: true, user: true };
+
+export function parseAuthSession(value: unknown): AuthSession {
+  if (!value || typeof value !== "object") throw new Error("Invalid admin session response");
+  const session = value as Record<string, unknown>;
+  const user = session.user;
+  if (!user || typeof user !== "object") throw new Error("Invalid admin session response");
+  const fields = user as Record<string, unknown>;
+  if (
+    typeof fields.id !== "string" || !fields.id ||
+    typeof fields.username !== "string" || !fields.username ||
+    typeof fields.email !== "string" ||
+    typeof fields.display_name !== "string" ||
+    typeof fields.role !== "string" || !ADMIN_ROLES[fields.role] ||
+    fields.status !== "active" ||
+    typeof fields.must_change_password !== "boolean" ||
+    typeof session.csrf_token !== "string" || !session.csrf_token
+  ) {
+    throw new Error("Invalid admin session response");
+  }
+  return value as AuthSession;
+}
+
 export type AuthScreen = "login" | "password-change" | "console";
 
 export function authScreenFor(user: AdminUser | null): AuthScreen {
@@ -29,6 +52,7 @@ export function passwordChangeError(
 ): string | null {
   if (!currentPassword) return "Current password is required";
   if (!newPassword) return "New password is required";
+  if (newPassword.length < 12 || newPassword.length > 128) return "New password must be 12–128 characters";
   if (newPassword !== confirmation) return "New passwords do not match";
   return null;
 }

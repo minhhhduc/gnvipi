@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./lib/api";
 import { pageAllowed, pageFromUrl, rawPageFromUrl } from "./lib/router";
-import { authScreenFor, sessionFailureMode, type AdminUser, type AuthSession } from "./lib/auth";
+import { authScreenFor, parseAuthSession, sessionFailureMode, type AdminUser, type AuthSession } from "./lib/auth";
 import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { LoginScreen, PasswordChangeScreen } from "./components/Login";
 import { Shell } from "./components/Shell";
-import { ThemeContext, UiContext, type UiApi } from "./components/ui";
+import { Card, Empty, PageHeader, ThemeContext, UiContext, type UiApi } from "./components/ui";
 import { StatsView } from "./views/Stats";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
@@ -37,31 +37,51 @@ export function App() {
   const [toasts, setToasts] = useState<{ id: number; message: string; kind: "ok" | "bad" }[]>([]);
   const toastId = useRef(0);
   const statsErrorShown = useRef(false);
-  const consoleReady = user !== null && authScreenFor(user) === "console";
+  const identityGeneration = useRef(0);
+  const statsAbort = useRef<AbortController | null>(null);
+  const consoleReady = authChecked && user !== null && authScreenFor(user) === "console";
+  const effectivePage = user && pageAllowed(page, user.role) ? page : "stats";
+  const statsPollingAllowed = consoleReady && user?.role !== "user";
+
+  const invalidateIdentityData = useCallback(() => {
+    identityGeneration.current += 1;
+    statsAbort.current?.abort();
+    statsAbort.current = null;
+    statsErrorShown.current = false;
+    setStats(null);
+    setStatsUpdated(null);
+    setBannerState(null);
+  }, []);
+
+  const setIdentity = useCallback((nextUser: AdminUser, legacy: boolean) => {
+    invalidateIdentityData();
+    setLegacyAuth(legacy);
+    setPage(pageFromUrl(location.search, nextUser.role));
+    setUser(nextUser);
+    setAuthError("");
+  }, [invalidateIdentityData]);
 
   const loadSession = useCallback(() => {
+    invalidateIdentityData();
+    setUser(null);
     setAuthChecked(false);
     setAuthError("");
     setLegacyAuth(false);
-    api<AuthSession>("/admin/api/auth/session", { redirectOn401: false })
-      .then((session) => setUser(session.user))
+    api<unknown>("/admin/api/auth/session", { redirectOn401: false })
+      .then((value) => setIdentity(parseAuthSession(value).user, false))
       .catch((err) => {
         if (err instanceof ApiError) {
           const mode = sessionFailureMode(err.status);
-          if (mode === "login") {
-            setUser(null);
-            return;
-          }
+          if (mode === "login") return;
           if (mode === "legacy") {
-            setLegacyAuth(true);
-            setUser(LEGACY_ADMIN_USER);
+            setIdentity(LEGACY_ADMIN_USER, true);
             return;
           }
         }
         setAuthError(err instanceof Error ? err.message : "Could not check the admin session");
       })
       .finally(() => setAuthChecked(true));
-  }, []);
+  }, [invalidateIdentityData, setIdentity]);
 
   useEffect(loadSession, [loadSession]);
 
@@ -101,36 +121,47 @@ export function App() {
         ? "Sign in"
         : user.must_change_password
           ? "Change password"
-          : page === "chromes" ? "Chrome" : page[0].toUpperCase() + page.slice(1);
+          : effectivePage === "chromes" ? "Chrome" : effectivePage[0].toUpperCase() + effectivePage.slice(1);
     document.title = `${title} · Gateway Admin`;
-  }, [authChecked, page, user]);
+  }, [authChecked, effectivePage, user]);
 
   const refreshStats = useCallback(() => {
-    if (!consoleReady) return;
-    api<Stats>("/admin/api/stats")
+    if (!statsPollingAllowed) return;
+    statsAbort.current?.abort();
+    const controller = new AbortController();
+    const generation = identityGeneration.current;
+    statsAbort.current = controller;
+    api<Stats>("/admin/api/stats", { signal: controller.signal })
       .then((data) => {
+        if (controller.signal.aborted || generation !== identityGeneration.current) return;
         setStats(data);
         setStatsUpdated(Date.now());
         statsErrorShown.current = false;
       })
       .catch((err) => {
-        if (statsErrorShown.current) return;
+        if (controller.signal.aborted || generation !== identityGeneration.current || statsErrorShown.current) return;
         statsErrorShown.current = true;
         setBannerState({
           message: `Stats unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
           retry: refreshStats,
           owner: "stats",
         });
+      })
+      .finally(() => {
+        if (statsAbort.current === controller) statsAbort.current = null;
       });
-  }, [consoleReady]);
+  }, [statsPollingAllowed]);
 
   useEffect(() => {
-    if (!consoleReady) return;
+    if (!statsPollingAllowed) return;
     let timer: number | undefined;
     const syncPolling = () => {
       clearInterval(timer);
       timer = undefined;
-      if (document.hidden) return;
+      if (document.hidden) {
+        statsAbort.current?.abort();
+        return;
+      }
       refreshStats();
       timer = setInterval(refreshStats, 2000);
     };
@@ -140,8 +171,9 @@ export function App() {
     return () => {
       document.removeEventListener("visibilitychange", syncPolling);
       clearInterval(timer);
+      statsAbort.current?.abort();
     };
-  }, [consoleReady, refreshStats]);
+  }, [refreshStats, statsPollingAllowed]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -156,23 +188,19 @@ export function App() {
 
   const logout = useCallback(async () => {
     await api<void>("/admin/api/auth/logout", { method: "POST" });
+    invalidateIdentityData();
+    setLegacyAuth(false);
     setUser(null);
-    setStats(null);
-    setStatsUpdated(null);
-    setBannerState(null);
     const url = new URL(location.href);
     url.pathname = "/admin";
     url.search = "";
     url.hash = "";
     history.replaceState(null, "", url);
-  }, []);
+  }, [invalidateIdentityData]);
 
   const authenticated = useCallback((session: AuthSession) => {
-    setLegacyAuth(false);
-    setUser(session.user);
-    setPage(pageFromUrl(location.search, session.user.role));
-    setAuthError("");
-  }, []);
+    setIdentity(session.user, false);
+  }, [setIdentity]);
 
   const ui: UiApi = {
     toast,
@@ -201,10 +229,20 @@ export function App() {
     return <PasswordChangeScreen user={user} onChanged={setUser} onLogout={logout} />;
   }
 
-  const body =
-    page === "models" ? <ModelsView /> :
-    page === "config" ? <ConfigView /> :
-    page === "chromes" ? <ChromesView /> :
+  const body = user.role === "user" ? (
+    <>
+      <PageHeader title="Stats" sub="Usage for this gateway account" />
+      <Card>
+        <Empty
+          title="Per-user stats are not available yet"
+          body="Request attribution is still pending. Operator statistics are never shown to user accounts."
+        />
+      </Card>
+    </>
+  ) :
+    effectivePage === "models" ? <ModelsView /> :
+    effectivePage === "config" ? <ConfigView /> :
+    effectivePage === "chromes" ? <ChromesView /> :
     <StatsView />;
 
   return (
@@ -212,12 +250,12 @@ export function App() {
       <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate }}>
         <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
           <Shell
-            page={page}
+            page={effectivePage}
             user={user}
             onLogout={legacyAuth ? undefined : () => void logout().catch((err) => toast(`Sign out failed: ${err instanceof Error ? err.message : "unknown"}`, "bad"))}
           >
             {banner && (
-              <div class="mb-3 flex items-start gap-2.5 rounded-[10px] border border-bad bg-bad-soft px-[13px] py-2.5 text-xs">
+              <div role="alert" class="mb-3 flex items-start gap-2.5 rounded-[10px] border border-bad bg-bad-soft px-[13px] py-2.5 text-xs">
                 <span class="text-bad">⚠</span>
                 <div>
                   <b class="text-bad">Request failed:</b> {banner.message}{" "}
@@ -231,9 +269,9 @@ export function App() {
             {body}
           </Shell>
           {toasts.length > 0 && (
-            <div class="fixed bottom-5 right-5 z-50 flex flex-col gap-2">
+            <div class="fixed bottom-5 right-5 z-50 flex flex-col gap-2" aria-live="polite" aria-relevant="additions">
               {toasts.map((item) => (
-                <div key={item.id} class={`rounded-lg px-3.5 py-2.5 text-xs text-white shadow-lg ${item.kind === "bad" ? "bg-bad" : "bg-fg"}`}>
+                <div role={item.kind === "bad" ? "alert" : "status"} key={item.id} class={`rounded-lg px-3.5 py-2.5 text-xs text-white shadow-lg ${item.kind === "bad" ? "bg-bad" : "bg-fg"}`}>
                   {item.message}
                 </div>
               ))}

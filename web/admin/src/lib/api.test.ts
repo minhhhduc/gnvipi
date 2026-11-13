@@ -87,6 +87,24 @@ describe("api", () => {
     }
   });
 
+  it.each(["", "Basic dXNlcjpwYXNz", "Token opaque", "Bearer", "bearer   "])(
+    "keeps CSRF protection for a non-bearer Authorization value %j",
+    async (authorization) => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal("document", { cookie: "gw_csrf=session-token" });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await api("/admin/api/config/search", {
+        method: "POST",
+        headers: { Authorization: authorization },
+        body: {},
+      });
+
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("session-token");
+    },
+  );
+
   it("lets the initial anonymous session probe show login without a redirect loop", async () => {
     const assign = vi.fn();
     vi.stubGlobal("location", { assign });

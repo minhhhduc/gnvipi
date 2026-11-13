@@ -3,6 +3,7 @@ import { useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import {
   passwordChangeError,
+  parseAuthSession,
   type AdminUser,
   type AuthSession,
 } from "../lib/auth";
@@ -51,11 +52,12 @@ export function LoginScreen({
     setBusy(true);
     setError("");
     try {
-      const session = await api<AuthSession>(LOGIN_PATH, {
+      const response = await api<unknown>(LOGIN_PATH, {
         method: "POST",
         body: { username, password },
         redirectOn401: false,
       });
+      const session = parseAuthSession(response);
       setPassword("");
       onAuthenticated(session);
     } catch (err) {
@@ -181,6 +183,7 @@ export function PasswordChangeScreen({
             type="password"
             autoComplete="new-password"
             minLength={12}
+            maxLength={128}
             required
             disabled={busy}
             value={newPassword}
@@ -196,6 +199,7 @@ export function PasswordChangeScreen({
             type="password"
             autoComplete="new-password"
             minLength={12}
+            maxLength={128}
             required
             disabled={busy}
             value={confirmation}
