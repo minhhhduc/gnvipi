@@ -86,6 +86,10 @@ func TestValidatePassword(t *testing.T) {
 	if err := ValidatePassword("alice-rozelle-99", "bob", "alice@example.com"); !errors.Is(err, ErrPasswordContainsIdentity) {
 		t.Fatalf("email identity: %v", err)
 	}
+	if err := ValidatePassword("Lantern-xy-9!", "other-user", "xy@example.com"); !errors.Is(err, ErrPasswordContainsIdentity) {
+		t.Fatalf("short email identity: %v", err)
+	}
+
 	var common string
 	for candidate := range commonPasswords {
 		if len(candidate) >= minPassword {

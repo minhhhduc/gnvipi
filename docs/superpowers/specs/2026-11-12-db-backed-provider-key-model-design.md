@@ -730,10 +730,17 @@ Pool and statement settings:
 ### 6.1 Passwords
 
 - Argon2id PHC string: `$argon2id$v=19$m=65536,t=3,p=2$<salt>$<hash>`.
-- 16-byte random salt per user; parameters configurable.
+- 16-byte random salt per user. Argon2id memory (KiB), iterations and
+  parallelism are configurable with `GNVIPI_PASSWORD_ARGON2_MEMORY_KIB`,
+  `GNVIPI_PASSWORD_ARGON2_ITERATIONS` and
+  `GNVIPI_PASSWORD_ARGON2_PARALLELISM`; defaults are `65536`, `3` and `2`.
 - Optional pepper: `GNVIPI_PASSWORD_PEPPER`. Apply
   `HMAC-SHA256(pepper, password)` before Argon2id so the pepper is not
-  length-limited. A pepper change requires rehash.
+  length-limited.
+- During a pepper rotation, set `GNVIPI_PASSWORD_PEPPER_PREVIOUS` to the exact
+  previous pepper (an explicitly empty value migrates previously unpeppered
+  hashes). A successful login rehashes with the current pepper; unset the
+  previous value after the rotation window.
 - Constant-time compare; rehash on successful login when parameters or pepper
   are outdated.
 - Length 12–128 characters; no composition rules.
@@ -1211,6 +1218,10 @@ Behavior:
 | `GNVIPI_MASTER_KEY_VERSION` | yes | integer, default 1 |
 | `GNVIPI_MASTER_KEY_PREVIOUS` | rotation | `version:base64` pairs |
 | `GNVIPI_PASSWORD_PEPPER` | optional | HMAC pepper before Argon2id |
+| `GNVIPI_PASSWORD_PEPPER_PREVIOUS` | rotation | exact previous pepper; set empty for previously unpeppered hashes |
+| `GNVIPI_PASSWORD_ARGON2_MEMORY_KIB` | optional | default 65536; minimum 8192 |
+| `GNVIPI_PASSWORD_ARGON2_ITERATIONS` | optional | default 3; positive integer |
+| `GNVIPI_PASSWORD_ARGON2_PARALLELISM` | optional | default 2; positive integer, maximum 255 |
 | `GNVIPI_ENV` | optional | `production` disables `--auto-migrate` |
 | `GNVIPI_DB_MAX_CONNS` | optional | default 10 |
 | `GNVIPI_DB_MIN_CONNS` | optional | default 1 |

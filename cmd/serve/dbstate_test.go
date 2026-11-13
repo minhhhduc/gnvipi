@@ -32,6 +32,20 @@ func TestOpenAppDBKeepsDevelopmentFileModeWithoutDSN(t *testing.T) {
 	}
 }
 
+func TestOpenAppDBRejectsInvalidArgon2ConfigurationBeforeConnecting(t *testing.T) {
+	t.Setenv(databaseEnv, "postgres://postgres@127.0.0.1:1/gnvipi?sslmode=disable")
+	t.Setenv("GNVIPI_PASSWORD_ARGON2_MEMORY_KIB", "not-a-number")
+
+	state, err := openAppDB(t.Context(), false)
+	if state != nil {
+		state.Close()
+		t.Fatal("invalid password configuration returned database state")
+	}
+	if err == nil || !strings.Contains(err.Error(), "GNVIPI_PASSWORD_ARGON2_MEMORY_KIB") {
+		t.Fatalf("invalid password configuration error = %v, want the invalid variable named", err)
+	}
+}
+
 func TestOpenAppDBRefusesAutoMigrateInProduction(t *testing.T) {
 	dsn := "postgres://runtime@127.0.0.1:1/gnvipi?sslmode=disable"
 	t.Setenv(databaseEnv, dsn)

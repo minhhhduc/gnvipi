@@ -127,6 +127,23 @@ func VerifyPassword(password, encoded string, params Params, pepper []byte) (ok,
 	return ok, NeedsRehash(encoded, params), nil
 }
 
+// verifyPasswordWithPrevious verifies both configured peppers when a rotation
+// window is active. Both hashes run even when the current pepper succeeds so
+// account state does not change verification timing. A previous-pepper match
+// always requests an upgrade to the current pepper.
+func verifyPasswordWithPrevious(password, encoded string, params Params, pepper, previousPepper []byte, previousPepperSet bool) (ok, needsRehash bool, err error) {
+	ok, needsRehash, err = VerifyPassword(password, encoded, params, pepper)
+	if err != nil || !previousPepperSet {
+		return ok, needsRehash, err
+	}
+	previousOK, _, previousErr := VerifyPassword(password, encoded, params, previousPepper)
+	if previousErr != nil {
+		return false, false, previousErr
+	}
+	return ok || previousOK, needsRehash || (!ok && previousOK), nil
+
+}
+
 // NeedsRehash reports whether encoded was made with different parameters.
 // Invalid or empty hashes report true so callers rehash on next login.
 func NeedsRehash(encoded string, params Params) bool {
@@ -213,7 +230,7 @@ func ValidatePassword(password, username, email string) error {
 	}
 	for _, part := range []string{username, emailLocalPart(email)} {
 		part = strings.ToLower(strings.TrimSpace(part))
-		if utf8.RuneCountInString(part) >= 3 && strings.Contains(lower, part) {
+		if part != "" && strings.Contains(lower, part) {
 			return ErrPasswordContainsIdentity
 		}
 	}
@@ -233,13 +250,13 @@ var (
 	dummyHash     string
 )
 
-// dummyVerification burns the same Argon2id work as a real verification for an
-// unknown username, reducing username timing enumeration.
-func dummyVerification(password string, pepper []byte) {
+// dummyVerification burns the same number of Argon2id passes as a real
+// verification, including an active previous-pepper rotation window.
+func dummyVerification(password string, pepper, previousPepper []byte, previousPepperSet bool) {
 	dummyHashOnce.Do(func() {
 		// Params match DefaultParams; a deployment using custom params sees a
 		// slightly different cost on unknown users only.
 		dummyHash, _ = HashPassword("gnvipi-dummy-password", DefaultParams(), nil) //nolint:errcheck // best-effort cleanup/best-effort parse
 	})
-	_, _, _ = VerifyPassword(password, dummyHash, DefaultParams(), pepper) //nolint:errcheck // best-effort cleanup/best-effort parse
+	_, _, _ = verifyPasswordWithPrevious(password, dummyHash, DefaultParams(), pepper, previousPepper, previousPepperSet) //nolint:errcheck // best-effort cleanup/best-effort parse
 }

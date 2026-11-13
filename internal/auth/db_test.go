@@ -242,7 +242,7 @@ func TestUsersDB(t *testing.T) {
 		t.Fatalf("duplicate username: %v", err)
 	}
 	if _, err := CreateUser(ctx, db, CreateUserInput{
-		Username: "bad-role", Role: "root", PasswordHash: u.PasswordHash,
+		Username: "bad-role", Role: "viewer", PasswordHash: u.PasswordHash,
 	}); !errors.Is(err, ErrInvalidRole) {
 		t.Fatalf("invalid role: %v", err)
 	}
@@ -367,6 +367,76 @@ func TestConcurrentLastOwnerDemotion(t *testing.T) {
 	}
 	if activeOwners(t, db) != 1 {
 		t.Fatal("concurrent demotions left no active owner")
+	}
+}
+
+func TestConcurrentLastOwnerMixedMutations(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		left  func(context.Context, *pgxpool.Pool, string) error
+		right func(context.Context, *pgxpool.Pool, string) error
+	}{
+		{
+			name: "delete and disable",
+			left: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				return DeleteUser(ctx, db, id)
+			},
+			right: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				_, err := UpdateUser(ctx, db, id, UpdateUserInput{Status: statusPtr(StatusDisabled)})
+				return err
+			},
+		},
+		{
+			name: "disable and demote",
+			left: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				_, err := UpdateUser(ctx, db, id, UpdateUserInput{Status: statusPtr(StatusDisabled)})
+				return err
+			},
+			right: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				_, err := UpdateUser(ctx, db, id, UpdateUserInput{Role: rolePtr(RoleAdmin)})
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := testDB(t)
+			ctx := t.Context()
+			a := createTestUser(t, db, "mixed-owner-a", RoleOwner, "correct horse battery staple")
+			b := createTestUser(t, db, "mixed-owner-b", RoleOwner, "correct horse battery staple")
+
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var wg sync.WaitGroup
+			for _, op := range []struct {
+				id string
+				fn func(context.Context, *pgxpool.Pool, string) error
+			}{{a.ID, tc.left}, {b.ID, tc.right}} {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					errs <- op.fn(ctx, db, op.id)
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+
+			succeeded, blocked := 0, 0
+			for err := range errs {
+				switch {
+				case err == nil:
+					succeeded++
+				case errors.Is(err, ErrLastOwner):
+					blocked++
+				default:
+					t.Fatalf("unexpected mutation error: %v", err)
+				}
+			}
+			if succeeded != 1 || blocked != 1 || activeOwners(t, db) != 1 {
+				t.Fatalf("successes=%d blocked=%d active owners=%d, want 1/1/1", succeeded, blocked, activeOwners(t, db))
+			}
+		})
 	}
 }
 

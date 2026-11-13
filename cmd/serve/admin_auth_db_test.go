@@ -51,7 +51,11 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 	}
 	ctx := t.Context()
 	pool := newAdminTestPool(t, dsn)
-	state := newAuthState(pool)
+	password, err := loadPasswordHashConfig(os.LookupEnv)
+	if err != nil {
+		t.Fatalf("load password hash configuration: %v", err)
+	}
+	state := newAuthState(pool, &password)
 	// The harness serves http://127.0.0.1:8080, i.e. a loopback bind, which is
 	// the one configuration where plaintext cookies are allowed.
 	state.loopbackBind = true
@@ -376,6 +380,9 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 		t.Fatalf("create user = %d, want 201 (body %s)", res.Code, res.Body.String())
 	}
 	userID, _ := decodeBody(t, res)["id"].(string)
+	if strings.Contains(res.Body.String(), dbUserPassword) || strings.Contains(res.Body.String(), "password_hash") {
+		t.Fatalf("create-user response exposed password material: %s", res.Body.String())
+	}
 
 	// The write used the owner's admin token, so actor_id names that token while
 	// user_id indexes the account affected by the mutation.
@@ -445,6 +452,18 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	if changeActor != "token" || changeActorID == "" {
 		t.Fatalf("password change actor = %s/%s, want token/<token id>", changeActor, changeActorID)
 	}
+	var auditContainsPassword bool
+	if err := h.pool.QueryRow(t.Context(), `
+		SELECT EXISTS (
+			SELECT 1 FROM audit_log
+			WHERE details::text LIKE '%' || $1 || '%'
+		)`, dbUserPassword).Scan(&auditContainsPassword); err != nil {
+		t.Fatalf("scan audit details for password: %v", err)
+	}
+	if auditContainsPassword {
+		t.Fatal("user audit details exposed a submitted password")
+	}
+
 }
 
 // TestDBAdminAuth_PlaintextLoginRequiresLoopback pins the transport rule: the
@@ -599,5 +618,56 @@ func TestDBAdminAuth_RehashDoesNotOverwriteChangedPassword(t *testing.T) {
 	}
 	if got != replacement {
 		t.Fatal("login rehash overwrote a concurrently changed password")
+	}
+}
+
+func TestDBAdminAuth_LoginRehashesPreviousPepperAndParameters(t *testing.T) {
+	const newPepper = "new-deployment-pepper"
+	for _, tc := range []struct {
+		name      string
+		oldPepper string
+	}{
+		{name: "rotated pepper", oldPepper: "old-deployment-pepper"},
+		{name: "previously unpeppered", oldPepper: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(pepperEnv, newPepper)
+			t.Setenv("GNVIPI_PASSWORD_PEPPER_PREVIOUS", tc.oldPepper)
+			h := newDBAdminHarness(t)
+
+			stale, err := auth.HashPassword(dbOwnerPassword, auth.Params{
+				Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32,
+			}, []byte(tc.oldPepper))
+			if err != nil {
+				t.Fatalf("hash stale password: %v", err)
+			}
+			if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.owner.ID, stale); err != nil {
+				t.Fatalf("store stale password hash: %v", err)
+			}
+
+			res := makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{
+				"username": dbOwnerUsername,
+				"password": dbOwnerPassword,
+			}, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("login with previous pepper = %d, want 200 (body %s)", res.Code, res.Body.String())
+			}
+
+			var upgraded string
+			if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.owner.ID).Scan(&upgraded); err != nil {
+				t.Fatalf("read upgraded password hash: %v", err)
+			}
+			ok, needsRehash, err := auth.VerifyPassword(dbOwnerPassword, upgraded, h.state.login.Params, []byte(newPepper))
+			if err != nil || !ok || needsRehash {
+				t.Fatalf("upgraded hash = ok %v rehash %v err %v", ok, needsRehash, err)
+			}
+			oldOK, _, err := auth.VerifyPassword(dbOwnerPassword, upgraded, h.state.login.Params, []byte(tc.oldPepper))
+			if err != nil {
+				t.Fatalf("verify upgraded hash with old pepper: %v", err)
+			}
+			if oldOK {
+				t.Fatal("upgraded hash still uses the previous pepper")
+			}
+		})
 	}
 }
