@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pageFromUrl } from "./router";
+import { pageFromUrl, rawPageFromUrl } from "./router";
 
 describe("pageFromUrl", () => {
   it.each([
@@ -17,4 +17,12 @@ describe("pageFromUrl", () => {
       expect(pageFromUrl(search)).toBe("stats");
     },
   );
+});
+
+describe("rawPageFromUrl", () => {
+  it("preserves an unknown page for the fallback notice", () => {
+    expect(rawPageFromUrl("?page=unknown")).toBe("unknown");
+    expect(rawPageFromUrl("?page=")).toBe("");
+    expect(rawPageFromUrl("?other=models")).toBe("");
+  });
 });

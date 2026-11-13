@@ -6,10 +6,21 @@ import { avg, clock, fmtCompact, fmtInt, fmtMs, fmtPercent, minuteLabel, p95, up
 import { clampFrame, getFrameNavState } from "../lib/helpers";
 import { modelSetKey, seriesValues, sortRequestEvents, topModelNames, ttfbValues } from "../lib/chart";
 import type { RequestSortKey, SortDirection } from "../lib/chart";
-import type { FrameResponse, Stats as StatsData } from "../lib/types";
+import type { FrameResponse, RequestEvent, Stats as StatsData } from "../lib/types";
 import { Card, CardHead, Empty, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
 import { LineChart } from "../components/Chart";
+
+const NO_EVENTS: RequestEvent[] = [];
+
+// The KPI tiles and latency charts label themselves "last 200 events", which is
+// the live ring. Once the operator opens an older frame the request log must
+// follow that frame, but the KPIs must not: a stale frame would silently
+// rewrite totals that only ever describe now.
+export function selectStatsEvents(live?: RequestEvent[], frame?: RequestEvent[]) {
+  const kpiEvents = live ?? NO_EVENTS;
+  return { kpiEvents, logEvents: frame ?? kpiEvents };
+}
 
 const COLORS = {
   req: "var(--accent)",
@@ -54,7 +65,7 @@ export function StatsView() {
     () => (data.series || []).slice().sort((a, b) => a.minute.localeCompare(b.minute)),
     [data.series],
   );
-  const events = frameData?.events || data.events || [];
+  const { kpiEvents, logEvents } = selectStatsEvents(data.events, frameData?.events);
   const totalFrames = frameData?.total_frames ?? data.total_frames ?? 0;
 
   const models = data.models || [];
@@ -63,9 +74,9 @@ export function StatsView() {
   const inputTokens = models.reduce((n, m) => n + m.input_tokens, 0);
   const outputTokens = models.reduce((n, m) => n + m.output_tokens, 0);
   const latest = series[series.length - 1];
-  const streamed = events.filter((e) => e.streamed && e.ttfb_ms > 0);
+  const streamed = kpiEvents.filter((e) => e.streamed && e.ttfb_ms > 0);
   const avgTtfb = avg(streamed.map((e) => e.ttfb_ms));
-  const p95Ms = p95(events.map((e) => e.ms));
+  const p95Ms = p95(kpiEvents.map((e) => e.ms));
   const hasTraffic = totalRequests > 0 || series.some((m) => m.requests > 0);
   // Keep all 8 slots; show "—" until the first successful stats read.
   const unavailable = !stats;
@@ -76,8 +87,8 @@ export function StatsView() {
   const topModelKey = modelSetKey(seriesByModel);
   const topModels = useMemo(() => topModelNames(seriesByModel), [topModelKey]);
   const sortedEvents = useMemo(
-    () => sortRequestEvents(events, eventSort.key, eventSort.direction),
-    [events, eventSort.key, eventSort.direction],
+    () => sortRequestEvents(logEvents, eventSort.key, eventSort.direction),
+    [logEvents, eventSort.key, eventSort.direction],
   );
 
   const frameRef = useRef<number | null>(frame);
@@ -249,7 +260,7 @@ export function StatsView() {
       <Card>
         <CardHead
           title="Request log"
-          sub={throttled ? "throttled" : frameData ? `frame ${frameData.frame} of ${totalFrames}` : `${events.length} recent events`}
+          sub={throttled ? "throttled" : frameData ? `frame ${frameData.frame} of ${totalFrames}` : `${logEvents.length} recent events`}
         >
           <div class="flex items-center gap-1">
             {(() => {
@@ -286,7 +297,7 @@ export function StatsView() {
             {throttled ? ` Retry in ${Math.ceil((retryAt - now) / 1000)}s.` : ""}
           </div>
         )}
-        {events.length === 0 ? (
+        {logEvents.length === 0 ? (
           <Empty title="No requests yet" body="The log fills as soon as traffic arrives." />
         ) : (
           <table class="table">

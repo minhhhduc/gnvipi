@@ -36,6 +36,41 @@ export function syncSearchEngine(engine: string, currentUrl: string): SearchSele
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+interface MutableCurrent<T> {
+  current: T;
+}
+
+type LatestWriteResult =
+  | { started: false }
+  | { started: true; ok: true }
+  | { started: true; ok: false; error: unknown };
+
+export async function drainLatestWrites<T>(
+  pending: MutableCurrent<T | null>,
+  inFlight: MutableCurrent<boolean>,
+  write: (target: T) => Promise<void>,
+  confirm: (target: T) => void,
+): Promise<LatestWriteResult> {
+  if (inFlight.current) return { started: false };
+  inFlight.current = true;
+  try {
+    while (pending.current !== null) {
+      const target = pending.current;
+      pending.current = null;
+      try {
+        await write(target);
+      } catch (error) {
+        pending.current = null;
+        return { started: true, ok: false, error };
+      }
+      confirm(target);
+    }
+    return { started: true, ok: true };
+  } finally {
+    inFlight.current = false;
+  }
+}
+
 function Saved({ state }: { state: SaveState }) {
   if (state === "saving") return <span class="pill pill-mute">Saving…</span>;
   if (state === "saved") return <span class="pill pill-ok">Saved</span>;

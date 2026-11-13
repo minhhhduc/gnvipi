@@ -1,7 +1,12 @@
 import type { Page } from "./context";
 
+/** The ?page= value exactly as the URL carries it ("" when absent). */
+export function rawPageFromUrl(search: string): string {
+  return new URLSearchParams(search).get("page") ?? "";
+}
+
 export function pageFromUrl(search: string): Page {
-  const value = new URLSearchParams(search).get("page");
+  const value = rawPageFromUrl(search);
   switch (value) {
     case "stats":
     case "models":

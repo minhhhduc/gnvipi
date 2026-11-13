@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api } from "./lib/api";
-import { pageFromUrl } from "./lib/router";
+import { pageFromUrl, rawPageFromUrl } from "./lib/router";
 import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { Shell } from "./components/Shell";
@@ -30,11 +30,27 @@ export function App() {
     window.scrollTo(0, 0);
   }, []);
 
-  useEffect(() => {
-    const onPop = () => setPage(pageFromUrl(location.search));
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+  const toast = useCallback((message: string, kind: "ok" | "bad" = "ok") => {
+    const id = ++toastId.current;
+    setToasts((prev) => [...prev, { id, message, kind }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
   }, []);
+
+  // pageFromUrl() falls back to Stats for anything it does not recognize, so
+  // read the raw value too and say why the operator did not land where they
+  // asked instead of silently rewriting their route.
+  const syncFromUrl = useCallback(() => {
+    const raw = rawPageFromUrl(location.search);
+    const next = pageFromUrl(location.search);
+    setPage(next);
+    if (raw && raw !== next) toast(`Unknown page “${raw}” — showing Stats`, "bad");
+  }, [toast]);
+
+  useEffect(() => {
+    syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
+  }, [syncFromUrl]);
 
   useEffect(() => {
     document.title = `${page === "chromes" ? "Chrome" : page[0].toUpperCase() + page.slice(1)} · Gateway Admin`;
@@ -88,11 +104,7 @@ export function App() {
   };
 
   const ui: UiApi = {
-    toast: (message, kind = "ok") => {
-      const id = ++toastId.current;
-      setToasts((prev) => [...prev, { id, message, kind }]);
-      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
-    },
+    toast,
     setBanner: (message, retry, owner) =>
       setBannerState((current) => message ? { message, retry, owner } : !owner || current?.owner === owner ? null : current),
   };

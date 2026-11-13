@@ -1,10 +1,18 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import type { ChromeInfo, ChromeStatus } from "../lib/types";
 import { formatLastOk } from "../lib/helpers";
 import { Card, CardHead, Dialog, Empty, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
+
+// The 5s poll, the post-action refresh and an unmount all read the same
+// endpoint; only the newest, still-attached read may write status, otherwise a
+// slow poll lands after an action and rewrites the pool the operator just
+// changed.
+export function shouldApplyChromeLoad(requestId: number, currentId: number, signal?: AbortSignal): boolean {
+  return requestId === currentId && !(signal?.aborted ?? false);
+}
 
 export function ChromesView() {
   const { toast, setBanner } = useUi();
@@ -13,20 +21,29 @@ export function ChromesView() {
   const [confirm, setConfirm] = useState<{ kind: "all" } | { kind: "one"; worker: ChromeInfo } | null>(null);
   const [busy, setBusy] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
+  const reqId = useRef(0);
 
-  const load = async () => {
+  const load = async (signal?: AbortSignal) => {
+    const thisReq = ++reqId.current;
     try {
-      setStatus(await api<ChromeStatus>("/admin/api/chromes"));
+      const next = await api<ChromeStatus>("/admin/api/chromes", { signal });
+      if (!shouldApplyChromeLoad(thisReq, reqId.current, signal)) return;
+      setStatus(next);
       setError(null);
     } catch (err) {
+      if (!shouldApplyChromeLoad(thisReq, reqId.current, signal)) return;
       setError(err instanceof Error ? err.message : "Chrome status failed");
     }
   };
 
   useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => clearInterval(timer);
+    const ctrl = new AbortController();
+    void load(ctrl.signal);
+    const timer = setInterval(() => void load(ctrl.signal), 5000);
+    return () => {
+      ctrl.abort();
+      clearInterval(timer);
+    };
   }, []);
 
   const post = async (body: Record<string, unknown>, label: string) => {
