@@ -549,3 +549,115 @@ func TestConfigVersionBumpsPerStatement(t *testing.T) {
 		expectBump(v, "key_models insert")
 	})
 }
+
+func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect admin database: %v", err)
+	}
+	defer func() { _ = admin.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := admin.Exec(ctx, `DO $$ BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gnvipi_app') THEN
+			CREATE ROLE gnvipi_app NOLOGIN;
+		END IF;
+	END $$`); err != nil {
+		t.Skipf("test database user cannot create roles: %v", err)
+	}
+
+	database := fmt.Sprintf("gnvipi_grants_%d", time.Now().UnixNano())
+	identifier := pgx.Identifier{database}.Sanitize()
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+identifier+` TEMPLATE template0`); err != nil {
+		t.Skipf("test database user cannot create databases: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = admin.Exec(cleanupCtx, `DROP DATABASE IF EXISTS `+identifier+` WITH (FORCE)`) //nolint:errcheck // best-effort test cleanup
+	}()
+
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	cfg.Database = database
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect isolated database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := conn.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatalf("reset isolated public schema: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`); err != nil {
+		t.Fatalf("create migration metadata: %v", err)
+	}
+	v1, err := migrations.FS.ReadFile("0001_init.up.sql")
+	if err != nil {
+		t.Fatalf("read v1 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v1)); err != nil {
+		t.Fatalf("apply v1 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		GRANT CREATE ON SCHEMA public TO gnvipi_app;
+		GRANT ALL PRIVILEGES ON audit_log TO gnvipi_app`); err != nil {
+		t.Fatalf("seed excessive v1 privileges: %v", err)
+	}
+	v2, err := migrations.FS.ReadFile("0002_runtime_role_grants.up.sql")
+	if err != nil {
+		t.Fatalf("read v2 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v2)); err != nil {
+		t.Fatalf("apply v2 migration: %v", err)
+	}
+
+	checks := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"schema usage", `SELECT has_schema_privilege('gnvipi_app', 'public', 'USAGE')`, true},
+		{"schema create denied", `SELECT has_schema_privilege('gnvipi_app', 'public', 'CREATE')`, false},
+		{"users DML", `SELECT has_table_privilege('gnvipi_app', 'users', 'SELECT')
+			AND has_table_privilege('gnvipi_app', 'users', 'INSERT')
+			AND has_table_privilege('gnvipi_app', 'users', 'UPDATE')
+			AND has_table_privilege('gnvipi_app', 'users', 'DELETE')`, true},
+		{"schema migrations read", `SELECT has_table_privilege('gnvipi_app', 'schema_migrations', 'SELECT')`, true},
+		{"audit append", `SELECT has_table_privilege('gnvipi_app', 'audit_log', 'SELECT')
+			AND has_table_privilege('gnvipi_app', 'audit_log', 'INSERT')`, true},
+		{"audit mutation denied", `SELECT NOT has_table_privilege('gnvipi_app', 'audit_log', 'UPDATE')
+			AND NOT has_table_privilege('gnvipi_app', 'audit_log', 'DELETE')`, true},
+		{"runtime role does not own tables", `SELECT NOT EXISTS (
+			SELECT 1 FROM pg_class WHERE relkind = 'r' AND pg_get_userbyid(relowner) = 'gnvipi_app')`, true},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			var got bool
+			if err := conn.QueryRow(ctx, check.query).Scan(&got); err != nil {
+				t.Fatalf("check grant: %v", err)
+			}
+			if got != check.want {
+				t.Fatalf("grant check = %v, want %v", got, check.want)
+			}
+		})
+	}
+	down, err := migrations.FS.ReadFile("0002_runtime_role_grants.down.sql")
+	if err != nil {
+		t.Fatalf("read v2 down migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(down)); err != nil {
+		t.Fatalf("apply v2 down migration: %v", err)
+	}
+	var v1Usable bool
+	if err := conn.QueryRow(ctx, `SELECT has_table_privilege('gnvipi_app', 'users', 'SELECT')
+		AND has_table_privilege('gnvipi_app', 'users', 'INSERT')
+		AND has_table_privilege('gnvipi_app', 'audit_log', 'INSERT')`).Scan(&v1Usable); err != nil {
+		t.Fatalf("check downgraded v1 grants: %v", err)
+	}
+	if !v1Usable {
+		t.Fatal("v2 down migration left the v1 runtime role unusable")
+	}
+}

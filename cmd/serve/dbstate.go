@@ -55,6 +55,9 @@ func (d *appDB) Close() {
 // credential checks from an unexpected schema must fail closed, never degrade.
 func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	if strings.TrimSpace(os.Getenv(databaseEnv)) == "" {
+		if db.IsProduction(strings.TrimSpace(os.Getenv("GNVIPI_ENV"))) {
+			return nil, fmt.Errorf("%s is required when GNVIPI_ENV=production", databaseEnv)
+		}
 		return nil, nil
 	}
 	cfg, err := db.LoadConfig()
