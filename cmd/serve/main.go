@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/db"
 	gwprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 
@@ -54,13 +55,28 @@ func main() {
 	}
 }
 
-func run() (err error) {
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return runMigrateCLI(ctx, os.Args[2:])
+func run() error {
+	handled, err := runCLICommand(os.Args[1:], os.LookupEnv, db.Migrate)
+	if handled {
+		return err
 	}
+	return runServer()
+}
 
+func runCLICommand(
+	args []string,
+	lookup func(string) (string, bool),
+	migrate func(context.Context, string) error,
+) (bool, error) {
+	if len(args) == 0 || args[0] != "migrate" {
+		return false, nil
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return true, runMigrateCommand(ctx, args[1:], lookup, migrate)
+}
+
+func runServer() (err error) {
 	// Loopback by default: the admin console and /v1 routes stay unreachable
 	// from the network unless the operator opts in with an explicit wildcard
 	// bind. A non-loopback bind also requires -admin-token for /admin.

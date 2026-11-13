@@ -24,10 +24,6 @@ const (
 	loginAttemptRetention = 30 * 24 * time.Hour
 )
 
-func runMigrateCLI(ctx context.Context, args []string) error {
-	return runMigrateCommand(ctx, args, os.LookupEnv, db.Migrate)
-}
-
 func runMigrateCommand(
 	ctx context.Context,
 	args []string,
@@ -35,7 +31,7 @@ func runMigrateCommand(
 	run func(context.Context, string) error,
 ) error {
 	if len(args) != 0 {
-		return fmt.Errorf("serve migrate accepts no arguments; unexpected argument %q", args[0])
+		return fmt.Errorf("serve migrate accepts no arguments (got %d)", len(args))
 	}
 	cfg, err := db.LoadConfigFrom(lookup)
 	if err != nil {

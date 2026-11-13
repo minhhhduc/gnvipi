@@ -46,30 +46,110 @@ func TestOpenAppDBRefusesAutoMigrateInProduction(t *testing.T) {
 	}
 }
 
-func TestRunMigrateCommandUsesMigrationDatabaseURL(t *testing.T) {
+func TestRunCLICommandMigrationDSNPolicy(t *testing.T) {
 	const (
 		runtimeDSN   = "postgres://runtime@localhost:5432/runtime?sslmode=disable"
 		migrationDSN = "postgres://migrator@localhost:5432/migrations?sslmode=disable"
 	)
-	env := map[string]string{
-		databaseEnv:                     runtimeDSN,
-		"GNVIPI_MIGRATION_DATABASE_URL": migrationDSN,
-		"GNVIPI_ENV":                    "production",
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantDSN string
+		wantErr string
+	}{
+		{
+			name: "explicit migration DSN in production",
+			env: map[string]string{
+				databaseEnv:                     runtimeDSN,
+				"GNVIPI_MIGRATION_DATABASE_URL": migrationDSN,
+				"GNVIPI_ENV":                    "production",
+			},
+			wantDSN: migrationDSN,
+		},
+		{
+			name: "development fallback to runtime DSN",
+			env: map[string]string{
+				databaseEnv:  runtimeDSN,
+				"GNVIPI_ENV": "development",
+			},
+			wantDSN: runtimeDSN,
+		},
+		{
+			name: "production refuses runtime fallback",
+			env: map[string]string{
+				databaseEnv:  runtimeDSN,
+				"GNVIPI_ENV": "production",
+			},
+			wantErr: "GNVIPI_MIGRATION_DATABASE_URL",
+		},
 	}
-	lookup := func(key string) (string, bool) {
-		value, ok := env[key]
-		return value, ok
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lookup := func(key string) (string, bool) {
+				value, ok := tc.env[key]
+				return value, ok
+			}
+			calls := 0
+			usedDSN := ""
+			runner := func(_ context.Context, dsn string) error {
+				calls++
+				usedDSN = dsn
+				return nil
+			}
+
+			handled, err := runCLICommand([]string{"migrate"}, lookup, runner)
+			if !handled {
+				t.Fatal("migrate command was not handled")
+			}
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("run migrate error = %v, want %q", err, tc.wantErr)
+				}
+				if calls != 0 {
+					t.Fatalf("migration runner called %d times after rejected configuration", calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("run migrate: %v", err)
+			}
+			if calls != 1 || usedDSN != tc.wantDSN {
+				t.Fatalf("migration runner = %d calls with %q, want one call with %q", calls, usedDSN, tc.wantDSN)
+			}
+		})
 	}
-	var usedDSN string
-	runner := func(_ context.Context, dsn string) error {
-		usedDSN = dsn
+}
+
+func TestRunCLICommandDispatchesMigrationArguments(t *testing.T) {
+	const secret = "postgres://migrator:hunter2@localhost:5432/gnvipi?sslmode=disable"
+	calls := 0
+	handled, err := runCLICommand([]string{"migrate", secret}, nil, func(context.Context, string) error {
+		calls++
 		return nil
+	})
+	if !handled || err == nil {
+		t.Fatalf("migrate with an argument = handled %v err %v, want handled error", handled, err)
+	}
+	if calls != 0 {
+		t.Fatalf("migration runner called %d times after unexpected argument", calls)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("migration dispatch error leaked the argument: %v", err)
 	}
 
-	if err := runMigrateCommand(t.Context(), nil, lookup, runner); err != nil {
-		t.Fatalf("run migrate: %v", err)
+	handled, err = runCLICommand([]string{"--addr", ":8080"}, nil, nil)
+	if handled || err != nil {
+		t.Fatalf("server flags = handled %v err %v, want unhandled nil", handled, err)
 	}
-	if usedDSN != migrationDSN {
-		t.Fatalf("migration ran with %q, want GNVIPI_MIGRATION_DATABASE_URL %q", usedDSN, migrationDSN)
+}
+
+func TestRunMigrateCommandDoesNotEchoUnexpectedArguments(t *testing.T) {
+	const secret = "postgres://migrator:hunter2@localhost:5432/gnvipi?sslmode=disable"
+	err := runMigrateCommand(t.Context(), []string{secret}, nil, nil)
+	if err == nil {
+		t.Fatal("unexpected migration argument was accepted")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("migration argument error leaked the argument: %v", err)
 	}
 }
