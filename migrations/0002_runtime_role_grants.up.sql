@@ -1,18 +1,32 @@
 DO $$
 DECLARE
+  role_oid oid;
   elevated boolean;
-  owns_tables boolean;
+  owns_objects boolean;
+  forbidden_tables boolean;
+  forbidden_sequences boolean;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gnvipi_app') THEN
-    SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
-      INTO elevated FROM pg_roles WHERE rolname = 'gnvipi_app';
+  SELECT oid, rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
+    INTO role_oid, elevated FROM pg_roles WHERE rolname = 'gnvipi_app';
+  IF role_oid IS NOT NULL THEN
+    SELECT EXISTS (
+      SELECT 1 FROM pg_auth_members WHERE member = role_oid
+    ) INTO forbidden_tables;
+    IF forbidden_tables THEN
+      RAISE EXCEPTION 'gnvipi_app must not inherit privileges from other roles';
+    END IF;
+
     SELECT EXISTS (
       SELECT 1 FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
-        AND pg_get_userbyid(c.relowner) = 'gnvipi_app'
-    ) INTO owns_tables;
-    IF elevated OR owns_tables THEN
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+        AND c.relowner = role_oid
+      UNION ALL
+      SELECT 1 FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proowner = role_oid
+    ) INTO owns_objects;
+    IF elevated OR owns_objects THEN
       RAISE EXCEPTION 'gnvipi_app must be a non-privileged runtime role and must not own public objects';
     END IF;
 
@@ -37,12 +51,34 @@ BEGIN
          || 'bump_config_version() '
          || 'TO gnvipi_app';
 
+    SELECT EXISTS (
+      SELECT 1 FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND (
+          has_table_privilege('gnvipi_app', c.oid, 'TRUNCATE')
+          OR has_table_privilege('gnvipi_app', c.oid, 'REFERENCES')
+          OR has_table_privilege('gnvipi_app', c.oid, 'TRIGGER')
+          OR (c.relname = 'audit_log' AND (
+            has_table_privilege('gnvipi_app', c.oid, 'UPDATE')
+            OR has_table_privilege('gnvipi_app', c.oid, 'DELETE')))
+          OR (c.relname IN ('config_state', 'schema_migrations') AND (
+            has_table_privilege('gnvipi_app', c.oid, 'INSERT')
+            OR has_table_privilege('gnvipi_app', c.oid, 'UPDATE')
+            OR has_table_privilege('gnvipi_app', c.oid, 'DELETE')))
+        )
+    ) INTO forbidden_tables;
+    SELECT EXISTS (
+      SELECT 1 FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'S'
+        AND (has_sequence_privilege('gnvipi_app', c.oid, 'UPDATE')
+          OR (c.relname NOT IN ('audit_log_id_seq', 'login_attempts_id_seq') AND (
+            has_sequence_privilege('gnvipi_app', c.oid, 'USAGE')
+            OR has_sequence_privilege('gnvipi_app', c.oid, 'SELECT'))))
+    ) INTO forbidden_sequences;
     IF has_schema_privilege('gnvipi_app', 'public', 'CREATE')
-       OR has_table_privilege('gnvipi_app', 'audit_log', 'UPDATE')
-       OR has_table_privilege('gnvipi_app', 'audit_log', 'DELETE')
-       OR has_table_privilege('gnvipi_app', 'audit_log', 'TRUNCATE')
-       OR has_table_privilege('gnvipi_app', 'audit_log', 'REFERENCES')
-       OR has_table_privilege('gnvipi_app', 'audit_log', 'TRIGGER') THEN
+       OR forbidden_tables OR forbidden_sequences THEN
       RAISE EXCEPTION 'gnvipi_app retains forbidden effective privileges after grant normalization';
     END IF;
   END IF;

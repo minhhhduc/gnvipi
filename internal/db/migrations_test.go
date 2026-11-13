@@ -572,19 +572,18 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 	if _, err := admin.Exec(ctx, `CREATE DATABASE `+identifier+` TEMPLATE template0`); err != nil {
 		t.Skipf("test database user cannot create databases: %v", err)
 	}
-	t.Cleanup(func() {
+	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		_, _ = admin.Exec(cleanupCtx, `DROP DATABASE IF EXISTS `+identifier+` WITH (FORCE)`) //nolint:errcheck // best-effort test cleanup
-	})
+	}()
 
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatalf("parse test database URL: %v", err)
 	}
 	cfg.Database = database
-	isolatedDSN := cfg.ConnString()
-	conn, err := pgx.Connect(ctx, isolatedDSN)
+	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect isolated database: %v", err)
 	}
@@ -644,5 +643,21 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 				t.Fatalf("grant check = %v, want %v", got, check.want)
 			}
 		})
+	}
+	down, err := migrations.FS.ReadFile("0002_runtime_role_grants.down.sql")
+	if err != nil {
+		t.Fatalf("read v2 down migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(down)); err != nil {
+		t.Fatalf("apply v2 down migration: %v", err)
+	}
+	var v1Usable bool
+	if err := conn.QueryRow(ctx, `SELECT has_table_privilege('gnvipi_app', 'users', 'SELECT')
+		AND has_table_privilege('gnvipi_app', 'users', 'INSERT')
+		AND has_table_privilege('gnvipi_app', 'audit_log', 'INSERT')`).Scan(&v1Usable); err != nil {
+		t.Fatalf("check downgraded v1 grants: %v", err)
+	}
+	if !v1Usable {
+		t.Fatal("v2 down migration left the v1 runtime role unusable")
 	}
 }
