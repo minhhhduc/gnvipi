@@ -152,24 +152,27 @@ func TestDBAdminPermission_CurrentRouteRoleMatrix(t *testing.T) {
 
 func TestAdminPermission_UserProviderReadsHideDisabledProviders(t *testing.T) {
 	const (
-		providerSecret  = "provider-secret-opaque"
-		proxySecret     = "proxy-secret-opaque"
-		headerSecret    = "header-secret-opaque"
-		bodySecret      = "body-secret-opaque"
-		extensionSecret = "extension-secret-opaque"
+		providerSecret     = "provider-secret-opaque"
+		proxySecret        = "proxy-secret-opaque"
+		headerSecret       = "header-secret-opaque"
+		bodySecret         = "body-secret-opaque"
+		extensionSecret    = "extension-secret-opaque"
+		basePathSecret     = "base-path-secret-opaque"
+		endpointPathSecret = "endpoint-path-secret-opaque"
 	)
 	p := setupTestPrefs(t)
 	for _, provider := range []gatewayprovider.Provider{
 		{
-			ID: "visible-provider", Name: "Visible", BaseURL: "https://visible.example/v1",
-			ProxyURL:   "http://proxy-user:" + proxySecret + "@proxy.example:8080",
-			Protocol:   ir.ProtocolOpenAIChat,
-			Auth:       gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, Key: providerSecret, HeaderName: "X-Upstream-Token"},
-			Headers:    map[string]string{"X-Access-Token": headerSecret, "X-Tenant": "tenant"},
-			Models:     []gatewayprovider.ModelMapping{{Alias: "visible/model", UpstreamModel: "model"}},
-			ExtraBody:  json.RawMessage(`{"credential":"` + bodySecret + `"}`),
-			Extensions: map[string]json.RawMessage{"credential": json.RawMessage(`"` + extensionSecret + `"`)},
-			Enabled:    true,
+			ID: "visible-provider", Name: "Visible", BaseURL: "https://visible.example/" + basePathSecret + "/v1",
+			ProxyURL:      "http://proxy-user:" + proxySecret + "@proxy.example:8080",
+			Protocol:      ir.ProtocolOpenAIChat,
+			Auth:          gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, Key: providerSecret, HeaderName: "X-Upstream-Token"},
+			Headers:       map[string]string{"X-Access-Token": headerSecret, "X-Tenant": "tenant"},
+			Models:        []gatewayprovider.ModelMapping{{Alias: "visible/model", UpstreamModel: "model"}},
+			EndpointPaths: map[ir.Protocol]string{ir.ProtocolOpenAIChat: "/" + endpointPathSecret + "/chat"},
+			ExtraBody:     json.RawMessage(`{"credential":"` + bodySecret + `"}`),
+			Extensions:    map[string]json.RawMessage{"credential": json.RawMessage(`"` + extensionSecret + `"`)},
+			Enabled:       true,
 		},
 		{
 			ID: "hidden-provider", Name: "Hidden", BaseURL: "https://hidden.example/v1",
@@ -202,14 +205,14 @@ func TestAdminPermission_UserProviderReadsHideDisabledProviders(t *testing.T) {
 		if len(providers) != 1 || providers[0].ID != "visible-provider" {
 			t.Fatalf("providers = %#v, want only visible-provider", providers)
 		}
-		for _, secret := range []string{providerSecret, proxySecret, headerSecret, bodySecret, extensionSecret} {
+		for _, secret := range []string{providerSecret, proxySecret, headerSecret, bodySecret, extensionSecret, basePathSecret, endpointPathSecret} {
 			if strings.Contains(res.Body.String(), secret) {
 				t.Fatalf("user provider metadata leaked %q: %s", secret, res.Body.String())
 			}
 		}
 		provider := providers[0]
-		if provider.ProxyURL != "" || len(provider.Headers) != 0 || len(provider.ExtraBody) != 0 || len(provider.Extensions) != 0 ||
-			provider.Auth.Key != "" || provider.Auth.KeyEnv != "" || provider.Auth.KeyRef != "" {
+		if provider.BaseURL != "" || provider.ProxyURL != "" || len(provider.EndpointPaths) != 0 || len(provider.Headers) != 0 ||
+			len(provider.ExtraBody) != 0 || len(provider.Extensions) != 0 || provider.Auth.Key != "" || provider.Auth.KeyEnv != "" || provider.Auth.KeyRef != "" {
 			t.Fatalf("user provider response retained credential-bearing fields: %#v", provider)
 		}
 	})
@@ -239,7 +242,8 @@ func TestAdminPermission_UserProviderReadsHideDisabledProviders(t *testing.T) {
 		if err := json.Unmarshal(res.Body.Bytes(), &provider); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(provider.ProxyURL, proxySecret) || provider.Headers["X-Access-Token"] != headerSecret {
+		if !strings.Contains(provider.BaseURL, basePathSecret) || !strings.Contains(provider.ProxyURL, proxySecret) ||
+			!strings.Contains(provider.EndpointPaths[ir.ProtocolOpenAIChat], endpointPathSecret) || provider.Headers["X-Access-Token"] != headerSecret {
 			t.Fatalf("operator metadata was unexpectedly stripped: %#v", provider)
 		}
 	})

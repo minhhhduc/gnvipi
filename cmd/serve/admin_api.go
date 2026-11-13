@@ -77,10 +77,12 @@ func redactProvider(p *gatewayprovider.Provider) gatewayprovider.Provider {
 // user-role account needs enabled provider identity and model metadata, not the
 // operator configuration used to reach the upstream.
 func providerMetadata(p *gatewayprovider.Provider) gatewayprovider.Provider {
-	cloned := redactProvider(p)
+	cloned := gatewayprovider.Clone(p)
+	cloned.BaseURL = ""
 	cloned.ProxyURL = ""
 	cloned.Auth = gatewayprovider.Auth{Scheme: cloned.Auth.Scheme, HeaderName: cloned.Auth.HeaderName}
 	cloned.Headers = nil
+	cloned.EndpointPaths = nil
 	cloned.ExtraBody = nil
 	cloned.Extensions = nil
 	return cloned
