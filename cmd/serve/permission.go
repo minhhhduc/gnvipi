@@ -222,7 +222,7 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 				})
 				return
 			}
-			if identity.MustChangePassword && !adminPasswordChangeAllowed(c.Request.Method, c.Request.URL.Path) {
+			if identity.MustChangePassword && !adminPasswordChangeAllowed(c, identity) {
 				adminAPIError(c, http.StatusForbidden, "password_change_required", "change the admin password before using the console")
 				return
 			}
@@ -370,14 +370,17 @@ func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
 	return nil
 }
 
-func adminPasswordChangeAllowed(method, path string) bool {
-	if method == http.MethodGet && path == adminSessionPath {
+func adminPasswordChangeAllowed(c *gin.Context, identity *adminIdentity) bool {
+	if c.Request.Method == http.MethodGet && c.Request.URL.Path == adminSessionPath {
 		return true
 	}
-	if method != http.MethodPost {
+	if c.Request.Method != http.MethodPost {
 		return false
 	}
-	return path == adminPasswordPath || path == adminLogoutPath
+	if c.Request.URL.Path == adminPasswordPath || c.Request.URL.Path == adminLogoutPath {
+		return true
+	}
+	return c.FullPath() == "/admin/api/users/:id/password" && c.Param("id") == identity.UserID
 }
 
 func bearerCredential(r *http.Request) (raw string, present, wellFormed bool) {
