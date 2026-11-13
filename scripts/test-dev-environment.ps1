@@ -44,16 +44,18 @@ $savedLocation = Get-Location
 $envNames = @(
   'PATH', 'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY',
   'GNVIPI_DB_PORT', 'GNVIPI_DB_USER', 'GNVIPI_DB_PASSWORD', 'GNVIPI_DB_NAME',
-  'PGPASSWORD', 'PGSSLMODE', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
+  'PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGSSLMODE',
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
   'MODEL_OPUS', 'MODEL_SONNET', 'MODEL_HAIKU', 'MODEL_FABLE', 'GNVIPI_TEST_GO_LOG',
   'GNVIPI_TEST_TOOL_LOG', 'GNVIPI_TEST_PSQL_EXIT', 'GNVIPI_TEST_DOCKER_EXIT',
-  'GNVIPI_TEST_PSQL_SPAM'
+  'GNVIPI_TEST_PSQL_SPAM', 'GNVIPI_TEST_PSQL_HOLD', 'GNVIPI_TEST_CLAUDE_THROW'
 )
 $savedEnv = @{}
 foreach ($name in $envNames) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 $global:GnvipiTestObservedPorts = @()
 $global:GnvipiTestClaudeToken = $null
+$global:GnvipiTestClaudeBaseURL = $null
 function Get-NetTCPConnection {
   [CmdletBinding()]
   param([int]$LocalPort, [string]$State)
@@ -74,17 +76,22 @@ function Invoke-RestMethod {
 
 function claude {
   $global:GnvipiTestClaudeToken = $env:ANTHROPIC_AUTH_TOKEN
+  $global:GnvipiTestClaudeBaseURL = $env:ANTHROPIC_BASE_URL
+  if ($env:GNVIPI_TEST_CLAUDE_THROW -eq '1') { throw 'claude test failure' }
 }
 
 function Clear-RunEnvironment {
   foreach ($name in @(
     'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY',
     'GNVIPI_DB_PORT', 'GNVIPI_DB_USER', 'GNVIPI_DB_PASSWORD', 'GNVIPI_DB_NAME',
-    'PGPASSWORD', 'PGSSLMODE', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
-    'GNVIPI_TEST_PSQL_EXIT', 'GNVIPI_TEST_DOCKER_EXIT', 'GNVIPI_TEST_PSQL_SPAM'
+    'PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGSSLMODE',
+    'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
+    'GNVIPI_TEST_PSQL_EXIT', 'GNVIPI_TEST_DOCKER_EXIT', 'GNVIPI_TEST_PSQL_SPAM',
+    'GNVIPI_TEST_PSQL_HOLD', 'GNVIPI_TEST_CLAUDE_THROW'
   )) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
   $global:GnvipiTestObservedPorts = @()
   $global:GnvipiTestClaudeToken = $null
+  $global:GnvipiTestClaudeBaseURL = $null
   Remove-Item $goLog, $toolLog -ErrorAction SilentlyContinue
 }
 
@@ -119,14 +126,27 @@ try {
   Set-Content -Path (Join-Path $toolDir 'go.cmd'), (Join-Path $goOnlyDir 'go.cmd'), (Join-Path $dockerOnlyDir 'go.cmd') -Encoding Ascii -Value $goStub
   $nativeStub = @'
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Threading;
 
 public static class NativeToolStub {
     public static int Main(string[] args) {
         string name = Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]).ToUpperInvariant();
         string log = Environment.GetEnvironmentVariable("GNVIPI_TEST_TOOL_LOG");
         if (!String.IsNullOrEmpty(log)) {
-            File.AppendAllText(log, name + "|" + String.Join("|", args) + Environment.NewLine);
+            string probe = "|PGHOST=" + Environment.GetEnvironmentVariable("PGHOST") +
+                "|PGPORT=" + Environment.GetEnvironmentVariable("PGPORT") +
+                "|PGUSER=" + Environment.GetEnvironmentVariable("PGUSER") +
+                "|PGDATABASE=" + Environment.GetEnvironmentVariable("PGDATABASE") +
+                "|PGSSLMODE=" + Environment.GetEnvironmentVariable("PGSSLMODE");
+            File.AppendAllText(log, name + "|" + String.Join("|", args) + probe + Environment.NewLine);
+        }
+        if (Environment.GetEnvironmentVariable("GNVIPI_TEST_" + name + "_HOLD") == "1") {
+            var child = new ProcessStartInfo(Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe", "/c ping -n 30 127.0.0.1");
+            child.UseShellExecute = false;
+            Process.Start(child);
+            Thread.Sleep(30000);
         }
         if (Environment.GetEnvironmentVariable("GNVIPI_TEST_" + name + "_SPAM") == "1") {
             Console.Out.Write(new String('o', 131072));
@@ -173,7 +193,7 @@ public static class NativeToolStub {
   $dbDownLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
   Assert-DevEnvironment ($dbDownLog -match '(?m)^PSQL\|') 'a configured DSN must be checked with psql when it is available'
   Assert-DevEnvironment ($dbDownLog -notmatch '(?m)^DOCKER\|') 'Docker presence must not override a psql check of the configured DSN'
-  Assert-DevEnvironment ($dbDownLog -match 'PSQL\|--no-password\|-h\|db\.example\.test\|-p\|6543\|-U\|alice\|-d\|app\|') 'psql must check the configured host, port, user, and database without prompting'
+  Assert-DevEnvironment ($dbDownLog -match 'PGHOST=db\.example\.test\|PGPORT=6543\|PGUSER=alice\|PGDATABASE=app\|PGSSLMODE=verify-full') 'psql must check the configured host, port, user, database, and TLS mode without prompting'
 
   Clear-RunEnvironment
   $secret = 'gw_redaction_probe_7f28d9'
@@ -198,11 +218,15 @@ public static class NativeToolStub {
   $env:GNVIPI_TEST_PSQL_EXIT = '0'
   $env:GNVIPI_TEST_DOCKER_EXIT = '1'
   $env:GNVIPI_TEST_PSQL_SPAM = '1'
+  $env:ANTHROPIC_BASE_URL = 'https://original.example'
+  $env:ANTHROPIC_AUTH_TOKEN = 'original-token'
+  $env:ANTHROPIC_API_KEY = 'original-key'
   $valid = Invoke-RunScenario @{ Claude = $true; Port = 18081; NoCaptcha = $true }
   Assert-DevEnvironment ($null -eq $valid.Error) 'valid -Claude flow must reach Claude when the configured DB is ready'
   Assert-DevEnvironment ($global:GnvipiTestClaudeToken -eq $secret) '-Claude must pass GNVIPI_GATEWAY_TOKEN as ANTHROPIC_AUTH_TOKEN'
+  Assert-DevEnvironment ($global:GnvipiTestClaudeBaseURL -eq 'http://localhost:18081') '-Claude must point Claude at the explicitly selected gateway port'
   Assert-DevEnvironment ($valid.Output -notmatch [regex]::Escape($secret)) 'run.ps1 output must never disclose the gateway token'
-  Assert-DevEnvironment ($env:ANTHROPIC_BASE_URL -eq 'http://localhost:18081') '-Claude must point Claude at the explicitly selected gateway port'
+  Assert-DevEnvironment ($env:ANTHROPIC_BASE_URL -eq 'https://original.example' -and $env:ANTHROPIC_AUTH_TOKEN -eq 'original-token' -and $env:ANTHROPIC_API_KEY -eq 'original-key') 'Claude environment variables must be restored after launch'
   Assert-DevEnvironment ($valid.Ports -notcontains 8080) 'an explicit non-default port must not inspect port 8080'
 
   Clear-RunEnvironment
@@ -228,7 +252,25 @@ public static class NativeToolStub {
   $ipv6 = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
   $ipv6Log = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
   Assert-DevEnvironment ($null -eq $ipv6.Error) 'a valid IPv6 PostgreSQL DSN must reach the configured probe'
-  Assert-DevEnvironment ($ipv6Log -match 'PSQL\|--no-password\|-h\|[0-9a-f:]+\|-p\|6543\|' -and $ipv6Log -notmatch '\[') 'IPv6 probe arguments must be normalized without URI brackets'
+  Assert-DevEnvironment ($ipv6Log -match 'PGHOST=[0-9a-f:]+\|PGPORT=6543\|' -and $ipv6Log -notmatch '\[') 'IPv6 probe environment must be normalized without URI brackets'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice%40tenant:secret@db.example.test:6543/my%20db?sslmode=verify-full'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $encoded = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  $encodedLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($null -eq $encoded.Error) 'percent-encoded PostgreSQL user and database names must be probed'
+  Assert-DevEnvironment ($encodedLog -match 'PGUSER=alice@tenant\|PGDATABASE=my db\|') 'PostgreSQL user and database names must be URI-decoded'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://db.example.test:6543?sslmode=verify-full'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $omitted = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  $omittedLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($null -eq $omitted.Error) 'PostgreSQL URLs with omitted user and database must use client defaults'
+  Assert-DevEnvironment ($omittedLog -match 'PGUSER=\|PGDATABASE=\|' -and $omittedLog -notmatch '\|-(?:U|d)\|') 'omitted PostgreSQL user and database must not receive Compose defaults'
 
   Clear-RunEnvironment
   $env:GNVIPI_GATEWAY_TOKEN = $secret
@@ -258,7 +300,7 @@ public static class NativeToolStub {
   }
   $composeLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
   Assert-DevEnvironment ($null -eq $composeReady.Error) 'an authenticated matching local Compose probe plus published TCP endpoint must pass'
-  Assert-DevEnvironment ($composeLog -match 'DOCKER\|compose\|exec\|-T\|-e\|PGPASSWORD\|db\|psql\|--no-password\|') 'Docker fallback must run an authenticated psql query, not pg_isready'
+  Assert-DevEnvironment ($composeLog -match 'DOCKER\|compose\|exec\|-T\|-e\|PGPASSWORD\|-e\|PGSSLMODE\|db\|psql\|--no-password\|') 'Docker fallback must run an authenticated psql query, not pg_isready'
 
   Clear-RunEnvironment
   $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
@@ -278,6 +320,39 @@ public static class NativeToolStub {
   $composeAuthFail = Invoke-RunScenario @{ Claude = $true; Port = 18084; NoCaptcha = $true }
   $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
   Assert-DevEnvironment ($composeAuthFail.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'failed Compose authentication must fail readiness'
+
+  Clear-RunEnvironment
+  $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=require'
+  $env:GNVIPI_TEST_DOCKER_EXIT = '1'
+  $composeTLS = Invoke-RunScenario @{ Claude = $true; Port = 18084; NoCaptcha = $true }
+  $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $composeTLSLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($composeTLS.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'incompatible Compose TLS mode must fail readiness'
+  Assert-DevEnvironment ($composeTLSLog -match '-e\|PGPASSWORD\|-e\|PGSSLMODE\|db\|psql' -and $composeTLSLog -match 'PGSSLMODE=require') 'Docker fallback must forward the configured TLS mode to psql'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice:secret@db.example.test:6543/app?sslmode=verify-full'
+  $env:GNVIPI_TEST_PSQL_HOLD = '1'
+  $holdStarted = Get-Date
+  $heldProbe = Invoke-RunScenario @{ Claude = $true; Port = 18085; NoCaptcha = $true }
+  $holdElapsed = ((Get-Date) - $holdStarted).TotalSeconds
+  Assert-DevEnvironment ($heldProbe.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'timed-out database probes must fail readiness'
+  Assert-DevEnvironment ($holdElapsed -lt 12) 'timed-out probes and descendants must be terminated within a bounded cleanup window'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice:secret@db.example.test:6543/app?sslmode=verify-full'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $env:GNVIPI_TEST_CLAUDE_THROW = '1'
+  $env:ANTHROPIC_BASE_URL = 'https://original.example'
+  $env:ANTHROPIC_AUTH_TOKEN = 'original-token'
+  $env:ANTHROPIC_API_KEY = 'original-key'
+  $claudeFailure = Invoke-RunScenario @{ Claude = $true; Port = 18086; NoCaptcha = $true }
+  Assert-DevEnvironment ($null -eq $claudeFailure.Error) 'Claude command failures must be handled by run.ps1'
+  Assert-DevEnvironment ($env:ANTHROPIC_BASE_URL -eq 'https://original.example' -and $env:ANTHROPIC_AUTH_TOKEN -eq 'original-token' -and $env:ANTHROPIC_API_KEY -eq 'original-key') 'Claude environment variables must be restored after command failure'
 } finally {
   Set-Location $savedLocation
   foreach ($name in $envNames) {
@@ -290,7 +365,7 @@ public static class NativeToolStub {
   if ($createdModels) { Remove-Item $modelsFile -Force -ErrorAction SilentlyContinue }
   if ($createdBin) { Remove-Item $binDir -Force -ErrorAction SilentlyContinue }
   Remove-Item $toolDir, $goOnlyDir, $dockerOnlyDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Variable GnvipiTestObservedPorts, GnvipiTestClaudeToken -Scope Global -ErrorAction SilentlyContinue
+  Remove-Variable GnvipiTestObservedPorts, GnvipiTestClaudeToken, GnvipiTestClaudeBaseURL -Scope Global -ErrorAction SilentlyContinue
 }
 
 if ($failures.Count -gt 0) {

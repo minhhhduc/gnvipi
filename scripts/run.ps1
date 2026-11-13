@@ -57,6 +57,37 @@ if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
   throw "GNVIPI_GATEWAY_TOKEN is not set"
 }
 
+# Terminate a Windows process tree without an unbounded wait. taskkill handles
+# descendants (for example Docker plugins); Process.Kill is the fallback.
+function Stop-ProcessTreeBounded {
+  param($Process, [int]$TimeoutMs = 2000)
+  if (-not $Process) { return }
+  $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+  try {
+    if (Test-Path $taskkill) {
+      $killInfo = New-Object System.Diagnostics.ProcessStartInfo
+      $killInfo.FileName = $taskkill
+      $killInfo.Arguments = "/PID $($Process.Id) /T /F"
+      $killInfo.UseShellExecute = $false
+      $killInfo.CreateNoWindow = $true
+      $killInfo.RedirectStandardOutput = $true
+      $killInfo.RedirectStandardError = $true
+      $killer = [System.Diagnostics.Process]::Start($killInfo)
+      try {
+        if (-not $killer.WaitForExit($TimeoutMs)) { try { $killer.Kill() } catch {} }
+      } finally {
+        $killer.Dispose()
+      }
+    }
+  } catch {}
+  try { if (-not $Process.HasExited) { $Process.Kill() } } catch {}
+  $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+  while ((Get-Date) -lt $deadline) {
+    try { if ($Process.HasExited) { break } } catch { break }
+    Start-Sleep -Milliseconds 50
+  }
+}
+
 # Run a command with a bounded timeout and suppressed output. Returns $true on
 # exit code 0. Output is drained to prevent verbose children from blocking, but
 # never echoed because it may contain connection details.
@@ -72,22 +103,22 @@ function Invoke-Bounded {
   $psi.RedirectStandardError = $true
   $psi.CreateNoWindow = $true
   $proc = $null
+  $needsStop = $true
   try {
     $proc = [System.Diagnostics.Process]::Start($psi)
     $stdout = $proc.StandardOutput.ReadToEndAsync()
     $stderr = $proc.StandardError.ReadToEndAsync()
-    $timedOut = -not $proc.WaitForExit($TimeoutMs)
-    if ($timedOut) {
-      try { $proc.Kill() } catch {}
-      try { $proc.WaitForExit() } catch {}
-    }
-    [void]$stdout.GetAwaiter().GetResult()
-    [void]$stderr.GetAwaiter().GetResult()
-    return (-not $timedOut) -and $proc.ExitCode -eq 0
+    if (-not $proc.WaitForExit($TimeoutMs)) { return $false }
+    if (-not $stdout.Wait(1000) -or -not $stderr.Wait(1000)) { return $false }
+    $needsStop = $false
+    return $proc.ExitCode -eq 0
   } catch {
     return $false
   } finally {
-    if ($proc) { $proc.Dispose() }
+    if ($proc) {
+      if ($needsStop) { Stop-ProcessTreeBounded $proc }
+      $proc.Dispose()
+    }
   }
 }
 
@@ -101,7 +132,7 @@ if ($expectDb) {
   if (-not $dbUrl) {
     $dbUrl = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
   }
-  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword, $dbSslMode = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', '', ''
+  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword, $dbSslMode = 'localhost', 5432, $null, $null, '', ''
   $dbConfigValid = $true
   try {
     $dsnMatch = [regex]::Match($dbUrl, '^(?i:postgres(?:ql)?)://(?:[^@/?#]*@)?(?:\[[^\]]+\]|[^:/?#]+)(?::(?<port>[0-9]+))?(?:[/?#]|$)')
@@ -126,7 +157,7 @@ if ($expectDb) {
       if ($parts.Count -gt 1) { $dbPassword = [Uri]::UnescapeDataString($parts[1]) }
     }
     $name = $dbUri.AbsolutePath.Trim('/')
-    if ($name) { $dbName = $name }
+    if ($name) { $dbName = [Uri]::UnescapeDataString($name) }
     if ($dbUri.Query -match '(?:^\?|&)sslmode=([^&]+)') {
       $dbSslMode = [Uri]::UnescapeDataString($Matches[1])
     }
@@ -134,30 +165,33 @@ if ($expectDb) {
     $dbConfigValid = $false
     Write-Host "could not parse GNVIPI_DATABASE_URL" -ForegroundColor Yellow
   }
-  if ($dbUser -notmatch '^[A-Za-z0-9_.-]+$') { $dbConfigValid = $false }
-  if ($dbName -notmatch '^[A-Za-z0-9_.-]+$') { $dbConfigValid = $false }
   if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbConfigValid = $false }
 
   $dbReady = $false
   $psql = Get-Command psql -ErrorAction SilentlyContinue
   if ($dbConfigValid -and $psql) {
-    # The password and TLS mode travel in the child environment, never in the
-    # process arguments. --no-password prevents an interactive prompt.
-    $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
-    $oldPgSslMode = [Environment]::GetEnvironmentVariable('PGSSLMODE', 'Process')
+    # Connection values travel in the child environment, never in process
+    # arguments. --no-password prevents an interactive prompt.
+    $probeNames = @('PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGSSLMODE')
+    $oldProbeEnv = @{}
+    foreach ($name in $probeNames) {
+      $oldProbeEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
     try {
-      if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
-      else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
-      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
-      else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
-      $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+      $env:PGHOST = $dbHost
+      $env:PGPORT = "$dbPort"
+      if ($null -ne $dbUser) { $env:PGUSER = $dbUser } else { Remove-Item Env:PGUSER -ErrorAction SilentlyContinue }
+      if ($null -ne $dbName) { $env:PGDATABASE = $dbName } else { Remove-Item Env:PGDATABASE -ErrorAction SilentlyContinue }
+      if ($dbPassword) { $env:PGPASSWORD = $dbPassword } else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode } else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+      $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-tAc', 'select 1')
     } catch {
       $dbReady = $false
     } finally {
-      if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
-      else { $env:PGPASSWORD = $oldPgPassword }
-      if ($null -eq $oldPgSslMode) { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
-      else { $env:PGSSLMODE = $oldPgSslMode }
+      foreach ($name in $probeNames) {
+        if ($null -eq $oldProbeEnv[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($name, $oldProbeEnv[$name], 'Process') }
+      }
     }
   } elseif ($dbConfigValid) {
     $composePort = 5432
@@ -175,17 +209,22 @@ if ($expectDb) {
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($matchesCompose -and $docker) {
       $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+      $oldPgSslMode = [Environment]::GetEnvironmentVariable('PGSSLMODE', 'Process')
       try {
         $env:PGPASSWORD = $dbPassword
-        $dbReady = Invoke-Bounded $docker.Source @(
-          'compose', 'exec', '-T', '-e', 'PGPASSWORD', 'db', 'psql', '--no-password',
-          '-h', '127.0.0.1', '-p', '5432', '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1'
-        )
+        if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
+        else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+        $dockerArgs = @('compose', 'exec', '-T', '-e', 'PGPASSWORD')
+        if ($dbSslMode) { $dockerArgs += @('-e', 'PGSSLMODE') }
+        $dockerArgs += @('db', 'psql', '--no-password', '-h', '127.0.0.1', '-p', '5432', '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+        $dbReady = Invoke-Bounded $docker.Source $dockerArgs
       } catch {
         $dbReady = $false
       } finally {
         if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
         else { $env:PGPASSWORD = $oldPgPassword }
+        if ($null -eq $oldPgSslMode) { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+        else { $env:PGSSLMODE = $oldPgSslMode }
       }
       if ($dbReady) {
         $client = New-Object System.Net.Sockets.TcpClient
@@ -267,30 +306,48 @@ if (-not $Claude) {
   return
 }
 
-# Run in background for Claude mode
-try {
-  $proc = Start-Process -FilePath $exe `
-    -ArgumentList $serveArgs `
-    -NoNewWindow -PassThru -ErrorAction Stop
-} catch {
-  Write-Host "serve.exe error: $_ - skipping" -ForegroundColor Yellow
+# Run in background for Claude mode and restore the caller's environment even
+# when Claude or the gateway exits abnormally.
+$proc = $null
+$claudeEnvNames = @('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY')
+$oldClaudeEnv = @{}
+foreach ($name in $claudeEnvNames) {
+  $oldClaudeEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
-
-# Wait for gateway to become healthy, then launch Claude Code pointing to it
-$deadline = (Get-Date).AddSeconds(30)
-while ((Get-Date) -lt $deadline) {
+try {
   try {
-    Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
-    break
-  } catch { Start-Sleep -Milliseconds 500 }
+    $proc = Start-Process -FilePath $exe `
+      -ArgumentList $serveArgs `
+      -NoNewWindow -PassThru -ErrorAction Stop
+  } catch {
+    Write-Host "serve.exe error: $_ - skipping" -ForegroundColor Yellow
+    return
+  }
+
+  # Wait for gateway to become healthy, then launch Claude Code pointing to it.
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
+      break
+    } catch { Start-Sleep -Milliseconds 500 }
+  }
+  $env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
+  $env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
+  $env:ANTHROPIC_API_KEY = ""
+  Write-Host "  claude  : base=$env:ANTHROPIC_BASE_URL (skip login)" -ForegroundColor Green
+  try {
+    claude
+  } catch {
+    Write-Host "claude error: $_ - skipping" -ForegroundColor Yellow
+  }
+} finally {
+  foreach ($name in $claudeEnvNames) {
+    if ($null -eq $oldClaudeEnv[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable($name, $oldClaudeEnv[$name], 'Process') }
+  }
+  if ($proc) {
+    try { if (-not $proc.HasExited) { Stop-ProcessTreeBounded $proc } } catch {}
+    if ($proc -is [System.Diagnostics.Process]) { $proc.Dispose() }
+  }
 }
-$env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
-$env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
-$env:ANTHROPIC_API_KEY = ""
-Write-Host "  claude  : base=$env:ANTHROPIC_BASE_URL (skip login)" -ForegroundColor Green
-try {
-  claude
-} catch {
-  Write-Host "claude error: $_ - skipping" -ForegroundColor Yellow
-}
-try { if ($proc -and -not $proc.HasExited) { $proc.Kill() } } catch {}
