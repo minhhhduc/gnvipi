@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pageFromUrl, rawPageFromUrl } from "./router";
+import type { Page } from "./context";
 
 describe("pageFromUrl", () => {
   it.each([
@@ -17,6 +18,19 @@ describe("pageFromUrl", () => {
       expect(pageFromUrl(search)).toBe("stats");
     },
   );
+
+  it("filters direct routes through the signed-in role", () => {
+    const forRole = pageFromUrl as (
+      search: string,
+      role: "owner" | "admin" | "user",
+    ) => Page;
+
+    expect(forRole("?page=config", "owner")).toBe("config");
+    expect(forRole("?page=chromes", "admin")).toBe("chromes");
+    expect(forRole("?page=models", "user")).toBe("stats");
+    expect(forRole("?page=config", "user")).toBe("stats");
+    expect(forRole("?page=chromes", "user")).toBe("stats");
+  });
 });
 
 describe("rawPageFromUrl", () => {

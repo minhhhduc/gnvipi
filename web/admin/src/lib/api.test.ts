@@ -54,4 +54,47 @@ describe("api", () => {
       status: 429,
     });
   });
+
+  it("sends the double-submit CSRF cookie on cookie-authenticated writes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("document", { cookie: "other=value; gw_csrf=csrf%2Dtoken" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/admin/api/config/search", {
+      method: "POST",
+      body: { url: "https://example.test/?q={query}" },
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("csrf-token");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("does not send a CSRF header on safe reads or bearer writes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
+    vi.stubGlobal("document", { cookie: "gw_csrf=session-token" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/admin/api/stats");
+    await api("/admin/api/tokens", {
+      method: "POST",
+      headers: { Authorization: "Bearer adm_test" },
+      body: {},
+    });
+
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(new Headers((init as RequestInit).headers).has("X-CSRF-Token")).toBe(false);
+    }
+  });
+
+  it("lets the initial anonymous session probe show login without a redirect loop", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { assign });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+    await expect(
+      api("/admin/api/auth/session", { redirectOn401: false } as Parameters<typeof api>[1]),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(assign).not.toHaveBeenCalled();
+  });
 });

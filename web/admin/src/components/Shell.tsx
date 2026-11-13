@@ -1,5 +1,7 @@
 import type { ComponentChildren } from "preact";
+import type { AdminUser } from "../lib/auth";
 import { totals, useGateway, type Page } from "../lib/context";
+import { pageAllowed } from "../lib/router";
 
 const NAV: { page: Page; label: string }[] = [
   { page: "stats", label: "Stats" },
@@ -33,12 +35,17 @@ export function HealthPill() {
 
 export function Shell({
   page,
+  user,
+  onLogout,
   children,
 }: {
   page: Page;
+  user: AdminUser;
+  onLogout?: () => void;
   children: ComponentChildren;
 }) {
   const { navigate } = useGateway();
+  const displayName = user.display_name.trim() || user.username;
   return (
     <div class="flex min-h-screen">
       <aside class="sticky top-0 flex h-screen w-[220px] flex-none flex-col gap-1 self-start overflow-y-auto border-r border-line bg-panel px-[14px] py-[18px]">
@@ -49,7 +56,7 @@ export function Shell({
           <b class="text-[15px] tracking-[-0.02em]">Gateway</b>
         </div>
         <nav class="flex flex-col gap-[3px]">
-          {NAV.map((item) => (
+          {NAV.filter((item) => pageAllowed(item.page, user.role)).map((item) => (
             <a
               key={item.page}
               href={`?page=${item.page}`}
@@ -67,6 +74,16 @@ export function Shell({
             </a>
           ))}
         </nav>
+        <div class="mt-auto border-t border-line px-1.5 pt-3">
+          <div class="mb-2 min-w-0">
+            <div class="truncate text-xs font-semibold" title={displayName}>{displayName}</div>
+            <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-dim">
+              {user.display_name && <span class="truncate" title={user.username}>@{user.username}</span>}
+              <span class="chip capitalize">{user.role}</span>
+            </div>
+          </div>
+          {onLogout && <button type="button" class="btn w-full" onClick={onLogout}>Sign out</button>}
+        </div>
       </aside>
       <main class="min-w-0 max-w-[1240px] flex-1 px-[26px] pt-[22px] pb-[60px]">{children}</main>
     </div>
