@@ -32,12 +32,11 @@ const (
 	EnvProduction = "production"
 )
 
-// Config is the resolved database configuration. DatabaseURL and MigrationURL
-// are secrets; never format a Config with %v.
+// Config is the resolved runtime database configuration. DatabaseURL is a
+// secret; never format a Config with %v.
 type Config struct {
-	DatabaseURL  string
-	MigrationURL string
-	Env          string
+	DatabaseURL string
+	Env         string
 
 	MaxConns       int32
 	MinConns       int32
@@ -49,10 +48,9 @@ func LoadConfig() (Config, error) {
 	return LoadConfigFrom(os.LookupEnv)
 }
 
-// LoadConfigFrom reads configuration from lookup, allowing tests and callers to
-// inject an environment. GNVIPI_DATABASE_URL is required; no default password
-// is ever synthesized. In development GNVIPI_MIGRATION_DATABASE_URL falls back
-// to the application DSN; in production it is required (spec §5).
+// LoadConfigFrom reads runtime configuration from lookup, allowing tests and
+// callers to inject an environment. GNVIPI_DATABASE_URL is required; no
+// default password is ever synthesized.
 func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 	appURL := strings.TrimSpace(envValue(lookup, "GNVIPI_DATABASE_URL"))
 	if appURL == "" {
@@ -63,15 +61,6 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	env := strings.TrimSpace(envValue(lookup, "GNVIPI_ENV"))
-	migrationURL := strings.TrimSpace(envValue(lookup, "GNVIPI_MIGRATION_DATABASE_URL"))
-	if migrationURL == "" {
-		if IsProduction(env) {
-			return Config{}, errors.New("GNVIPI_MIGRATION_DATABASE_URL is required in production")
-		}
-		migrationURL = appURL
-	} else if err := ValidateDSN(migrationURL); err != nil {
-		return Config{}, fmt.Errorf("GNVIPI_MIGRATION_DATABASE_URL: %w", err)
-	}
 
 	maxConns, err := envInt32(lookup, "GNVIPI_DB_MAX_CONNS", DefaultMaxConns)
 	if err != nil {
@@ -97,12 +86,41 @@ func LoadConfigFrom(lookup func(string) (string, bool)) (Config, error) {
 
 	return Config{
 		DatabaseURL:    appURL,
-		MigrationURL:   migrationURL,
 		Env:            env,
 		MaxConns:       maxConns,
 		MinConns:       minConns,
 		ConnectTimeout: connectTimeout,
 	}, nil
+}
+
+// LoadMigrationURL reads the DDL credential used by the explicit migration
+// command and development auto-migration.
+func LoadMigrationURL() (string, error) {
+	return LoadMigrationURLFrom(os.LookupEnv)
+}
+
+// LoadMigrationURLFrom keeps the DDL credential independent from runtime
+// configuration. Development may fall back to the runtime DSN; production may
+// not.
+func LoadMigrationURLFrom(lookup func(string) (string, bool)) (string, error) {
+	migrationURL := strings.TrimSpace(envValue(lookup, "GNVIPI_MIGRATION_DATABASE_URL"))
+	if migrationURL != "" {
+		if err := ValidateDSN(migrationURL); err != nil {
+			return "", fmt.Errorf("GNVIPI_MIGRATION_DATABASE_URL: %w", err)
+		}
+		return migrationURL, nil
+	}
+	if IsProduction(envValue(lookup, "GNVIPI_ENV")) {
+		return "", errors.New("GNVIPI_MIGRATION_DATABASE_URL is required in production")
+	}
+	appURL := strings.TrimSpace(envValue(lookup, "GNVIPI_DATABASE_URL"))
+	if appURL == "" {
+		return "", errors.New("GNVIPI_DATABASE_URL is required when GNVIPI_MIGRATION_DATABASE_URL is unset")
+	}
+	if err := ValidateDSN(appURL); err != nil {
+		return "", fmt.Errorf("GNVIPI_DATABASE_URL: %w", err)
+	}
+	return appURL, nil
 }
 
 // IsProduction reports whether env selects production mode.

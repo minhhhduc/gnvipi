@@ -24,6 +24,30 @@ const (
 	loginAttemptRetention = 30 * 24 * time.Hour
 )
 
+func runMigrateCommand(
+	ctx context.Context,
+	args []string,
+	lookup func(string) (string, bool),
+	run func(context.Context, string) error,
+) error {
+	if len(args) != 0 {
+		return fmt.Errorf("serve migrate accepts no arguments (got %d)", len(args))
+	}
+	migrationURL, err := db.LoadMigrationURLFrom(lookup)
+	if err != nil {
+		return fmt.Errorf("migration configuration: %w", err)
+	}
+	if err := run(ctx, migrationURL); err != nil {
+		return fmt.Errorf("database migration: %w", err)
+	}
+	log.Print("database: migrations applied")
+	return nil
+}
+
+func databaseSchemaError(err error) error {
+	return fmt.Errorf("database schema: %w", err)
+}
+
 // appDB is the process-wide PostgreSQL handle. A nil *appDB means file-backed
 // mode; callers must treat it as "no database-backed admin surface".
 type appDB struct {
@@ -66,9 +90,14 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	}
 	if autoMigrate {
 		if !db.AutoMigrateAllowed(cfg.Env) {
-			return nil, fmt.Errorf("-auto-migrate is not allowed when GNVIPI_ENV=%s; run the migration command instead", cfg.Env)
+			return nil, fmt.Errorf("--auto-migrate is not allowed when GNVIPI_ENV=%s; run 'serve migrate' instead", cfg.Env)
 		}
-		if err := db.Migrate(ctx, cfg.MigrationURL); err != nil {
+		log.Print("warning: --auto-migrate is for development only; production must use 'serve migrate'")
+		migrationURL, err := db.LoadMigrationURL()
+		if err != nil {
+			return nil, fmt.Errorf("migration configuration: %w", err)
+		}
+		if err := db.Migrate(ctx, migrationURL); err != nil {
 			return nil, fmt.Errorf("database migration: %w", err)
 		}
 		log.Print("database: migrations applied")
@@ -84,7 +113,7 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	}
 	if err := db.CheckSchema(ctx, pool, latest); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("database schema: %w (development: start with -auto-migrate)", err)
+		return nil, databaseSchemaError(err)
 	}
 	state := newAuthState(pool)
 	if err := cleanupAuthData(ctx, state); err != nil {

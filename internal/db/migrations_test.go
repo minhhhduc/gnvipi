@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/minhhhduc/gnvipi/migrations"
@@ -127,6 +129,225 @@ func assertCheckViolation(t *testing.T, err error, constraint string) {
 	}
 }
 
+func assertUniqueViolation(t *testing.T, err error, constraint string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected unique violation %q, got no error", constraint)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("error is not a PostgreSQL error: %v", err)
+	}
+	if pgErr.Code != "23505" {
+		t.Fatalf("SQLSTATE = %q, want 23505 (unique_violation): %v", pgErr.Code, err)
+	}
+	if pgErr.ConstraintName != constraint {
+		t.Fatalf("constraint = %q, want %q: %v", pgErr.ConstraintName, constraint, err)
+	}
+}
+
+type advisoryLockCoordinates struct {
+	database int64
+	classID  int64
+	objectID int64
+	subID    int32
+}
+
+func heldAdvisoryLockCoordinates(t *testing.T, ctx context.Context, conn *pgx.Conn) advisoryLockCoordinates {
+	t.Helper()
+	var lock advisoryLockCoordinates
+	if err := conn.QueryRow(ctx, `SELECT database::bigint, classid::bigint, objid::bigint, objsubid
+		FROM pg_locks
+		WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted
+		ORDER BY classid, objid, objsubid
+		LIMIT 1`).Scan(&lock.database, &lock.classID, &lock.objectID, &lock.subID); err != nil {
+		t.Fatalf("read held advisory lock: %v", err)
+	}
+	return lock
+}
+
+func advisoryLockExists(t *testing.T, ctx context.Context, conn *pgx.Conn, lock advisoryLockCoordinates, granted bool) bool {
+	t.Helper()
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_locks
+		WHERE locktype = 'advisory'
+		  AND database::bigint = $1 AND classid::bigint = $2
+		  AND objid::bigint = $3 AND objsubid = $4 AND granted = $5
+	)`, lock.database, lock.classID, lock.objectID, lock.subID, granted).Scan(&exists); err != nil {
+		t.Fatalf("inspect advisory lock: %v", err)
+	}
+	return exists
+}
+
+func waitForAdvisoryLock(t *testing.T, ctx context.Context, conn *pgx.Conn, lock advisoryLockCoordinates, granted bool) {
+	t.Helper()
+	for {
+		if advisoryLockExists(t, ctx, conn, lock, granted) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for advisory lock (granted=%v): %v", granted, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestMigrateWaitsForAdvisoryLock(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ensureMigrated(t, dsn)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	holder, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect lock holder: %v", err)
+	}
+	defer func() { _ = holder.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("hold migration lock: %v", err)
+	}
+	lock := heldAdvisoryLockCoordinates(t, ctx, holder)
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = holder.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`) //nolint:errcheck // best-effort test cleanup
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- Migrate(ctx, dsn) }()
+	waitForAdvisoryLock(t, ctx, holder, lock, false)
+	select {
+	case err := <-done:
+		t.Fatalf("concurrent migration completed while advisory lock was held: %v", err)
+	default:
+	}
+
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("release migration lock: %v", err)
+	}
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("migration after lock release: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("migration did not finish after lock release: %v", ctx.Err())
+	}
+}
+
+func TestMigrateHoldsNamedLockForMigrationRun(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ensureMigrated(t, dsn)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	probe, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect lock probe: %v", err)
+	}
+	defer func() { _ = probe.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_lock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("probe named migration lock: %v", err)
+	}
+	namedLock := heldAdvisoryLockCoordinates(t, ctx, probe)
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("release probed migration lock: %v", err)
+	}
+
+	parsed, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	driverLockText, err := migratedb.GenerateAdvisoryLockId(parsed.Database, "public", "schema_migrations")
+	if err != nil {
+		t.Fatalf("derive driver lock: %v", err)
+	}
+	driverLockID, err := strconv.ParseInt(driverLockText, 10, 64)
+	if err != nil {
+		t.Fatalf("parse driver lock: %v", err)
+	}
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_lock($1)`, driverLockID); err != nil {
+		t.Fatalf("hold migrate driver lock: %v", err)
+	}
+	driverLock := heldAdvisoryLockCoordinates(t, ctx, probe)
+	driverLocked := true
+	defer func() {
+		if driverLocked {
+			_, _ = probe.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, driverLockID) //nolint:errcheck // best-effort test cleanup
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- Migrate(ctx, dsn) }()
+	waitForAdvisoryLock(t, ctx, probe, driverLock, false)
+	if !advisoryLockExists(t, ctx, probe, namedLock, true) {
+		t.Fatal("named migration lock was not held while migration execution was blocked")
+	}
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_unlock($1)`, driverLockID); err != nil {
+		t.Fatalf("release migrate driver lock: %v", err)
+	}
+	driverLocked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("migration after driver lock release: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("migration did not finish after driver lock release: %v", ctx.Err())
+	}
+}
+
+func TestMigrateCancellationStopsDriverWait(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ensureMigrated(t, dsn)
+	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+
+	blocker, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect driver lock blocker: %v", err)
+	}
+	defer func() { _ = blocker.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	parsed, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	driverLockText, err := migratedb.GenerateAdvisoryLockId(parsed.Database, "public", "schema_migrations")
+	if err != nil {
+		t.Fatalf("derive driver lock: %v", err)
+	}
+	driverLockID, err := strconv.ParseInt(driverLockText, 10, 64)
+	if err != nil {
+		t.Fatalf("parse driver lock: %v", err)
+	}
+	if _, err := blocker.Exec(ctx, `SELECT pg_advisory_lock($1)`, driverLockID); err != nil {
+		t.Fatalf("hold migrate driver lock: %v", err)
+	}
+	driverLock := heldAdvisoryLockCoordinates(t, ctx, blocker)
+	defer func() {
+		_, _ = blocker.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, driverLockID) //nolint:errcheck // best-effort test cleanup
+	}()
+
+	migrateCtx, cancelMigrate := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- Migrate(migrateCtx, dsn) }()
+	waitForAdvisoryLock(t, ctx, blocker, driverLock, false)
+	cancelMigrate()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled migration = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled migration remained blocked in the driver")
+	}
+}
+
 func TestMigrationsApply(t *testing.T) {
 	conn, ctx := testConn(t)
 
@@ -146,6 +367,18 @@ func TestMigrationsApply(t *testing.T) {
 		if !exists {
 			t.Fatalf("table %s is missing", table)
 		}
+	}
+
+	var auditType, auditIdentity, auditGeneration string
+	if err := conn.QueryRow(ctx,
+		`SELECT data_type, is_identity, identity_generation
+		 FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = 'audit_log' AND column_name = 'id'`).
+		Scan(&auditType, &auditIdentity, &auditGeneration); err != nil {
+		t.Fatalf("audit_log.id metadata: %v", err)
+	}
+	if auditType != "bigint" || auditIdentity != "YES" || auditGeneration != "ALWAYS" {
+		t.Fatalf("audit_log.id = type %q identity %q generation %q, want bigint identity ALWAYS", auditType, auditIdentity, auditGeneration)
 	}
 
 	for _, table := range []string{"provider_keys", "key_models"} {
@@ -216,24 +449,45 @@ func TestMigrationsApply(t *testing.T) {
 
 	// Constraint definitions carry the exact spec predicates.
 	constraintChecks := map[string][]string{
-		"provider_keys": {
-			"owner_id IS NOT NULL",
-			"num_nonnulls(secret_enc, key_env, key_ref) <= 1",
-			"num_nonnulls(secret_enc, key_env, key_ref) >= 1",
-			"octet_length(secret_nonce) = 12",
-			"UNIQUE (id, provider_id, scope_owner)",
+		"users": {
+			"length((username)::text) >= 3", "length(display_name) <= 200", "role = ANY",
+			"status = ANY", "length(password_hash) > 0", "failed_attempts >= 0",
 		},
-		"key_models": {
-			"FOREIGN KEY (key_id, provider_id, scope_owner)",
-			"jsonb_array_length(fallbacks) <= 16",
+		"sessions": {
+			"octet_length(token_hash) = 32", "length(user_agent) <= 512", "expires_at > created_at",
+		},
+		"api_tokens": {
+			"kind = ANY", "length(name) >= 1", "length(token_prefix) >= 4",
+			"octet_length(token_hash) = 32", "scope = ANY", "scope IS NOT NULL", "expires_at > created_at",
+		},
+		"login_attempts": {"length((username)::text) <= 64"},
+		"audit_log": {
+			"actor_type = ANY", "length(action) >= 1", "length(target_type) >= 1",
+			"jsonb_typeof(details) = 'object'", "length((details)::text) <= 8192",
 		},
 		"providers": {
-			"jsonb_typeof(endpoint_paths) = 'object'",
-			"NOT (extra_body ? 'model'",
+			"id ~ '^[a-z0-9]", "length(name) >= 1", "length(protocol) >= 1", "base_url ~ '^https?://'",
+			"proxy_url ~ '^(https?|socks5h?)://'", "tls = ANY", "jsonb_typeof(endpoint_paths) = 'object'",
+			"jsonb_typeof(forward_headers) = 'array'", "jsonb_typeof(headers) = 'object'",
+			"jsonb_typeof(extra_body) = 'object'", "NOT (extra_body ? 'model'", "NOT (extra_body ? 'stream'",
+			"jsonb_typeof(extensions) = 'object'", "max_concurrency >= 0", "queue_timeout >= 0",
+			"jsonb_typeof(timeouts) = 'object'",
 		},
-		"users": {
-			"role = ANY",
+		"provider_keys": {
+			"auth_scheme = ANY", "owner_id IS NOT NULL", "secret_enc IS NULL", "octet_length(secret_nonce) = 12",
+			"secret_kver > 0", "length(secret_last4) <= 8", "key_env ~ '^GNVIPI_KEY_", "key_ref !~ '[[:cntrl:]]'",
+			"auth_header_name ~ '^[!#$%&", "num_nonnulls(secret_enc, key_env, key_ref) <= 1",
+			"num_nonnulls(secret_enc, key_env, key_ref) >= 1", "UNIQUE (id, provider_id, scope_owner)",
 		},
+		"key_models": {
+			"length(alias) >= 1", "length(upstream_model) <= 200", "jsonb_typeof(fallbacks) = 'array'",
+			"jsonb_array_length(fallbacks) <= 16", "jsonb_typeof(fallback_statuses) = 'array'",
+			"jsonb_array_length(fallback_statuses) <= 32", "legacy_position >= 0", "alias <> '/*'",
+			"FOREIGN KEY (key_id, provider_id, scope_owner)",
+		},
+		"model_state":  {"length(model_id) >= 1", "length(model_id) <= 200"},
+		"settings":     {"key = ANY", "jsonb_typeof(value) = 'object'"},
+		"config_state": {"CHECK (id)", "version > 0"},
 	}
 	for table, wants := range constraintChecks {
 		var defs string
@@ -279,6 +533,37 @@ func TestMigrationsApply(t *testing.T) {
 	}
 }
 
+func TestSchemaGuardReadsDatabaseStates(t *testing.T) {
+	conn, ctx := testConn(t)
+	latest, err := LatestVersion(migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		mutate string
+		args   []any
+		want   error
+	}{
+		{name: "dirty", mutate: `UPDATE schema_migrations SET dirty = true`, want: ErrSchemaDirty},
+		{name: "older", mutate: `UPDATE schema_migrations SET version = $1`, args: []any{int64(latest - 1)}, want: ErrSchemaTooOld},
+		{name: "newer", mutate: `UPDATE schema_migrations SET version = $1`, args: []any{int64(latest + 1)}, want: ErrSchemaTooNew},
+		{name: "missing", mutate: `DELETE FROM schema_migrations`, want: ErrSchemaNotMigrated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withRollback(t, ctx, conn, func(tx pgx.Tx) {
+				if _, err := tx.Exec(ctx, tc.mutate, tc.args...); err != nil {
+					t.Fatalf("set schema state: %v", err)
+				}
+				if err := CheckSchema(ctx, tx, latest); !errors.Is(err, tc.want) {
+					t.Fatalf("schema guard = %v, want %v", err, tc.want)
+				}
+			})
+		})
+	}
+}
+
 func TestProviderKeyCredentialChecks(t *testing.T) {
 	conn, ctx := testConn(t)
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
@@ -307,6 +592,7 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 		cases := []kase{
 			{name: "enabled bearer without credential", owner: owner, scheme: "bearer", enabled: true, wantConstraint: "provider_keys_credential_required"},
 			{name: "enabled bearer with secret", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last"},
+			{name: "basic encrypted JSON secret", owner: owner, scheme: "basic", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last"},
 			{name: "enabled bearer with two sources", owner: owner, scheme: "bearer", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", keyEnv: "GNVIPI_KEY_TEST", wantConstraint: "provider_keys_credential_single"},
 			{name: "disabled bearer without credential", owner: owner, scheme: "bearer", enabled: false},
 			{name: "none with secret", owner: owner, scheme: "none", enabled: true, enc: secret, nonce: nonce, kver: 1, last4: "last", wantConstraint: "provider_keys_none_clears_credentials"},
@@ -349,6 +635,85 @@ func TestProviderKeyCredentialChecks(t *testing.T) {
 				t.Fatalf("release savepoint: %v", err)
 			}
 		}
+	})
+}
+
+func TestRoleAndPartialUniqueConstraints(t *testing.T) {
+	conn, ctx := testConn(t)
+
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO users (username, role, password_hash) VALUES ('no-viewer', 'viewer', 'x')`)
+		assertCheckViolation(t, err, "users_role_check")
+	})
+
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertProvider(t, ctx, tx, "owned-name-provider")
+		owner := insertUser(t, ctx, tx, "owned-name-user", "user")
+		other := insertUser(t, ctx, tx, "owned-name-other", "user")
+		insertSecretKey(t, ctx, tx, "owned-name-provider", owner, "same-name")
+		insertSecretKey(t, ctx, tx, "owned-name-provider", other, "same-name")
+		_, err := tx.Exec(ctx,
+			`INSERT INTO provider_keys
+			   (provider_id, owner_id, name, auth_scheme, secret_enc, secret_nonce, secret_kver, secret_last4)
+			 VALUES ('owned-name-provider', $1::uuid, 'same-name', 'bearer', $2, $3, 1, 'last')`,
+			owner, []byte{1}, make([]byte, 12))
+		assertUniqueViolation(t, err, "provider_keys_owner_name_uq")
+	})
+
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertProvider(t, ctx, tx, "shared-name-provider")
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO provider_keys (provider_id, name, auth_scheme)
+			 VALUES ('shared-name-provider', 'same-name', 'none')`); err != nil {
+			t.Fatalf("insert first shared key: %v", err)
+		}
+		_, err := tx.Exec(ctx,
+			`INSERT INTO provider_keys (provider_id, name, auth_scheme)
+			 VALUES ('shared-name-provider', 'same-name', 'none')`)
+		assertUniqueViolation(t, err, "provider_keys_shared_name_uq")
+	})
+
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertProvider(t, ctx, tx, "owned-alias-provider")
+		owner := insertUser(t, ctx, tx, "owned-alias-user", "user")
+		other := insertUser(t, ctx, tx, "owned-alias-other", "user")
+		first := insertSecretKey(t, ctx, tx, "owned-alias-provider", owner, "first")
+		second := insertSecretKey(t, ctx, tx, "owned-alias-provider", owner, "second")
+		third := insertSecretKey(t, ctx, tx, "owned-alias-provider", other, "third")
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO key_models (key_id, alias, upstream_model) VALUES ($1::uuid, 'same-alias', 'upstream')`, first); err != nil {
+			t.Fatalf("insert first owned alias: %v", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO key_models (key_id, alias, upstream_model) VALUES ($1::uuid, 'same-alias', 'upstream')`, third); err != nil {
+			t.Fatalf("same alias for another owner: %v", err)
+		}
+		_, err := tx.Exec(ctx,
+			`INSERT INTO key_models (key_id, alias, upstream_model) VALUES ($1::uuid, 'same-alias', 'upstream')`, second)
+		assertUniqueViolation(t, err, "key_models_owned_alias_uq")
+	})
+
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertProvider(t, ctx, tx, "shared-alias-provider")
+		var first, second string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO provider_keys (provider_id, name, auth_scheme)
+			 VALUES ('shared-alias-provider', 'first', 'none') RETURNING id::text`).Scan(&first); err != nil {
+			t.Fatalf("insert first shared key: %v", err)
+		}
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO provider_keys (provider_id, name, auth_scheme)
+			 VALUES ('shared-alias-provider', 'second', 'none') RETURNING id::text`).Scan(&second); err != nil {
+			t.Fatalf("insert second shared key: %v", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO key_models (key_id, alias, upstream_model) VALUES ($1::uuid, 'same-alias', 'upstream')`, first); err != nil {
+			t.Fatalf("insert first shared alias: %v", err)
+		}
+		_, err := tx.Exec(ctx,
+			`INSERT INTO key_models (key_id, alias, upstream_model) VALUES ($1::uuid, 'same-alias', 'upstream')`, second)
+		assertUniqueViolation(t, err, "key_models_shared_alias_uq")
 	})
 }
 
