@@ -75,6 +75,7 @@ func run() (err error) {
 	poolBatch := flag.Int("pool-batch", 1, "tokens to mint per sticky-tab borrow (1=single; requires -captcha-harness=true for speedup)")
 	captchaSelectBudget := flag.Duration("captcha-select-budget", 0, "if >0, benchmark playground candidates on Admin Start All to pick the fastest minting URL (persists to ~/.cache/gnvipi/playground-state.json)")
 	adminToken := flag.String("admin-token", "", "admin access token (also GNVIPI_ADMIN_TOKEN)")
+	trustedProxies := flag.String("trusted-proxies", "", "comma-separated proxy IPs/CIDRs trusted for client IP forwarding (also GNVIPI_TRUSTED_PROXIES)")
 	// Headless deployments (containers, pure proxy nodes) can drop the whole
 	// admin surface so /admin and /admin/api are not routable at all.
 	disableAdminUI := flag.Bool("disable-admin-ui", false, "disable the admin UI and admin API entirely (headless proxy mode)")
@@ -104,6 +105,15 @@ func run() (err error) {
 	flag.Visit(func(f *flag.Flag) { gatewayKeySet = gatewayKeySet || f.Name == "gateway-key" })
 	if !gatewayKeySet {
 		*gatewayKey = os.Getenv("GNVIPI_GATEWAY_KEY")
+	}
+	trustedProxiesSet := false
+	flag.Visit(func(f *flag.Flag) { trustedProxiesSet = trustedProxiesSet || f.Name == "trusted-proxies" })
+	if !trustedProxiesSet {
+		*trustedProxies = os.Getenv("GNVIPI_TRUSTED_PROXIES")
+	}
+	clientIPs, err := newClientIPResolver(*trustedProxies)
+	if err != nil {
+		return fmt.Errorf("trusted proxies: %w", err)
 	}
 	autoModeChatResponsesSet := false
 	flag.Visit(func(f *flag.Flag) {
@@ -181,6 +191,7 @@ func run() (err error) {
 		// The cookie transport rule depends on how the admin listener is bound,
 		// which openAppDB does not know.
 		adminAuth.loopbackBind = adminLoopbackBind(*addr)
+		adminAuth.clientIPs = clientIPs
 	}
 
 	exec := nvidia.NewExecutor(&nvidia.Options{

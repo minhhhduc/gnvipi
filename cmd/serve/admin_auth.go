@@ -61,7 +61,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 		now := time.Now()
-		user, needsRehash, err := auth.Login(ctx, state.pool, username, req.Password, adminRequestIP(c.Request), now, state.login)
+		user, needsRehash, err := auth.Login(ctx, state.pool, username, req.Password, state.clientIPs.requestIP(c.Request), now, state.login)
 		switch {
 		case errors.Is(err, auth.ErrAccountLocked), errors.Is(err, auth.ErrIPLocked):
 			adminAPIError(c, http.StatusTooManyRequests, "too_many_attempts", "too many failed sign-in attempts; try again later")
@@ -102,7 +102,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		}
 		raw, _, err := auth.CreateSession(ctx, tx, auth.CreateSessionInput{
 			UserID:    user.ID,
-			IP:        adminRequestIP(c.Request),
+			IP:        state.clientIPs.requestIP(c.Request),
 			UserAgent: adminUserAgent(c.Request),
 			Now:       now,
 		}, state.sessions)
