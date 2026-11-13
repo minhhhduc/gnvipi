@@ -125,8 +125,18 @@ func TestLegacyViewModelsFilterAndDedupe(t *testing.T) {
 	if len(view.Models) != 3 {
 		t.Fatalf("models = %+v", view.Models)
 	}
-	if view.Models[0].Alias != "a" || view.Models[0].UpstreamModel != "up-a" {
-		t.Fatalf("dedupe should keep the lowest key id: %+v", view.Models[0])
+	foundAliasA := false
+	for _, model := range view.Models {
+		if model.Alias == "a" {
+			foundAliasA = true
+			if model.UpstreamModel != "up-a" {
+				t.Fatalf("dedupe kept %q for alias a, want lowest-key mapping up-a", model.UpstreamModel)
+			}
+			break
+		}
+	}
+	if !foundAliasA {
+		t.Fatal("deduped models omitted alias a")
 	}
 
 	view, err = LegacyView(validProviderRow("p1", true), keys, rows, LegacyViewOptions{VisibleKeyIDs: []string{"k2"}})
@@ -135,6 +145,21 @@ func TestLegacyViewModelsFilterAndDedupe(t *testing.T) {
 	}
 	if len(view.Models) != 2 || view.Models[0].UpstreamModel != "up-a2" || view.Models[1].Alias != "c" {
 		t.Fatalf("filtered models = %+v", view.Models)
+	}
+}
+
+func TestLegacyViewModelsPreserveLegacyPosition(t *testing.T) {
+	key := KeyRow{ID: "k1", ProviderID: "p1", OwnerID: "u1", Name: "key", Enabled: true, AuthScheme: SchemeNone}
+	rows := []KeyModelRow{
+		{KeyID: "k1", ProviderID: "p1", OwnerID: "u1", Alias: "alpha", UpstreamModel: "a", LegacyPosition: 2},
+		{KeyID: "k1", ProviderID: "p1", OwnerID: "u1", Alias: "zeta", UpstreamModel: "z", LegacyPosition: 1},
+	}
+	view, err := LegacyView(validProviderRow("p1", true), []KeyRow{key}, rows, LegacyViewOptions{})
+	if err != nil {
+		t.Fatalf("legacy view: %v", err)
+	}
+	if len(view.Models) != 2 || view.Models[0].Alias != "zeta" || view.Models[1].Alias != "alpha" {
+		t.Fatalf("models = %+v, want legacy positions 1 then 2", view.Models)
 	}
 }
 

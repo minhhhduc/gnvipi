@@ -56,7 +56,7 @@ func main() {
 }
 
 func run() error {
-	handled, err := runCLICommand(os.Args[1:], os.LookupEnv, db.Migrate)
+	handled, err := runCLICommand(os.Args[1:], os.LookupEnv, db.Migrate, runImportV2Command)
 	if handled {
 		return err
 	}
@@ -67,13 +67,20 @@ func runCLICommand(
 	args []string,
 	lookup func(string) (string, bool),
 	migrate func(context.Context, string) error,
+	importV2 func(context.Context, []string, func(string) (string, bool)) error,
 ) (bool, error) {
-	if len(args) == 0 || args[0] != "migrate" {
+	var command func(context.Context) error
+	switch {
+	case len(args) > 0 && args[0] == "migrate":
+		command = func(ctx context.Context) error { return runMigrateCommand(ctx, args[1:], lookup, migrate) }
+	case len(args) > 1 && args[0] == "admin" && args[1] == "import-v2":
+		command = func(ctx context.Context) error { return importV2(ctx, args[2:], lookup) }
+	default:
 		return false, nil
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return true, runMigrateCommand(ctx, args[1:], lookup, migrate)
+	return true, command(ctx)
 }
 
 func runServer() (err error) {

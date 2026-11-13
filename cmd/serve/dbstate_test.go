@@ -124,7 +124,7 @@ func TestRunCLICommandMigrationDSNPolicy(t *testing.T) {
 				return nil
 			}
 
-			handled, err := runCLICommand([]string{"migrate"}, lookup, runner)
+			handled, err := runCLICommand([]string{"migrate"}, lookup, runner, nil)
 			if !handled {
 				t.Fatal("migrate command was not handled")
 			}
@@ -153,7 +153,7 @@ func TestRunCLICommandDispatchesMigrationArguments(t *testing.T) {
 	handled, err := runCLICommand([]string{"migrate", secret}, nil, func(context.Context, string) error {
 		calls++
 		return nil
-	})
+	}, nil)
 	if !handled || err == nil {
 		t.Fatalf("migrate with an argument = handled %v err %v, want handled error", handled, err)
 	}
@@ -164,7 +164,7 @@ func TestRunCLICommandDispatchesMigrationArguments(t *testing.T) {
 		t.Fatalf("migration dispatch error leaked the argument: %v", err)
 	}
 
-	handled, err = runCLICommand([]string{"--addr", ":8080"}, nil, nil)
+	handled, err = runCLICommand([]string{"--addr", ":8080"}, nil, nil, nil)
 	if handled || err != nil {
 		t.Fatalf("server flags = handled %v err %v, want unhandled nil", handled, err)
 	}
