@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/minhhhduc/gnvipi/internal/db"
 )
 
 func TestOpenAppDBRequiresDSNInProduction(t *testing.T) {
@@ -46,6 +48,18 @@ func TestOpenAppDBRefusesAutoMigrateInProduction(t *testing.T) {
 	}
 }
 
+func TestDatabaseSchemaErrorDoesNotRecommendAutoMigrate(t *testing.T) {
+	for _, cause := range []error{db.ErrSchemaNotMigrated, db.ErrSchemaDirty, db.ErrSchemaTooOld, db.ErrSchemaTooNew} {
+		err := databaseSchemaError(cause)
+		if !strings.Contains(err.Error(), "database schema") {
+			t.Fatalf("schema error = %v, want database schema context", err)
+		}
+		if strings.Contains(err.Error(), "--auto-migrate") {
+			t.Fatalf("schema error recommends auto-migrate for %v: %v", cause, err)
+		}
+	}
+}
+
 func TestRunCLICommandMigrationDSNPolicy(t *testing.T) {
 	const (
 		runtimeDSN   = "postgres://runtime@localhost:5432/runtime?sslmode=disable"
@@ -60,7 +74,6 @@ func TestRunCLICommandMigrationDSNPolicy(t *testing.T) {
 		{
 			name: "explicit migration DSN in production",
 			env: map[string]string{
-				databaseEnv:                     runtimeDSN,
 				"GNVIPI_MIGRATION_DATABASE_URL": migrationDSN,
 				"GNVIPI_ENV":                    "production",
 			},

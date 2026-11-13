@@ -85,9 +85,6 @@ func TestLoadConfigFromHasNoDefaultPassword(t *testing.T) {
 	if cfg.DatabaseURL != env["GNVIPI_DATABASE_URL"] {
 		t.Fatalf("DatabaseURL = %q, want the environment value verbatim", cfg.DatabaseURL)
 	}
-	if cfg.MigrationURL != cfg.DatabaseURL {
-		t.Fatalf("development MigrationURL = %q, want the app DSN fallback", cfg.MigrationURL)
-	}
 	if cfg.MaxConns != DefaultMaxConns || cfg.MinConns != DefaultMinConns {
 		t.Fatalf("pool defaults = %d/%d, want %d/%d",
 			cfg.MaxConns, cfg.MinConns, DefaultMaxConns, DefaultMinConns)
@@ -97,27 +94,74 @@ func TestLoadConfigFromHasNoDefaultPassword(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFromProductionRequiresMigrationURL(t *testing.T) {
-	base := map[string]string{
-		"GNVIPI_DATABASE_URL": "postgres://u@localhost:5432/x",
+func TestLoadConfigFromProductionDoesNotRequireMigrationURL(t *testing.T) {
+	env := map[string]string{
+		"GNVIPI_DATABASE_URL": "postgres://runtime@localhost:5432/x",
 		"GNVIPI_ENV":          "production",
 	}
-	if _, err := LoadConfigFrom(mapLookup(base)); err == nil {
-		t.Fatal("expected production to require GNVIPI_MIGRATION_DATABASE_URL")
+	if _, err := LoadConfigFrom(mapLookup(env)); err != nil {
+		t.Fatalf("production runtime config required the migration credential: %v", err)
 	}
-	base["GNVIPI_MIGRATION_DATABASE_URL"] = "postgres://u@localhost:5432/x"
-	if _, err := LoadConfigFrom(mapLookup(base)); err != nil {
-		t.Fatalf("production with both URLs failed: %v", err)
+}
+
+func TestLoadMigrationURLFromPolicy(t *testing.T) {
+	const (
+		runtimeDSN   = "postgres://runtime@localhost:5432/runtime?sslmode=disable"
+		migrationDSN = "postgres://migrator@localhost:5432/migrations?sslmode=disable"
+	)
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr string
+	}{
+		{
+			name: "production migration only",
+			env: map[string]string{
+				"GNVIPI_MIGRATION_DATABASE_URL": migrationDSN,
+				"GNVIPI_ENV":                    "production",
+			},
+			want: migrationDSN,
+		},
+		{
+			name: "development runtime fallback",
+			env: map[string]string{
+				"GNVIPI_DATABASE_URL": runtimeDSN,
+				"GNVIPI_ENV":          "development",
+			},
+			want: runtimeDSN,
+		},
+		{
+			name: "production runtime fallback refused",
+			env: map[string]string{
+				"GNVIPI_DATABASE_URL": runtimeDSN,
+				"GNVIPI_ENV":          "production",
+			},
+			wantErr: "GNVIPI_MIGRATION_DATABASE_URL",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := LoadMigrationURLFrom(mapLookup(tc.env))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadMigrationURLFrom() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("LoadMigrationURLFrom() = %q, %v; want %q, nil", got, err, tc.want)
+			}
+		})
 	}
 }
 
 func TestLoadConfigFromOverrides(t *testing.T) {
 	env := map[string]string{
-		"GNVIPI_DATABASE_URL":           "postgres://u@localhost:5432/x",
-		"GNVIPI_MIGRATION_DATABASE_URL": "postgres://m@localhost:5432/x",
-		"GNVIPI_DB_MAX_CONNS":           "25",
-		"GNVIPI_DB_MIN_CONNS":           "2",
-		"GNVIPI_DB_CONNECT_TIMEOUT":     "1500ms",
+		"GNVIPI_DATABASE_URL":       "postgres://u@localhost:5432/x",
+		"GNVIPI_DB_MAX_CONNS":       "25",
+		"GNVIPI_DB_MIN_CONNS":       "2",
+		"GNVIPI_DB_CONNECT_TIMEOUT": "1500ms",
 	}
 	cfg, err := LoadConfigFrom(mapLookup(env))
 	if err != nil {
@@ -125,9 +169,6 @@ func TestLoadConfigFromOverrides(t *testing.T) {
 	}
 	if cfg.MaxConns != 25 || cfg.MinConns != 2 || cfg.ConnectTimeout != 1500*time.Millisecond {
 		t.Fatalf("unexpected config: %+v", cfg)
-	}
-	if cfg.MigrationURL != env["GNVIPI_MIGRATION_DATABASE_URL"] {
-		t.Fatalf("MigrationURL = %q", cfg.MigrationURL)
 	}
 }
 

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/minhhhduc/gnvipi/migrations"
@@ -144,6 +146,54 @@ func assertUniqueViolation(t *testing.T, err error, constraint string) {
 	}
 }
 
+type advisoryLockCoordinates struct {
+	database int64
+	classID  int64
+	objectID int64
+	subID    int32
+}
+
+func heldAdvisoryLockCoordinates(t *testing.T, ctx context.Context, conn *pgx.Conn) advisoryLockCoordinates {
+	t.Helper()
+	var lock advisoryLockCoordinates
+	if err := conn.QueryRow(ctx, `SELECT database::bigint, classid::bigint, objid::bigint, objsubid
+		FROM pg_locks
+		WHERE pid = pg_backend_pid() AND locktype = 'advisory' AND granted
+		ORDER BY classid, objid, objsubid
+		LIMIT 1`).Scan(&lock.database, &lock.classID, &lock.objectID, &lock.subID); err != nil {
+		t.Fatalf("read held advisory lock: %v", err)
+	}
+	return lock
+}
+
+func advisoryLockExists(t *testing.T, ctx context.Context, conn *pgx.Conn, lock advisoryLockCoordinates, granted bool) bool {
+	t.Helper()
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_locks
+		WHERE locktype = 'advisory'
+		  AND database::bigint = $1 AND classid::bigint = $2
+		  AND objid::bigint = $3 AND objsubid = $4 AND granted = $5
+	)`, lock.database, lock.classID, lock.objectID, lock.subID, granted).Scan(&exists); err != nil {
+		t.Fatalf("inspect advisory lock: %v", err)
+	}
+	return exists
+}
+
+func waitForAdvisoryLock(t *testing.T, ctx context.Context, conn *pgx.Conn, lock advisoryLockCoordinates, granted bool) {
+	t.Helper()
+	for {
+		if advisoryLockExists(t, ctx, conn, lock, granted) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for advisory lock (granted=%v): %v", granted, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestMigrateWaitsForAdvisoryLock(t *testing.T) {
 	dsn := testDatabaseURL(t)
 	ensureMigrated(t, dsn)
@@ -158,6 +208,7 @@ func TestMigrateWaitsForAdvisoryLock(t *testing.T) {
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock(hashtext('gnvipi:migrations'))`); err != nil {
 		t.Fatalf("hold migration lock: %v", err)
 	}
+	lock := heldAdvisoryLockCoordinates(t, ctx, holder)
 	locked := true
 	defer func() {
 		if locked {
@@ -167,27 +218,11 @@ func TestMigrateWaitsForAdvisoryLock(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- Migrate(ctx, dsn) }()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		select {
-		case err := <-done:
-			t.Fatalf("concurrent migration completed while advisory lock was held: %v", err)
-		default:
-		}
-		var waiting bool
-		if err := holder.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
-		)`).Scan(&waiting); err != nil {
-			t.Fatalf("inspect migration waiter: %v", err)
-		}
-		if waiting {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("migration did not wait on the advisory lock")
-		}
-		time.Sleep(10 * time.Millisecond)
+	waitForAdvisoryLock(t, ctx, holder, lock, false)
+	select {
+	case err := <-done:
+		t.Fatalf("concurrent migration completed while advisory lock was held: %v", err)
+	default:
 	}
 
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`); err != nil {
@@ -201,6 +236,115 @@ func TestMigrateWaitsForAdvisoryLock(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatalf("migration did not finish after lock release: %v", ctx.Err())
+	}
+}
+
+func TestMigrateHoldsNamedLockForMigrationRun(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ensureMigrated(t, dsn)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	probe, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect lock probe: %v", err)
+	}
+	defer func() { _ = probe.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_lock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("probe named migration lock: %v", err)
+	}
+	namedLock := heldAdvisoryLockCoordinates(t, ctx, probe)
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('gnvipi:migrations'))`); err != nil {
+		t.Fatalf("release probed migration lock: %v", err)
+	}
+
+	parsed, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	driverLockText, err := migratedb.GenerateAdvisoryLockId(parsed.Database, "public", "schema_migrations")
+	if err != nil {
+		t.Fatalf("derive driver lock: %v", err)
+	}
+	driverLockID, err := strconv.ParseInt(driverLockText, 10, 64)
+	if err != nil {
+		t.Fatalf("parse driver lock: %v", err)
+	}
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_lock($1)`, driverLockID); err != nil {
+		t.Fatalf("hold migrate driver lock: %v", err)
+	}
+	driverLock := heldAdvisoryLockCoordinates(t, ctx, probe)
+	driverLocked := true
+	defer func() {
+		if driverLocked {
+			_, _ = probe.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, driverLockID) //nolint:errcheck // best-effort test cleanup
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- Migrate(ctx, dsn) }()
+	waitForAdvisoryLock(t, ctx, probe, driverLock, false)
+	if !advisoryLockExists(t, ctx, probe, namedLock, true) {
+		t.Fatal("named migration lock was not held while migration execution was blocked")
+	}
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_unlock($1)`, driverLockID); err != nil {
+		t.Fatalf("release migrate driver lock: %v", err)
+	}
+	driverLocked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("migration after driver lock release: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("migration did not finish after driver lock release: %v", ctx.Err())
+	}
+}
+
+func TestMigrateCancellationStopsDriverWait(t *testing.T) {
+	dsn := testDatabaseURL(t)
+	ensureMigrated(t, dsn)
+	ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
+	defer stop()
+
+	blocker, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect driver lock blocker: %v", err)
+	}
+	defer func() { _ = blocker.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	parsed, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test database URL: %v", err)
+	}
+	driverLockText, err := migratedb.GenerateAdvisoryLockId(parsed.Database, "public", "schema_migrations")
+	if err != nil {
+		t.Fatalf("derive driver lock: %v", err)
+	}
+	driverLockID, err := strconv.ParseInt(driverLockText, 10, 64)
+	if err != nil {
+		t.Fatalf("parse driver lock: %v", err)
+	}
+	if _, err := blocker.Exec(ctx, `SELECT pg_advisory_lock($1)`, driverLockID); err != nil {
+		t.Fatalf("hold migrate driver lock: %v", err)
+	}
+	driverLock := heldAdvisoryLockCoordinates(t, ctx, blocker)
+	defer func() {
+		_, _ = blocker.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, driverLockID) //nolint:errcheck // best-effort test cleanup
+	}()
+
+	migrateCtx, cancelMigrate := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- Migrate(migrateCtx, dsn) }()
+	waitForAdvisoryLock(t, ctx, blocker, driverLock, false)
+	cancelMigrate()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled migration = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled migration remained blocked in the driver")
 	}
 }
 
