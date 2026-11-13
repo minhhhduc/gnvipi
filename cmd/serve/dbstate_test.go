@@ -52,9 +52,9 @@ func TestRunMigrateCommandUsesMigrationDatabaseURL(t *testing.T) {
 		migrationDSN = "postgres://migrator@localhost:5432/migrations?sslmode=disable"
 	)
 	env := map[string]string{
-		databaseEnv:                    runtimeDSN,
+		databaseEnv:                     runtimeDSN,
 		"GNVIPI_MIGRATION_DATABASE_URL": migrationDSN,
-		"GNVIPI_ENV":                   "production",
+		"GNVIPI_ENV":                    "production",
 	}
 	lookup := func(key string) (string, bool) {
 		value, ok := env[key]

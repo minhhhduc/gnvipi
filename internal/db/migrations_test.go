@@ -341,8 +341,8 @@ func TestMigrationsApply(t *testing.T) {
 			"jsonb_array_length(fallback_statuses) <= 32", "legacy_position >= 0", "alias <> '/*'",
 			"FOREIGN KEY (key_id, provider_id, scope_owner)",
 		},
-		"model_state": {"length(model_id) >= 1", "length(model_id) <= 200"},
-		"settings":    {"key = ANY", "jsonb_typeof(value) = 'object'"},
+		"model_state":  {"length(model_id) >= 1", "length(model_id) <= 200"},
+		"settings":     {"key = ANY", "jsonb_typeof(value) = 'object'"},
 		"config_state": {"CHECK (id)", "version > 0"},
 	}
 	for table, wants := range constraintChecks {
