@@ -387,6 +387,16 @@ func TestConcurrentLastOwnerMixedMutations(t *testing.T) {
 			},
 		},
 		{
+			name: "delete and demote",
+			left: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				return DeleteUser(ctx, db, id)
+			},
+			right: func(ctx context.Context, db *pgxpool.Pool, id string) error {
+				_, err := UpdateUser(ctx, db, id, UpdateUserInput{Role: rolePtr(RoleAdmin)})
+				return err
+			},
+		},
+		{
 			name: "disable and demote",
 			left: func(ctx context.Context, db *pgxpool.Pool, id string) error {
 				_, err := UpdateUser(ctx, db, id, UpdateUserInput{Status: statusPtr(StatusDisabled)})

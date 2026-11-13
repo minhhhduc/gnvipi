@@ -207,7 +207,9 @@ func Login(ctx context.Context, db DB, username, password, ip string, now time.T
 	}
 	u, err := GetUserByUsername(ctx, db, username)
 	if errors.Is(err, ErrUserNotFound) {
-		dummyVerification(password, cfg.Pepper, cfg.PreviousPepper, cfg.PreviousPepperSet)
+		if err := dummyVerification(password, cfg.Params, cfg.Pepper, cfg.PreviousPepper, cfg.PreviousPepperSet); err != nil {
+			return nil, false, err
+		}
 		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, false, ErrInvalidCredentials
 	}

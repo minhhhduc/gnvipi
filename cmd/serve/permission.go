@@ -71,6 +71,9 @@ func loadPasswordHashConfig(lookup func(string) (string, bool)) (auth.BootstrapC
 	if err := params.Validate(); err != nil {
 		return auth.BootstrapConfig{}, err
 	}
+	if err := auth.PrepareDummyVerification(params); err != nil {
+		return auth.BootstrapConfig{}, fmt.Errorf("prepare dummy password hash: %w", err)
+	}
 	pepper, _ := lookup(pepperEnv)
 	previousPepper, previousPepperSet := lookup(previousPepperEnv)
 	return auth.BootstrapConfig{

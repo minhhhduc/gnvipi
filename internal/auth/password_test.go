@@ -118,10 +118,38 @@ func TestParamsValidate(t *testing.T) {
 		{Memory: 8192, Iterations: 1, Parallelism: 0, SaltLength: 16, KeyLength: 32},
 		{Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 4, KeyLength: 32},
 		{Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 8},
+		{Memory: 262145, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32},
+		{Memory: 8192, Iterations: 11, Parallelism: 1, SaltLength: 16, KeyLength: 32},
+		{Memory: 8192, Iterations: 1, Parallelism: 17, SaltLength: 16, KeyLength: 32},
+		{Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 65, KeyLength: 32},
+		{Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 65},
 	}
 	for _, p := range bad {
 		if err := p.Validate(); err == nil {
 			t.Errorf("params %+v accepted", p)
 		}
+	}
+}
+
+func TestParsePHCRejectsExcessiveWorkBeforeHashing(t *testing.T) {
+	encoded := "$argon2id$v=19$m=262145,t=1,p=1$MDEyMzQ1Njc$MDEyMzQ1Njc4OWFiY2RlZg"
+	if _, _, _, err := parsePHC(encoded); !errors.Is(err, ErrInvalidPHC) {
+		t.Fatalf("excessive PHC work factor: %v", err)
+	}
+}
+
+func TestDummyHashUsesConfiguredParams(t *testing.T) {
+	params := fastParams()
+	params.Memory = 16384
+	encoded, err := dummyHashForParams(params)
+	if err != nil {
+		t.Fatalf("prepare dummy hash: %v", err)
+	}
+	got, _, _, err := parsePHC(encoded)
+	if err != nil {
+		t.Fatalf("parse dummy hash: %v", err)
+	}
+	if got != params {
+		t.Fatalf("dummy params = %+v, want %+v", got, params)
 	}
 }

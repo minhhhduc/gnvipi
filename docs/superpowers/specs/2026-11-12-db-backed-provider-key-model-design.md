@@ -733,14 +733,18 @@ Pool and statement settings:
 - 16-byte random salt per user. Argon2id memory (KiB), iterations and
   parallelism are configurable with `GNVIPI_PASSWORD_ARGON2_MEMORY_KIB`,
   `GNVIPI_PASSWORD_ARGON2_ITERATIONS` and
-  `GNVIPI_PASSWORD_ARGON2_PARALLELISM`; defaults are `65536`, `3` and `2`.
+  `GNVIPI_PASSWORD_ARGON2_PARALLELISM`; defaults are `65536`, `3` and `2`,
+  with maxima `262144`, `10` and `16`. PHC salt and key lengths are capped at
+  64 bytes before hashing.
 - Optional pepper: `GNVIPI_PASSWORD_PEPPER`. Apply
   `HMAC-SHA256(pepper, password)` before Argon2id so the pepper is not
   length-limited.
 - During a pepper rotation, set `GNVIPI_PASSWORD_PEPPER_PREVIOUS` to the exact
   previous pepper (an explicitly empty value migrates previously unpeppered
-  hashes). A successful login rehashes with the current pepper; unset the
-  previous value after the rotation window.
+  hashes). Deployments upgrading from versions that trimmed surrounding pepper
+  whitespace set the previous value to the formerly effective trimmed bytes
+  and the current value to the desired exact bytes. A successful login rehashes
+  with the current pepper; unset the previous value after the rotation window.
 - Constant-time compare; rehash on successful login when parameters or pepper
   are outdated.
 - Length 12–128 characters; no composition rules.
@@ -1218,10 +1222,10 @@ Behavior:
 | `GNVIPI_MASTER_KEY_VERSION` | yes | integer, default 1 |
 | `GNVIPI_MASTER_KEY_PREVIOUS` | rotation | `version:base64` pairs |
 | `GNVIPI_PASSWORD_PEPPER` | optional | HMAC pepper before Argon2id |
-| `GNVIPI_PASSWORD_PEPPER_PREVIOUS` | rotation | exact previous pepper; set empty for previously unpeppered hashes |
-| `GNVIPI_PASSWORD_ARGON2_MEMORY_KIB` | optional | default 65536; minimum 8192 |
-| `GNVIPI_PASSWORD_ARGON2_ITERATIONS` | optional | default 3; positive integer |
-| `GNVIPI_PASSWORD_ARGON2_PARALLELISM` | optional | default 2; positive integer, maximum 255 |
+| `GNVIPI_PASSWORD_PEPPER_PREVIOUS` | rotation | exact previous pepper; set empty for previously unpeppered hashes; use formerly trimmed bytes when upgrading |
+| `GNVIPI_PASSWORD_ARGON2_MEMORY_KIB` | optional | default 65536; range 8192–262144 |
+| `GNVIPI_PASSWORD_ARGON2_ITERATIONS` | optional | default 3; range 1–10 |
+| `GNVIPI_PASSWORD_ARGON2_PARALLELISM` | optional | default 2; range 1–16 |
 | `GNVIPI_ENV` | optional | `production` disables `--auto-migrate` |
 | `GNVIPI_DB_MAX_CONNS` | optional | default 10 |
 | `GNVIPI_DB_MIN_CONNS` | optional | default 1 |
