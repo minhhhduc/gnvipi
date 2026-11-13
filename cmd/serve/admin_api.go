@@ -73,6 +73,19 @@ func redactProvider(p *gatewayprovider.Provider) gatewayprovider.Provider {
 	return cloned
 }
 
+// providerMetadata removes fields that can carry arbitrary credentials. A
+// user-role account needs enabled provider identity and model metadata, not the
+// operator configuration used to reach the upstream.
+func providerMetadata(p *gatewayprovider.Provider) gatewayprovider.Provider {
+	cloned := redactProvider(p)
+	cloned.ProxyURL = ""
+	cloned.Auth = gatewayprovider.Auth{Scheme: cloned.Auth.Scheme, HeaderName: cloned.Auth.HeaderName}
+	cloned.Headers = nil
+	cloned.ExtraBody = nil
+	cloned.Extensions = nil
+	return cloned
+}
+
 func preserveHeaders(incoming, existing map[string]string) map[string]string {
 	if len(incoming) == 0 {
 		return incoming
@@ -304,7 +317,11 @@ func handleAdminAPIListProviders(c *gin.Context, p *modelPrefs) {
 		if user && !list[i].Enabled {
 			continue
 		}
-		out = append(out, redactProvider(&list[i]))
+		if user {
+			out = append(out, providerMetadata(&list[i]))
+		} else {
+			out = append(out, redactProvider(&list[i]))
+		}
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -324,6 +341,10 @@ func handleAdminAPIGetProvider(c *gin.Context, p *modelPrefs) {
 		} else {
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found", id)})
 		}
+		return
+	}
+	if user {
+		c.JSON(http.StatusOK, providerMetadata(&pv))
 		return
 	}
 	c.JSON(http.StatusOK, redactProvider(&pv))
