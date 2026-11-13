@@ -52,6 +52,9 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 	ctx := t.Context()
 	pool := newAdminTestPool(t, dsn)
 	state := newAuthState(pool)
+	// The harness serves http://127.0.0.1:8080, i.e. a loopback bind, which is
+	// the one configuration where plaintext cookies are allowed.
+	state.loopbackBind = true
 	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
 		Username:    dbOwnerUsername,
 		Email:       "owner@example.test",
@@ -358,5 +361,68 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	}
 	if actorType != "token" || actorUser != h.owner.ID || targetType != "user" || targetID != userID {
 		t.Fatalf("audit row = %s/%s target %s/%s, want token/%s target user/%s", actorType, actorUser, targetType, targetID, h.owner.ID, userID)
+	}
+}
+
+// TestDBAdminAuth_PlaintextLoginRequiresLoopback pins the transport rule: the
+// new password endpoint must not be weaker than the file-token login it
+// replaces, which has always refused cleartext logins off loopback.
+func TestDBAdminAuth_PlaintextLoginRequiresLoopback(t *testing.T) {
+	h := newDBAdminHarness(t)
+
+	exposed := *h.state
+	exposed.loopbackBind = false
+	engine := gin.New()
+	engine.Use(adminAPIAuthorization(&exposed))
+	registerAdminAPIRoutes(engine, setupTestPrefs(t), nil, nil, &exposed)
+
+	res := makeRequest(t, engine, http.MethodPost, adminLoginPath, gin.H{
+		"username": dbOwnerUsername,
+		"password": dbOwnerPassword,
+	}, nil)
+	if res.Code != http.StatusForbidden || decodeBody(t, res)["code"] != "https_required" {
+		t.Fatalf("plaintext login on a public bind = %d %s, want 403 https_required", res.Code, res.Body.String())
+	}
+
+	// A session cookie captured elsewhere must not be replayed over plaintext.
+	res = makeRequest(t, engine, http.MethodGet, adminSessionPath, nil, map[string]string{
+		"Cookie": auth.SessionCookieName + "=whatever",
+	})
+	if res.Code != http.StatusForbidden || decodeBody(t, res)["code"] != "https_required" {
+		t.Fatalf("plaintext session read on a public bind = %d %s, want 403 https_required", res.Code, res.Body.String())
+	}
+}
+
+// TestDBAdminAuth_LockoutDoesNotRevealAccounts keeps the lock threshold
+// identical for existing and unknown usernames: a 429 reachable only for real
+// accounts would turn sign-in into an existence oracle.
+func TestDBAdminAuth_LockoutDoesNotRevealAccounts(t *testing.T) {
+	h := newDBAdminHarness(t)
+
+	res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users", gin.H{
+		"username": "known",
+		"role":     string(auth.RoleUser),
+		"password": dbUserPassword,
+	}, bearer(h.token))
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create user = %d, want 201 (body %s)", res.Code, res.Body.String())
+	}
+
+	fail := func(username string) int {
+		t.Helper()
+		return makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{
+			"username": username,
+			"password": "Wrong-Guess7-Anchor!",
+		}, nil).Code
+	}
+	for _, username := range []string{"known", "ghost"} {
+		for i := 0; i < 5; i++ {
+			if code := fail(username); code != http.StatusUnauthorized {
+				t.Fatalf("failure %d for %q = %d, want 401", i+1, username, code)
+			}
+		}
+		if code := fail(username); code != http.StatusTooManyRequests {
+			t.Fatalf("sixth failure for %q = %d, want 429", username, code)
+		}
 	}
 }

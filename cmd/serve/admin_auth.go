@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -30,6 +31,13 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusForbidden, "cross_origin", "cross-origin sign-in rejected")
 			return
 		}
+		// A password in a plaintext request is worse than a bearer token: it is
+		// reusable and it mints a long-lived session. Apply the same transport
+		// rule the file-token login has always enforced.
+		if !state.cookieTransportAllowed(c.Request) {
+			adminAPIError(c, http.StatusForbidden, "https_required", "sign-in requires HTTPS outside loopback")
+			return
+		}
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -46,7 +54,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 		now := time.Now()
-		user, _, err := auth.Login(ctx, state.pool, username, req.Password, adminRequestIP(c.Request), now, state.login)
+		user, needsRehash, err := auth.Login(ctx, state.pool, username, req.Password, adminRequestIP(c.Request), now, state.login)
 		switch {
 		case errors.Is(err, auth.ErrAccountLocked), errors.Is(err, auth.ErrIPLocked):
 			adminAPIError(c, http.StatusTooManyRequests, "too_many_attempts", "too many failed sign-in attempts; try again later")
@@ -57,6 +65,13 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		case err != nil:
 			adminAPIError(c, http.StatusInternalServerError, "login_unavailable", "sign-in is temporarily unavailable")
 			return
+		}
+
+		// The verified password is in hand, so a hash written under stale Argon2
+		// parameters or a previous pepper is upgraded now. Best effort: the
+		// session about to be minted is already authenticated.
+		if needsRehash {
+			adminRehashPassword(ctx, state, user.ID, req.Password)
 		}
 
 		// Rotate: a session that already existed on this browser must not stay
@@ -173,7 +188,21 @@ func adminClearCredentials(c *gin.Context) {
 func adminUserAgent(r *http.Request) string {
 	agent := r.UserAgent()
 	if len(agent) > maxUserAgentBytes {
-		agent = agent[:maxUserAgentBytes]
+		// The cut can land inside a multi-byte rune, and PostgreSQL rejects
+		// invalid UTF-8 in a text column.
+		agent = strings.ToValidUTF8(agent[:maxUserAgentBytes], "")
 	}
 	return agent
+}
+
+// adminRehashPassword rewrites the stored hash when the login reported it as
+// stale. Failures are ignored: the caller is already authenticated and a stale
+// hash still verifies.
+func adminRehashPassword(ctx context.Context, state *authState, userID, password string) {
+	hash, err := auth.HashPassword(password, state.login.Params, state.login.Pepper)
+	if err != nil {
+		return
+	}
+	//nolint:errcheck // best-effort upgrade of an existing, still valid hash
+	_, _ = state.pool.Exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1::uuid`, userID, hash)
 }

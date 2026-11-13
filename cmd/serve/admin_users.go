@@ -198,7 +198,13 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 
 		identity := adminIdentityOf(c)
 		ctx := c.Request.Context()
-		user, err := auth.UpdateUser(ctx, state.pool, c.Param("id"), patch)
+		tx, err := state.pool.Begin(ctx)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
+		user, err := auth.UpdateUserTx(ctx, tx, c.Param("id"), patch)
 		switch {
 		case errors.Is(err, auth.ErrUserNotFound), isInvalidUUID(err):
 			adminNotFoundResponse(c)
@@ -222,12 +228,16 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
 			return
 		}
-		if err := writeAdminAudit(ctx, state.pool, identity, "user.update", "user", user.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.update", "user", user.ID, map[string]any{
 			"username": user.Username,
 			"role":     string(user.Role),
 			"status":   string(user.Status),
 		}); err != nil {
-			adminAPIError(c, http.StatusInternalServerError, "audit_unavailable", "the user was updated but the audit row could not be written")
+			adminAPIError(c, http.StatusInternalServerError, "audit_unavailable", "could not record the user update")
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
 			return
 		}
 		c.JSON(http.StatusOK, adminUserJSON(user))
@@ -320,7 +330,7 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "password", err.Error())
 			return
 		}
-		if err := auth.ResetPassword(ctx, state.pool, target.ID, req.Password, state.password); err != nil {
+		if err := auth.ResetPasswordBy(ctx, state.pool, target.ID, req.Password, state.password, adminAuditActor(identity)); err != nil {
 			if errors.Is(err, auth.ErrUserNotFound) {
 				adminNotFoundResponse(c)
 				return

@@ -35,6 +35,10 @@ type authState struct {
 	sessions auth.SessionConfig
 	login    auth.LoginConfig
 	password auth.BootstrapConfig
+	// loopbackBind records whether the admin listener is bound to a loopback
+	// address. Plaintext cookies are only accepted on such a bind, matching the
+	// file-token policy in adminAccess.
+	loopbackBind bool
 }
 
 func newAuthState(pool *pgxpool.Pool) *authState {
@@ -251,6 +255,13 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 	}
 }
 
+// cookieTransportAllowed mirrors the file-token policy: a browser session is
+// issued and accepted over TLS, or over plaintext only on a loopback bind whose
+// request authority is also loopback. Bearer tokens are unaffected.
+func (s *authState) cookieTransportAllowed(r *http.Request) bool {
+	return adminTLSRequest(r) || (s.loopbackBind && adminLoopbackRequest(r))
+}
+
 // identify resolves the caller from the session cookie, then from an admin API
 // token. A stale or invalid session is not an error on its own: the request is
 // still allowed to authenticate with a bearer token.
@@ -259,6 +270,13 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 	now := time.Now()
 
 	if raw, err := c.Cookie(auth.SessionCookieName); err == nil && raw != "" {
+		if !s.cookieTransportAllowed(c.Request) {
+			return nil, &adminAuthFailure{
+				status:  http.StatusForbidden,
+				code:    "https_required",
+				message: "admin sessions require HTTPS outside loopback",
+			}
+		}
 		session, err := auth.ValidateSession(ctx, s.pool, raw, now, s.sessions)
 		switch {
 		case err == nil:
@@ -461,18 +479,18 @@ func adminPage(c *gin.Context) (limit, offset int, ok bool) {
 
 // writeAdminAudit records one mutation. It accepts the pool or the caller's
 // transaction so account and token writes stay auditable.
-func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID string, details map[string]any) error {
-	actorType, actorID := "user", identity.UserID
+// adminAuditActor names the human behind a request: the token as the actor type
+// when the call authenticated with one, the user otherwise.
+func adminAuditActor(identity *adminIdentity) auth.AuditEntry {
+	entry := auth.AuditEntry{ActorType: "user", ActorID: identity.UserID, UserID: identity.UserID}
 	if identity.ViaToken {
-		actorType, actorID = "token", identity.TokenID
+		entry.ActorType, entry.ActorID = "token", identity.TokenID
 	}
-	return auth.WriteAudit(ctx, q, auth.AuditEntry{
-		ActorType:  actorType,
-		ActorID:    actorID,
-		UserID:     identity.UserID,
-		Action:     action,
-		TargetType: targetType,
-		TargetID:   targetID,
-		Details:    details,
-	})
+	return entry
+}
+
+func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID string, details map[string]any) error {
+	entry := adminAuditActor(identity)
+	entry.Action, entry.TargetType, entry.TargetID, entry.Details = action, targetType, targetID, details
+	return auth.WriteAudit(ctx, q, entry)
 }

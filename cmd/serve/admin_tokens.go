@@ -100,6 +100,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			return
 		}
 		identity := adminIdentityOf(c)
+		ctx := c.Request.Context()
 		target := identity.UserID
 		if raw := strings.TrimSpace(req.UserID); raw != "" && raw != identity.UserID {
 			if identity.Role != auth.RoleOwner {
@@ -107,6 +108,13 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 				return
 			}
 			target = raw
+		}
+		// The target decides which kinds a token may carry, not the caller: an
+		// owner naming a user account must not mint an admin token for it.
+		targetUser, err := auth.GetUserByID(ctx, state.pool, target)
+		if err != nil {
+			adminUserLookupFailure(c, err)
+			return
 		}
 		kind := auth.TokenKindGateway
 		if raw := strings.TrimSpace(req.Kind); raw != "" {
@@ -116,7 +124,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "kind", "kind must be gateway or admin")
 			return
 		}
-		if identity.Role == auth.RoleUser && kind != auth.TokenKindGateway {
+		if targetUser.Role == auth.RoleUser && kind != auth.TokenKindGateway {
 			adminAPIError(c, http.StatusForbidden, "forbidden", "user accounts hold gateway tokens only")
 			return
 		}
@@ -142,7 +150,6 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			expiry.At = &at
 		}
 
-		ctx := c.Request.Context()
 		tx, err := state.pool.Begin(ctx)
 		if err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the token")
@@ -175,7 +182,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 				adminNotFoundResponse(c)
 				return
 			}
-			adminAPIError(c, http.StatusBadRequest, "invalid_token", err.Error())
+			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the token")
 			return
 		}
 		if err := writeAdminAudit(ctx, tx, identity, "token.create", "token", token.ID, map[string]any{

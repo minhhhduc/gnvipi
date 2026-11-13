@@ -129,10 +129,25 @@ func CheckLockout(ctx context.Context, q Querier, username, ip string, now time.
 	var lockedUntil *time.Time
 	err := q.QueryRow(ctx, `SELECT locked_until FROM users WHERE username = $1`,
 		username).Scan(&lockedUntil)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// An unknown username never owns a users row, so derive the lock from
+		// the attempt log. Without this the 429 is an account-existence oracle:
+		// a known name locks after AccountThreshold failures, an unknown one
+		// never does.
+		var failures int
+		if err := q.QueryRow(ctx, `
+			SELECT count(*) FROM login_attempts
+			WHERE username = $1 AND success = false AND ts > $2`,
+			username, now.Add(-cfg.IPWindow)).Scan(&failures); err != nil {
+			return err
+		}
+		if failures >= cfg.AccountThreshold {
+			return ErrAccountLocked
+		}
+	case err != nil:
 		return err
-	}
-	if lockedUntil != nil && now.Before(*lockedUntil) {
+	case lockedUntil != nil && now.Before(*lockedUntil):
 		return ErrAccountLocked
 	}
 	if ip == "" {

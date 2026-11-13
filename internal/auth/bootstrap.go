@@ -91,9 +91,25 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 }
 
 // ResetPassword sets a temporary password, forces a change on next login,
-// revokes every session and every API token, and audits the action. The new
-// password is never returned or written to audit.
+// revokes every session and every API token, and audits the action as the
+// system. The new password is never returned or written to audit.
 func ResetPassword(ctx context.Context, db DB, userID, newPassword string, cfg BootstrapConfig) error {
+	return resetPassword(ctx, db, userID, newPassword, cfg, AuditEntry{ActorType: "system"})
+}
+
+// ResetPasswordBy performs the same reset on behalf of an authenticated actor,
+// so the audit row names who did it instead of the system. actor contributes
+// only ActorType and ActorID; the action, target and details are fixed here.
+func ResetPasswordBy(ctx context.Context, db DB, userID, newPassword string, cfg BootstrapConfig, actor AuditEntry) error {
+	actor.Action = "user.password_reset"
+	actor.TargetType = "user"
+	actor.TargetID = userID
+	actor.UserID = userID
+	actor.Details = nil
+	return resetPassword(ctx, db, userID, newPassword, cfg, actor)
+}
+
+func resetPassword(ctx context.Context, db DB, userID, newPassword string, cfg BootstrapConfig, entry AuditEntry) error {
 	cfg = cfg.normalized()
 	u, err := GetUserByID(ctx, db, userID)
 	if err != nil {
@@ -132,18 +148,16 @@ func ResetPassword(ctx context.Context, db DB, userID, newPassword string, cfg B
 	if err != nil {
 		return err
 	}
-	if err := WriteAudit(ctx, tx, AuditEntry{
-		ActorType:  "system",
-		Action:     "user.password_reset",
-		TargetType: "user",
-		TargetID:   userID,
-		UserID:     userID,
-		Details: map[string]any{
-			"revoked_sessions": sessions,
-			"revoked_tokens":   tokens,
-			"must_change":      true,
-		},
-	}); err != nil {
+	entry.Action = "user.password_reset"
+	entry.TargetType = "user"
+	entry.TargetID = userID
+	entry.UserID = userID
+	entry.Details = map[string]any{
+		"revoked_sessions": sessions,
+		"revoked_tokens":   tokens,
+		"must_change":      true,
+	}
+	if err := WriteAudit(ctx, tx, entry); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

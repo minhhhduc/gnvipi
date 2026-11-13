@@ -130,6 +130,24 @@ type UpdateUserInput struct {
 // same transaction, so re-enabling the account does not resurrect credentials
 // that were live before the disable.
 func UpdateUser(ctx context.Context, db DB, id string, in UpdateUserInput) (*User, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
+	u, err := UpdateUserTx(ctx, tx, id, in)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// UpdateUserTx applies the patch inside an existing transaction, so a caller
+// can commit the mutation and its audit row together.
+func UpdateUserTx(ctx context.Context, tx Querier, id string, in UpdateUserInput) (*User, error) {
 	var role, status *string
 	if in.Role != nil {
 		if !in.Role.Valid() {
@@ -150,12 +168,6 @@ func UpdateUser(ctx context.Context, db DB, id string, in UpdateUserInput) (*Use
 	if emailSet {
 		email = *in.Email
 	}
-
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	u, err := scanUser(tx.QueryRow(ctx, `
 		UPDATE users SET
@@ -178,9 +190,6 @@ func UpdateUser(ctx context.Context, db DB, id string, in UpdateUserInput) (*Use
 		if _, err := RevokeUserAPITokens(ctx, tx, id, ""); err != nil {
 			return nil, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
 	}
 	return u, nil
 }

@@ -178,6 +178,9 @@ func run() (err error) {
 	var adminAuth *authState
 	if appState != nil {
 		adminAuth = appState.auth
+		// The cookie transport rule depends on how the admin listener is bound,
+		// which openAppDB does not know.
+		adminAuth.loopbackBind = adminLoopbackBind(*addr)
 	}
 
 	exec := nvidia.NewExecutor(&nvidia.Options{
