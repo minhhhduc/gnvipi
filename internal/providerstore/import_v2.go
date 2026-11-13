@@ -46,6 +46,14 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 			return false, err
 		}
 	}
+	nextLegacyPosition := 1
+	for _, p := range doc.Providers {
+		for _, model := range p.Models {
+			if model.LegacyPosition >= nextLegacyPosition {
+				nextLegacyPosition = model.LegacyPosition + 1
+			}
+		}
+	}
 	sum := sha256.Sum256(source)
 	sourceHash := hex.EncodeToString(sum[:])
 
@@ -104,6 +112,10 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 			return false, err
 		}
 		for _, model := range p.Models {
+			if model.LegacyPosition == 0 {
+				model.LegacyPosition = nextLegacyPosition
+				nextLegacyPosition++
+			}
 			if err := insertImportedModel(ctx, tx, key, model); err != nil {
 				return false, err
 			}
@@ -129,6 +141,13 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 }
 
 func importProviderRow(p provider.Provider) (ProviderRow, error) {
+	if p.Auth.Scheme == provider.AuthBearer && p.Auth.HeaderName != "" {
+		return ProviderRow{}, &provider.FieldError{
+			Provider: p.ID,
+			Field:    "auth.header_name",
+			Problem:  "bearer header overrides cannot be represented by database keys",
+		}
+	}
 	endpointPaths, err := marshalImportJSON(p.EndpointPaths, `{}`)
 	if err != nil {
 		return ProviderRow{}, fmt.Errorf("providerstore: provider %q endpoint_paths: %w", p.ID, err)

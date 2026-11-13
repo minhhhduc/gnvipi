@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
@@ -92,7 +94,7 @@ func TestReadV2SourceCreatesImmutableBackup(t *testing.T) {
 
 func TestImportV2RoundTripScopesModelsAndAPIKeyMapping(t *testing.T) {
 	pool := newAdminTestPool(t, requiredImportTestDSN(t))
-	createImportOwner(t, pool, "legacy-owner")
+	createImportOwner(t, pool)
 	ring := importTestKeyring(t)
 	raw := []byte(`{
 		"schema_version": 2,
@@ -183,7 +185,7 @@ func TestImportV2RoundTripScopesModelsAndAPIKeyMapping(t *testing.T) {
 
 func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	pool := newAdminTestPool(t, requiredImportTestDSN(t))
-	createImportOwner(t, pool, "legacy-owner")
+	createImportOwner(t, pool)
 	ring := importTestKeyring(t)
 	first := importDocument(t, "first", "First")
 
@@ -244,9 +246,65 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	}
 }
 
+func TestImportV2RejectsBearerHeaderOverride(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	raw := []byte(`{
+		"schema_version": 2,
+		"providers_v2": [{
+			"id":"custom-bearer",
+			"name":"Custom Bearer",
+			"base_url":"https://bearer.example/v1",
+			"protocol":"openai-chat",
+			"auth":{"scheme":"bearer","key":"secret","header_name":"X-Vendor-Key"},
+			"models":[{"alias":"bearer/m","upstream_model":"m"}],
+			"timeouts":{},
+			"enabled":true
+		}]
+	}`)
+
+	_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t))
+	if err == nil || !strings.Contains(err.Error(), "auth.header_name") {
+		t.Fatalf("bearer header override error = %v, want auth.header_name rejection", err)
+	}
+	var providers int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM providers`).Scan(&providers); err != nil {
+		t.Fatal(err)
+	}
+	if providers != 0 {
+		t.Fatalf("providers after rejected bearer override = %d, want 0", providers)
+	}
+}
+
+func TestImportV2PreservesUnpositionedSourceOrder(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	raw := []byte(`{
+		"schema_version": 2,
+		"providers_v2": [
+			{"id":"z-primary","name":"Primary","base_url":"https://primary.example/v1","protocol":"openai-chat","auth":{"scheme":"none"},"models":[{"alias":"shared","upstream_model":"primary"}],"timeouts":{},"enabled":true},
+			{"id":"a-backup","name":"Backup","base_url":"https://backup.example/v1","protocol":"openai-chat","auth":{"scheme":"none"},"models":[{"alias":"shared","upstream_model":"backup"}],"timeouts":{},"enabled":true}
+		]
+	}`)
+	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t)); err != nil {
+		t.Fatalf("import v2: %v", err)
+	}
+	store := providerstore.NewStore(providerstore.NewDBRowSource(pool), providerstore.StoreOptions{})
+	if err := store.Reload(t.Context()); err != nil {
+		t.Fatalf("load imported snapshot: %v", err)
+	}
+	route, err := providerstore.NewRouter(store).Resolve(t.Context(), "user", "shared", ir.ProtocolOpenAIChat)
+	if err != nil {
+		t.Fatalf("resolve imported alias: %v", err)
+	}
+	if route.UpstreamModel != "primary" {
+		t.Fatalf("imported alias resolved to %q, want first source provider primary", route.UpstreamModel)
+	}
+}
+
 func TestImportV2RollsBackEveryRowOnFailure(t *testing.T) {
 	pool := newAdminTestPool(t, requiredImportTestDSN(t))
-	createImportOwner(t, pool, "legacy-owner")
+	createImportOwner(t, pool)
 	ring := importTestKeyring(t)
 	raw := []byte(`{
 		"schema_version": 2,
@@ -286,9 +344,9 @@ func requiredImportTestDSN(t *testing.T) string {
 	return dsn
 }
 
-func createImportOwner(t *testing.T, pool *pgxpool.Pool, username string) {
+func createImportOwner(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, password_hash) VALUES ($1::uuid, $2, 'owner', 'test-hash')`, importOwnerID, username); err != nil {
+	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, password_hash) VALUES ($1::uuid, 'legacy-owner', 'owner', 'test-hash')`, importOwnerID); err != nil {
 		t.Fatalf("create import owner: %v", err)
 	}
 }
