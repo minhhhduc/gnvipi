@@ -148,7 +148,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the token")
 			return
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 		raw, token, err := auth.CreateAPIToken(ctx, tx, auth.CreateAPITokenInput{
 			UserID: target,
 			Kind:   kind,
@@ -220,7 +220,7 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke the token")
 			return
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 		if err := auth.RevokeAPIToken(ctx, tx, token.ID); err != nil {
 			if errors.Is(err, auth.ErrNotFound) {
 				adminNotFoundResponse(c)

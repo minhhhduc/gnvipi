@@ -205,13 +205,9 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 		}
 
 		identity, failure := state.identify(c)
-		if failure != nil {
-			if perm.anonymous {
-				failure = nil
-			} else {
-				adminFailureResponse(c, failure)
-				return
-			}
+		if failure != nil && !perm.anonymous {
+			adminFailureResponse(c, failure)
+			return
 		}
 		if !perm.anonymous {
 			if identity == nil {
@@ -321,7 +317,7 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 // verifyAdminCookieWrite enforces the double-submit token and the same-origin
 // rule for state-changing requests authenticated by the session cookie.
 func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
-	cookie, _ := c.Cookie(auth.CSRFCookieName)
+	cookie, _ := c.Cookie(auth.CSRFCookieName) //nolint:errcheck // a missing cookie is simply an empty CSRF token
 	if !auth.ValidDoubleSubmit(cookie, c.GetHeader(auth.CSRFHeaderName)) {
 		return &adminAuthFailure{
 			status:  http.StatusForbidden,
@@ -397,15 +393,6 @@ func adminIdentityOf(c *gin.Context) *adminIdentity {
 	}
 	identity, _ := value.(*adminIdentity)
 	return identity
-}
-
-// adminReachesUser reports whether the caller may see the target account.
-// Roles reach themselves; owners reach everyone.
-func adminReachesUser(identity *adminIdentity, userID string) bool {
-	if identity == nil {
-		return false
-	}
-	return identity.Role == auth.RoleOwner || identity.UserID == userID
 }
 
 func adminAPIError(c *gin.Context, status int, code, message string) {

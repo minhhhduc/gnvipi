@@ -109,7 +109,7 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the user")
 			return
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 		user, err := auth.CreateUser(ctx, tx, auth.CreateUserInput{
 			Username:           req.Username,
 			Email:              req.Email,
@@ -243,7 +243,7 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "delete_unavailable", "could not delete the user")
 			return
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 		target, err := auth.GetUserByID(ctx, tx, c.Param("id"))
 		if err != nil {
 			adminUserLookupFailure(c, err)
@@ -342,7 +342,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke credentials")
 			return
 		}
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 		target, err := auth.GetUserByID(ctx, tx, targetID)
 		if err != nil {
 			adminUserLookupFailure(c, err)
