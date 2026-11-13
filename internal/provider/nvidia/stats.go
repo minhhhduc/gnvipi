@@ -56,6 +56,10 @@ const eventsKeep = 200
 
 // RequestEvent is one upstream call: what it cost, how long it ran, and
 // whether it failed. Newest first when read.
+//
+// The attribution fields are additive and optional. Empty/zero values are
+// omitted, so older JSONL lines still decode and older consumers ignore them.
+// Never add prompts, request/response bodies, headers or credentials here.
 type RequestEvent struct {
 	Time   time.Time `json:"time"`
 	Model  string    `json:"model"`
@@ -65,6 +69,22 @@ type RequestEvent struct {
 	TTFB   uint64    `json:"ttfb_ms"`
 	Stream bool      `json:"streamed"`
 	Err    bool      `json:"error"`
+
+	RequestID  string `json:"request_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	KeyID      string `json:"key_id,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
+	Status     int    `json:"status,omitempty"`
+}
+
+// EventMeta is optional per-request attribution. Zero values mean "unknown"
+// and are omitted from the persisted event.
+type EventMeta struct {
+	RequestID  string
+	UserID     string
+	KeyID      string
+	ProviderID string
+	Status     int
 }
 
 // Stats collects per-model request counters and token usage scraped from
@@ -102,10 +122,16 @@ var GlobalStats = &Stats{m: map[string]*statEntry{}}
 // StartedAt returns the process start time.
 func (s *Stats) StartedAt() time.Time { return startedAt }
 
-// Observe records a finished upstream request. in/out are token counts
-// scraped from the response (0 when unavailable). dur is wall time of the
-// upstream call. ttfb is time-to-first-token for streams (0 for non-stream).
+// Observe records a finished upstream request without attribution. in/out are
+// token counts scraped from the response (0 when unavailable). dur is wall
+// time of the upstream call. ttfb is time-to-first-token for streams (0 for
+// non-stream).
 func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, streamed, isErr bool) {
+	s.ObserveMeta(EventMeta{}, model, in, out, dur, ttfb, streamed, isErr)
+}
+
+// ObserveMeta is Observe plus optional request/user/key/provider attribution.
+func (s *Stats) ObserveMeta(meta EventMeta, model string, in, out uint64, dur, ttfb time.Duration, streamed, isErr bool) {
 	model = redact.Default.Text(model)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,6 +139,8 @@ func (s *Stats) Observe(model string, in, out uint64, dur, ttfb time.Duration, s
 	tms := uint64(ttfb.Milliseconds())
 	ev := RequestEvent{
 		Time: time.Now(), Model: model, In: in, Out: out, MS: ms, TTFB: tms, Stream: streamed, Err: isErr,
+		RequestID: meta.RequestID, UserID: meta.UserID, KeyID: meta.KeyID,
+		ProviderID: meta.ProviderID, Status: meta.Status,
 	}
 	s.events = append(s.events, ev)
 	AppendLog(&ev)

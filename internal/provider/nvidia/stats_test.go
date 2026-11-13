@@ -154,6 +154,104 @@ func TestStatsLogFrames(t *testing.T) {
 	}
 }
 
+func TestRequestEventAttributionSerialization(t *testing.T) {
+	ev := RequestEvent{
+		Time: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC), Model: "m",
+		In: 1, Out: 2, MS: 3, TTFB: 4, Stream: true, Err: false,
+		RequestID: "req-1", UserID: "user-1", KeyID: "key-1",
+		ProviderID: "prov-1", Status: 200,
+	}
+	line, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"request_id": `"req-1"`, "user_id": `"user-1"`, "key_id": `"key-1"`,
+		"provider_id": `"prov-1"`, "status": `200`,
+	}
+	for key, value := range want {
+		if string(got[key]) != value {
+			t.Fatalf("%s = %s, want %s (line %s)", key, got[key], value, line)
+		}
+	}
+}
+
+func TestRequestEventLegacyLineStillParses(t *testing.T) {
+	// A line written before the attribution fields existed.
+	legacy := `{"time":"2026-01-01T00:00:00Z","model":"m","input_tokens":1,"output_tokens":2,"ms":3,"ttfb_ms":4,"streamed":true,"error":false}`
+	var ev RequestEvent
+	if err := json.Unmarshal([]byte(legacy), &ev); err != nil {
+		t.Fatalf("legacy line no longer parses: %v", err)
+	}
+	if ev.Model != "m" || ev.In != 1 || ev.Out != 2 || ev.MS != 3 || ev.TTFB != 4 || !ev.Stream || ev.Err {
+		t.Fatalf("legacy fields changed: %+v", ev)
+	}
+	if ev.RequestID != "" || ev.UserID != "" || ev.KeyID != "" || ev.ProviderID != "" || ev.Status != 0 {
+		t.Fatalf("missing attribution not zero: %+v", ev)
+	}
+}
+
+func TestRequestEventOmitsEmptyAttribution(t *testing.T) {
+	line, err := json.Marshal(RequestEvent{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"request_id", "user_id", "key_id", "provider_id", "status"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("empty %s was not omitted: %s", key, line)
+		}
+	}
+}
+
+// The persisted event is an allowlist: no prompt, body, header or credential
+// field may ever appear in the JSONL record.
+func TestRequestEventJSONHasNoSensitiveFields(t *testing.T) {
+	ev := RequestEvent{
+		Time: time.Now(), Model: "m", In: 1, Out: 2, MS: 3, TTFB: 4,
+		RequestID: "req", UserID: "user", KeyID: "key", ProviderID: "prov", Status: 200,
+	}
+	line, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{
+		"time": true, "model": true, "input_tokens": true, "output_tokens": true,
+		"ms": true, "ttfb_ms": true, "streamed": true, "error": true,
+		"request_id": true, "user_id": true, "key_id": true, "provider_id": true,
+		"status": true,
+	}
+	for key := range got {
+		if !allowed[key] {
+			t.Fatalf("unexpected field %q in persisted event: %s", key, line)
+		}
+	}
+	if len(got) != len(allowed) {
+		t.Fatalf("persisted event has %d fields, want %d: %s", len(got), len(allowed), line)
+	}
+}
+
+func TestObserveMetaCarriesAttribution(t *testing.T) {
+	s := &Stats{m: map[string]*statEntry{}}
+	s.ObserveMeta(EventMeta{RequestID: "req", UserID: "user", KeyID: "key", ProviderID: "prov", Status: 200},
+		"m", 1, 2, time.Second, 0, false, false)
+	ev := s.Events(1)[0]
+	if ev.RequestID != "req" || ev.UserID != "user" || ev.KeyID != "key" || ev.ProviderID != "prov" || ev.Status != 200 {
+		t.Fatalf("attribution not carried: %+v", ev)
+	}
+}
+
 func TestStatsLogConcurrentAppends(t *testing.T) {
 	path := t.TempDir() + "/stats.jsonl"
 	l := openStatsLogAt(path)
