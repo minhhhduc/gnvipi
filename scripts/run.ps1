@@ -104,10 +104,22 @@ if ($expectDb) {
   $dbHost, $dbPort, $dbUser, $dbName, $dbPassword, $dbSslMode = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', '', ''
   $dbConfigValid = $true
   try {
+    $dsnMatch = [regex]::Match($dbUrl, '^(?i:postgres(?:ql)?)://(?:[^@/?#]*@)?(?:\[[^\]]+\]|[^:/?#]+)(?::(?<port>[0-9]+))?(?:[/?#]|$)')
+    if (-not $dsnMatch.Success) { throw 'invalid PostgreSQL URL' }
     $dbUri = [Uri]$dbUrl
-    if (-not $dbUri.Host) { throw 'missing database host' }
-    $dbHost = $dbUri.Host
-    if ($dbUri.Port -gt 0) { $dbPort = $dbUri.Port }
+    if (-not $dbUri.IsAbsoluteUri -or $dbUri.Scheme -notin @('postgres', 'postgresql') -or -not $dbUri.DnsSafeHost) {
+      throw 'invalid PostgreSQL URL'
+    }
+    $dbHost = $dbUri.DnsSafeHost
+    if ($dsnMatch.Groups['port'].Success) {
+      $parsedDbPort = 0
+      if (-not [int]::TryParse($dsnMatch.Groups['port'].Value, [ref]$parsedDbPort)) {
+        throw 'invalid PostgreSQL port'
+      }
+      $dbPort = $parsedDbPort
+    } else {
+      $dbPort = 5432
+    }
     if ($dbUri.UserInfo) {
       $parts = $dbUri.UserInfo -split ':', 2
       if ($parts[0]) { $dbUser = [Uri]::UnescapeDataString($parts[0]) }
@@ -133,12 +145,14 @@ if ($expectDb) {
     # process arguments. --no-password prevents an interactive prompt.
     $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
     $oldPgSslMode = [Environment]::GetEnvironmentVariable('PGSSLMODE', 'Process')
-    if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
-    else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
-    if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
-    else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
     try {
+      if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
+      else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
+      else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
       $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+    } catch {
+      $dbReady = $false
     } finally {
       if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
       else { $env:PGPASSWORD = $oldPgPassword }
@@ -147,16 +161,44 @@ if ($expectDb) {
     }
   } elseif ($dbConfigValid) {
     $composePort = 5432
-    if ($env:GNVIPI_DB_PORT -match '^\d+$') { $composePort = [int]$env:GNVIPI_DB_PORT }
+    if ($env:GNVIPI_DB_PORT) {
+      $parsedComposePort = 0
+      if ([int]::TryParse($env:GNVIPI_DB_PORT, [ref]$parsedComposePort)) { $composePort = $parsedComposePort }
+      else { $composePort = 0 }
+    }
     $composeUser = if ($env:GNVIPI_DB_USER) { $env:GNVIPI_DB_USER } else { 'gnvipi_dev' }
     $composePassword = if ($env:GNVIPI_DB_PASSWORD) { $env:GNVIPI_DB_PASSWORD } else { 'gnvipi_dev_only' }
     $composeName = if ($env:GNVIPI_DB_NAME) { $env:GNVIPI_DB_NAME } else { 'gnvipi' }
     $localHost = $dbHost -in @('localhost', '127.0.0.1', '::1')
     $matchesCompose = $localHost -and $dbPort -eq $composePort -and
-      $dbUser -eq $composeUser -and $dbPassword -eq $composePassword -and $dbName -eq $composeName
+      $dbUser -ceq $composeUser -and $dbPassword -ceq $composePassword -and $dbName -ceq $composeName
     $docker = Get-Command docker -ErrorAction SilentlyContinue
     if ($matchesCompose -and $docker) {
-      $dbReady = Invoke-Bounded $docker.Source @('compose', 'exec', '-T', 'db', 'pg_isready', '-U', $dbUser, '-d', $dbName)
+      $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+      try {
+        $env:PGPASSWORD = $dbPassword
+        $dbReady = Invoke-Bounded $docker.Source @(
+          'compose', 'exec', '-T', '-e', 'PGPASSWORD', 'db', 'psql', '--no-password',
+          '-h', '127.0.0.1', '-p', '5432', '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1'
+        )
+      } catch {
+        $dbReady = $false
+      } finally {
+        if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+        else { $env:PGPASSWORD = $oldPgPassword }
+      }
+      if ($dbReady) {
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+          $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
+          $dbReady = $async.AsyncWaitHandle.WaitOne(2000)
+          if ($dbReady) { $client.EndConnect($async) }
+        } catch {
+          $dbReady = $false
+        } finally {
+          $client.Close()
+        }
+      }
     } else {
       Write-Host "psql is required to check the configured PostgreSQL target" -ForegroundColor Yellow
     }

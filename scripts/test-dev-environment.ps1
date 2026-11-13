@@ -33,6 +33,7 @@ $binDir = Join-Path $root 'bin'
 $serveExe = Join-Path $binDir 'serve.exe'
 $toolDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnvipi-run-test-" + [guid]::NewGuid().ToString('N'))
 $goOnlyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnvipi-run-go-only-" + [guid]::NewGuid().ToString('N'))
+$dockerOnlyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnvipi-run-docker-only-" + [guid]::NewGuid().ToString('N'))
 $goLog = Join-Path $toolDir 'go.log'
 $toolLog = Join-Path $toolDir 'tools.log'
 $createdModels = -not (Test-Path $modelsFile)
@@ -42,7 +43,8 @@ $createdBin = -not (Test-Path $binDir)
 $savedLocation = Get-Location
 $envNames = @(
   'PATH', 'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY',
-  'PGPASSWORD', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
+  'GNVIPI_DB_PORT', 'GNVIPI_DB_USER', 'GNVIPI_DB_PASSWORD', 'GNVIPI_DB_NAME',
+  'PGPASSWORD', 'PGSSLMODE', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
   'MODEL_OPUS', 'MODEL_SONNET', 'MODEL_HAIKU', 'MODEL_FABLE', 'GNVIPI_TEST_GO_LOG',
   'GNVIPI_TEST_TOOL_LOG', 'GNVIPI_TEST_PSQL_EXIT', 'GNVIPI_TEST_DOCKER_EXIT',
   'GNVIPI_TEST_PSQL_SPAM'
@@ -76,8 +78,9 @@ function claude {
 
 function Clear-RunEnvironment {
   foreach ($name in @(
-    'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY', 'PGPASSWORD',
-    'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
+    'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY',
+    'GNVIPI_DB_PORT', 'GNVIPI_DB_USER', 'GNVIPI_DB_PASSWORD', 'GNVIPI_DB_NAME',
+    'PGPASSWORD', 'PGSSLMODE', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
     'GNVIPI_TEST_PSQL_EXIT', 'GNVIPI_TEST_DOCKER_EXIT', 'GNVIPI_TEST_PSQL_SPAM'
   )) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
   $global:GnvipiTestObservedPorts = @()
@@ -111,9 +114,9 @@ function Get-ClosedLoopbackPort {
 }
 
 try {
-  New-Item -ItemType Directory -Force -Path $toolDir, $goOnlyDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $toolDir, $goOnlyDir, $dockerOnlyDir | Out-Null
   $goStub = "@echo off`r`necho invoked>>`"%GNVIPI_TEST_GO_LOG%`"`r`nexit /b 0"
-  Set-Content -Path (Join-Path $toolDir 'go.cmd'), (Join-Path $goOnlyDir 'go.cmd') -Encoding Ascii -Value $goStub
+  Set-Content -Path (Join-Path $toolDir 'go.cmd'), (Join-Path $goOnlyDir 'go.cmd'), (Join-Path $dockerOnlyDir 'go.cmd') -Encoding Ascii -Value $goStub
   $nativeStub = @'
 using System;
 using System.IO;
@@ -136,6 +139,7 @@ public static class NativeToolStub {
 '@
   Add-Type -TypeDefinition $nativeStub -OutputAssembly (Join-Path $toolDir 'psql.exe') -OutputType ConsoleApplication
   Copy-Item (Join-Path $toolDir 'psql.exe') (Join-Path $toolDir 'docker.exe')
+  Copy-Item (Join-Path $toolDir 'docker.exe') (Join-Path $dockerOnlyDir 'docker.exe')
   $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
   $env:GNVIPI_TEST_GO_LOG = $goLog
   $env:GNVIPI_TEST_TOOL_LOG = $toolLog
@@ -200,6 +204,80 @@ public static class NativeToolStub {
   Assert-DevEnvironment ($valid.Output -notmatch [regex]::Escape($secret)) 'run.ps1 output must never disclose the gateway token'
   Assert-DevEnvironment ($env:ANTHROPIC_BASE_URL -eq 'http://localhost:18081') '-Claude must point Claude at the explicitly selected gateway port'
   Assert-DevEnvironment ($valid.Ports -notcontains 8080) 'an explicit non-default port must not inspect port 8080'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'http://alice:secret@localhost:5432/app'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $wrongScheme = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  Assert-DevEnvironment ($wrongScheme.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'a non-PostgreSQL DSN scheme must fail closed'
+  Assert-DevEnvironment (-not (Test-Path $toolLog)) 'an invalid DSN must not launch a database probe'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice:secret@localhost:0/app?sslmode=disable'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $zeroPort = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  Assert-DevEnvironment ($zeroPort.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'an explicit database port zero must fail closed'
+  Assert-DevEnvironment (-not (Test-Path $toolLog)) 'an invalid database port must not launch a probe'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice:secret@[::1]:6543/app?sslmode=disable'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $ipv6 = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  $ipv6Log = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($null -eq $ipv6.Error) 'a valid IPv6 PostgreSQL DSN must reach the configured probe'
+  Assert-DevEnvironment ($ipv6Log -match 'PSQL\|--no-password\|-h\|[0-9a-f:]+\|-p\|6543\|' -and $ipv6Log -notmatch '\[') 'IPv6 probe arguments must be normalized without URI brackets'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:PGPASSWORD = 'original-password'
+  $env:PGSSLMODE = 'require'
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice:secret@localhost:5432/app?sslmode=disable'
+  $env:GNVIPI_TEST_PSQL_EXIT = '1'
+  $invalidProbeEnv = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  Assert-DevEnvironment ($invalidProbeEnv.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'failed probes must use the readiness message'
+  Assert-DevEnvironment ($env:PGPASSWORD -eq 'original-password') 'PGPASSWORD must be restored after probe setup failure'
+  Assert-DevEnvironment ($env:PGSSLMODE -eq 'require') 'PGSSLMODE must be restored after probe setup failure'
+
+  Clear-RunEnvironment
+  $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $composeListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $composeListener.Start()
+  try {
+    $composePort = ([System.Net.IPEndPoint]$composeListener.LocalEndpoint).Port
+    $env:GNVIPI_DB_PORT = "$composePort"
+    $env:GNVIPI_DATABASE_URL = "postgres://gnvipi_dev:gnvipi_dev_only@127.0.0.1:$composePort/gnvipi?sslmode=disable"
+    $env:GNVIPI_TEST_DOCKER_EXIT = '0'
+    $composeReady = Invoke-RunScenario @{ Claude = $true; Port = 18084; NoCaptcha = $true }
+  } finally {
+    $composeListener.Stop()
+    $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  }
+  $composeLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($null -eq $composeReady.Error) 'an authenticated matching local Compose probe plus published TCP endpoint must pass'
+  Assert-DevEnvironment ($composeLog -match 'DOCKER\|compose\|exec\|-T\|-e\|PGPASSWORD\|db\|psql\|--no-password\|') 'Docker fallback must run an authenticated psql query, not pg_isready'
+
+  Clear-RunEnvironment
+  $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://gnvipi_dev:GNVIPI_DEV_ONLY@localhost:5432/gnvipi?sslmode=disable'
+  $env:GNVIPI_TEST_DOCKER_EXIT = '0'
+  $caseMismatch = Invoke-RunScenario @{ Claude = $true; Port = 18084; NoCaptcha = $true }
+  $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  Assert-DevEnvironment ($caseMismatch.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'case-only Compose credential mismatches must fail closed'
+  Assert-DevEnvironment (-not (Test-Path $toolLog)) 'mismatched Compose credentials must not launch Docker'
+
+  Clear-RunEnvironment
+  $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:GNVIPI_DATABASE_URL = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+  $env:GNVIPI_TEST_DOCKER_EXIT = '1'
+  $composeAuthFail = Invoke-RunScenario @{ Claude = $true; Port = 18084; NoCaptcha = $true }
+  $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  Assert-DevEnvironment ($composeAuthFail.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'failed Compose authentication must fail readiness'
 } finally {
   Set-Location $savedLocation
   foreach ($name in $envNames) {
@@ -211,7 +289,7 @@ public static class NativeToolStub {
   elseif ($null -ne $savedServeTimestamp) { (Get-Item $serveExe).LastWriteTime = $savedServeTimestamp }
   if ($createdModels) { Remove-Item $modelsFile -Force -ErrorAction SilentlyContinue }
   if ($createdBin) { Remove-Item $binDir -Force -ErrorAction SilentlyContinue }
-  Remove-Item $toolDir, $goOnlyDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item $toolDir, $goOnlyDir, $dockerOnlyDir -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Variable GnvipiTestObservedPorts, GnvipiTestClaudeToken -Scope Global -ErrorAction SilentlyContinue
 }
 
