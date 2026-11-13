@@ -14,10 +14,10 @@ import (
 
 // Schema guard errors. Callers must fail closed on any of them.
 var (
-	ErrSchemaNotMigrated = errors.New("database schema has no applied migration; run the migration command")
+	ErrSchemaNotMigrated = errors.New("database schema has no applied migration; run 'serve migrate'")
 	ErrSchemaDirty       = errors.New("database schema is dirty; repair the failed migration before starting")
 	ErrSchemaTooNew      = errors.New("database schema is newer than this binary; upgrade the binary")
-	ErrSchemaTooOld      = errors.New("database schema is older than this binary; run the migration command")
+	ErrSchemaTooOld      = errors.New("database schema is older than this binary; run 'serve migrate'")
 )
 
 // Querier is satisfied by *pgxpool.Pool and *pgx.Conn.

@@ -207,6 +207,26 @@ func TestCheckVersion(t *testing.T) {
 	}
 }
 
+func TestSchemaGuardErrorsTellOperatorHowToRecover(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "unmigrated", err: ErrSchemaNotMigrated, want: "serve migrate"},
+		{name: "dirty", err: CheckVersion(2, true, 2), want: "repair"},
+		{name: "older", err: CheckVersion(1, false, 2), want: "serve migrate"},
+		{name: "newer", err: CheckVersion(3, false, 2), want: "upgrade the binary"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(tc.err.Error(), tc.want) {
+				t.Fatalf("schema guard error = %q, want recovery instruction containing %q", tc.err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLatestVersion(t *testing.T) {
 	fsys := fstest.MapFS{
 		"0001_init.up.sql":   {Data: []byte("select 1;")},

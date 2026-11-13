@@ -55,6 +55,12 @@ func main() {
 }
 
 func run() (err error) {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runMigrateCLI(ctx, os.Args[2:])
+	}
+
 	// Loopback by default: the admin console and /v1 routes stay unreachable
 	// from the network unless the operator opts in with an explicit wildcard
 	// bind. A non-loopback bind also requires -admin-token for /admin.

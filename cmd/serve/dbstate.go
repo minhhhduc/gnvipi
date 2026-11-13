@@ -24,6 +24,30 @@ const (
 	loginAttemptRetention = 30 * 24 * time.Hour
 )
 
+func runMigrateCLI(ctx context.Context, args []string) error {
+	return runMigrateCommand(ctx, args, os.LookupEnv, db.Migrate)
+}
+
+func runMigrateCommand(
+	ctx context.Context,
+	args []string,
+	lookup func(string) (string, bool),
+	run func(context.Context, string) error,
+) error {
+	if len(args) != 0 {
+		return fmt.Errorf("serve migrate accepts no arguments; unexpected argument %q", args[0])
+	}
+	cfg, err := db.LoadConfigFrom(lookup)
+	if err != nil {
+		return fmt.Errorf("migration configuration: %w", err)
+	}
+	if err := run(ctx, cfg.MigrationURL); err != nil {
+		return fmt.Errorf("database migration: %w", err)
+	}
+	log.Print("database: migrations applied")
+	return nil
+}
+
 // appDB is the process-wide PostgreSQL handle. A nil *appDB means file-backed
 // mode; callers must treat it as "no database-backed admin surface".
 type appDB struct {
@@ -66,8 +90,9 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	}
 	if autoMigrate {
 		if !db.AutoMigrateAllowed(cfg.Env) {
-			return nil, fmt.Errorf("-auto-migrate is not allowed when GNVIPI_ENV=%s; run the migration command instead", cfg.Env)
+			return nil, fmt.Errorf("--auto-migrate is not allowed when GNVIPI_ENV=%s; run 'serve migrate' instead", cfg.Env)
 		}
+		log.Print("warning: --auto-migrate is for development only; production must use 'serve migrate'")
 		if err := db.Migrate(ctx, cfg.MigrationURL); err != nil {
 			return nil, fmt.Errorf("database migration: %w", err)
 		}
@@ -84,7 +109,7 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	}
 	if err := db.CheckSchema(ctx, pool, latest); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("database schema: %w (development: start with -auto-migrate)", err)
+		return nil, fmt.Errorf("database schema: %w (development: start with --auto-migrate)", err)
 	}
 	state := newAuthState(pool)
 	if err := cleanupAuthData(ctx, state); err != nil {
