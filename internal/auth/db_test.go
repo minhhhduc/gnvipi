@@ -547,6 +547,25 @@ func TestLoginAndLockoutDB(t *testing.T) {
 		t.Fatalf("unknown-user attempt row: %d %v", n, err)
 	}
 
+	// Unknown-user locks follow the same backoff window as stored accounts.
+	// Keeping an unknown name locked for the entire IP window leaks whether an
+	// account exists once the real account's one-minute lock expires.
+	for i := range DefaultLockoutConfig().AccountThreshold {
+		if err := RecordLoginAttempt(ctx, db, LoginAttempt{
+			Username: "unknown-duration",
+			IP:       "192.0.2.22",
+			Now:      now.Add(time.Duration(i) * time.Second),
+		}, DefaultLockoutConfig()); err != nil {
+			t.Fatalf("record unknown-user failure %d: %v", i+1, err)
+		}
+	}
+	if err := CheckLockout(ctx, db, "unknown-duration", "", now.Add(time.Minute), DefaultLockoutConfig()); !errors.Is(err, ErrAccountLocked) {
+		t.Fatalf("unknown account not locked during first window: %v", err)
+	}
+	if err := CheckLockout(ctx, db, "unknown-duration", "", now.Add(2*time.Minute), DefaultLockoutConfig()); err != nil {
+		t.Fatalf("unknown account remained locked beyond first window: %v", err)
+	}
+
 	// 20 recent failures from one address lock that address.
 	for i := 0; i < DefaultLockoutConfig().IPThreshold; i++ {
 		if _, err := db.Exec(ctx, `INSERT INTO login_attempts (ts, username, ip, success)
@@ -563,6 +582,35 @@ func TestLoginAndLockoutDB(t *testing.T) {
 	}
 	if _, _, err := Login(ctx, db, "login-user", password, "192.0.2.20", now.Add(time.Hour), cfg); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("disabled login: %v", err)
+	}
+}
+
+func TestCleanupLoginAttemptsDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cutoff := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, attempt := range []LoginAttempt{
+		{Username: "expired-attempt", Now: cutoff.Add(-time.Second)},
+		{Username: "retained-attempt", Now: cutoff.Add(time.Second)},
+	} {
+		if err := RecordLoginAttempt(ctx, db, attempt, DefaultLockoutConfig()); err != nil {
+			t.Fatalf("record %s: %v", attempt.Username, err)
+		}
+	}
+
+	deleted, err := CleanupLoginAttempts(ctx, db, cutoff)
+	if err != nil {
+		t.Fatalf("cleanup login attempts: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted login attempts = %d, want 1", deleted)
+	}
+	var retained int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM login_attempts WHERE username = 'retained-attempt'`).Scan(&retained); err != nil {
+		t.Fatalf("count retained login attempt: %v", err)
+	}
+	if retained != 1 {
+		t.Fatalf("retained login attempts = %d, want 1", retained)
 	}
 }
 
@@ -627,7 +675,7 @@ func TestBootstrapAndRecoveryDB(t *testing.T) {
 		t.Fatalf("other session: %v", err)
 	}
 	const newPassword = "velvet-cascade-42"
-	if err := ChangePassword(ctx, db, owner.ID, current, resetPassword, newPassword, cfg); err != nil {
+	if err := ChangePassword(ctx, db, owner.ID, current, resetPassword, newPassword, cfg, AuditEntry{ActorType: "user", ActorID: owner.ID}); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
 	after, err = GetUserByID(ctx, db, owner.ID)

@@ -24,8 +24,10 @@ const adminSessionCookie = "gnvipi_admin_session"
 const adminSessionLifetime = 12 * time.Hour
 
 // adminAccess protects only /admin and /admin/*, including the login endpoint
-// intercepted here. Install it before registering admin routes.
-func adminAccess(addr, token string) gin.HandlerFunc {
+// intercepted here. Install it before registering admin routes. With dbAuth the
+// JSON API authenticates against the database instead, so this gate leaves
+// /admin/api alone and keeps guarding the pages.
+func adminAccess(addr, token string, dbAuth bool) gin.HandlerFunc {
 	loopback := adminLoopbackBind(addr)
 	tokenHash := sha256.Sum256([]byte(token))
 	var sessionKey [32]byte
@@ -38,6 +40,10 @@ func adminAccess(addr, token string) gin.HandlerFunc {
 		r := c.Request
 		path := r.URL.Path
 		if path != "/admin" && !strings.HasPrefix(path, "/admin/") {
+			c.Next()
+			return
+		}
+		if dbAuth && adminAPIPath(path) {
 			c.Next()
 			return
 		}

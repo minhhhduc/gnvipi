@@ -19,7 +19,7 @@ const defaultAddr = "127.0.0.1:8080"
 func adminAccessTestEngine(addr, token string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use(adminAccess(addr, token))
+	engine.Use(adminAccess(addr, token, false))
 	engine.Any("/admin", func(c *gin.Context) { c.String(http.StatusOK, "admin") })
 	engine.Any("/admin/providers", func(c *gin.Context) { c.String(http.StatusOK, "changed") })
 	engine.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "public") })

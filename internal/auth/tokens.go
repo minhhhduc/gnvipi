@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TokenKind separates the gateway surface from the admin surface.
@@ -255,6 +256,22 @@ func ValidateAPIToken(ctx context.Context, q Querier, raw string, want TokenKind
 			v.TokenID, now, now.Add(-tokenTouchInterval))
 	}
 	return &v, nil
+}
+
+// GetAPIToken loads persisted token metadata by id. It returns ErrNotFound when
+// the id does not exist, including a malformed id that cannot be a uuid.
+func GetAPIToken(ctx context.Context, q Querier, id string) (*APIToken, error) {
+	token, err := scanToken(q.QueryRow(ctx, `SELECT `+tokenColumns+` FROM api_tokens WHERE id = $1::uuid`, id))
+	if err != nil {
+		// A malformed id fails the text->uuid cast; report it like a missing row
+		// so callers cannot tell the two apart.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return token, nil
 }
 
 // RevokeAPIToken marks a token revoked. It is idempotent and returns

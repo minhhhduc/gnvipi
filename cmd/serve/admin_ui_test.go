@@ -57,7 +57,7 @@ func TestAdminUI_CoexistsWithJSONAPI(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	registerAdminAPIRoutes(engine, p, nil, nil)
+	registerAdminAPIRoutes(engine, p, nil, nil, nil)
 	registerAdminUI(engine)
 
 	if res := adminUIGet(t, engine, "/admin"); res.Code != http.StatusOK {

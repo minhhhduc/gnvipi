@@ -15,8 +15,8 @@ func testAdminAPIEngine(t *testing.T, p *modelPrefs, catalog []*cliproxy.ModelIn
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", ""))
-	registerAdminAPIRoutes(engine, p, catalog, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	registerAdminAPIRoutes(engine, p, catalog, nil, nil)
 	return engine
 }
 

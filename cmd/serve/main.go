@@ -81,6 +81,7 @@ func run() (err error) {
 	gatewayKey := flag.String("gateway-key", "", "comma-separated gateway API keys (also GNVIPI_GATEWAY_KEY)")
 	gatewayV2 := flag.Bool("gateway-v2", true, "route all custom provider requests (same-protocol relay and cross-protocol translation) through the gateway core dispatcher (enabled by default; set -gateway-v2=false as a deprecated escape hatch)")
 	autoModeChatResponses := flag.Bool("automode-chat-responses", false, "allow automode virtual model on /v1/chat/completions and /v1/responses (default false: Anthropic /v1/messages only)")
+	autoMigrate := flag.Bool("auto-migrate", false, "apply database migrations at startup (development only; production uses `serve migrate`)")
 	maxBodyBytes := flag.Int64("max-body-bytes", 32<<20, "maximum request body bytes for /v1 routes")
 	maxAdminBodyBytes := flag.Int64("max-admin-body-bytes", 1<<20, "maximum request body bytes for /admin routes")
 	statsOptions := nvidia.DefaultStatsLogOptions()
@@ -166,6 +167,21 @@ func run() (err error) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Database mode owns /admin/api identity. Without GNVIPI_DATABASE_URL the
+	// handle stays nil and the file-backed admin-token gate keeps serving.
+	appState, dbErr := openAppDB(ctx, *autoMigrate)
+	if dbErr != nil {
+		return dbErr
+	}
+	defer appState.Close()
+	var adminAuth *authState
+	if appState != nil {
+		adminAuth = appState.auth
+		// The cookie transport rule depends on how the admin listener is bound,
+		// which openAppDB does not know.
+		adminAuth.loopbackBind = adminLoopbackBind(*addr)
+	}
 
 	exec := nvidia.NewExecutor(&nvidia.Options{
 		FlagCaptcha:  *captchaFlag,
@@ -387,7 +403,10 @@ func run() (err error) {
 				// legacy endpoints and JSON API. Headless mode registers none of them.
 				if !*disableAdminUI {
 					// The SDK registers these routes before applying WithMiddleware.
-					engine.Use(adminAccess(*addr, *adminToken))
+					engine.Use(adminAccess(*addr, *adminToken, adminAuth != nil))
+					// Database mode authenticates /admin/api per route with a
+					// role/scope table; a route without a declaration is refused.
+					engine.Use(adminAPIAuthorization(adminAuth))
 				}
 				// Resolve automode before cycleRouter inspects the model field.
 				// Install middleware before routes: Gin snapshots the chain per route.
@@ -409,7 +428,7 @@ func run() (err error) {
 					engine.POST("/admin/providers", adminHandler)
 					engine.POST("/admin/delete", adminHandler)
 					engine.POST("/admin/retry-failed", adminHandler)
-					registerAdminAPIRoutes(engine, prefs, nvidiaModels, chromes)
+					registerAdminAPIRoutes(engine, prefs, nvidiaModels, chromes, adminAuth)
 				}
 				engine.POST("/mcp", searchMCP)
 				engine.GET("/mcp", searchMCP)

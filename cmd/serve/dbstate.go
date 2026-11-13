@@ -1,0 +1,123 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minhhhduc/gnvipi/internal/auth"
+	"github.com/minhhhduc/gnvipi/internal/db"
+	"github.com/minhhhduc/gnvipi/migrations"
+)
+
+// databaseEnv names the DSN that switches the gateway into database mode. When
+// it is absent or empty the gateway keeps the file-backed admin surface and the
+// database-backed admin API is never registered.
+const databaseEnv = "GNVIPI_DATABASE_URL"
+
+const (
+	authCleanupInterval   = 6 * time.Hour
+	loginAttemptRetention = 30 * 24 * time.Hour
+)
+
+// appDB is the process-wide PostgreSQL handle. A nil *appDB means file-backed
+// mode; callers must treat it as "no database-backed admin surface".
+type appDB struct {
+	pool          *pgxpool.Pool
+	auth          *authState
+	cleanupCancel context.CancelFunc
+	cleanupDone   <-chan struct{}
+}
+
+// Close releases the pool. It is safe on the nil handle used by file-backed
+// mode so callers never need a nil check.
+func (d *appDB) Close() {
+	if d == nil {
+		return
+	}
+	if d.cleanupCancel != nil {
+		d.cleanupCancel()
+	}
+	if d.cleanupDone != nil {
+		<-d.cleanupDone
+	}
+	if d.pool != nil {
+		d.pool.Close()
+	}
+}
+
+// openAppDB connects when the operator configured a database. A configured but
+// unreachable, unmigrated or half-migrated database is a startup error: serving
+// credential checks from an unexpected schema must fail closed, never degrade.
+func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
+	if strings.TrimSpace(os.Getenv(databaseEnv)) == "" {
+		return nil, nil
+	}
+	cfg, err := db.LoadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("database configuration: %w", err)
+	}
+	if autoMigrate {
+		if !db.AutoMigrateAllowed(cfg.Env) {
+			return nil, fmt.Errorf("-auto-migrate is not allowed when GNVIPI_ENV=%s; run the migration command instead", cfg.Env)
+		}
+		if err := db.Migrate(ctx, cfg.MigrationURL); err != nil {
+			return nil, fmt.Errorf("database migration: %w", err)
+		}
+		log.Print("database: migrations applied")
+	}
+	pool, err := db.Open(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("database connect: %w", err)
+	}
+	latest, err := db.LatestVersion(migrations.FS)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if err := db.CheckSchema(ctx, pool, latest); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database schema: %w (development: start with -auto-migrate)", err)
+	}
+	state := newAuthState(pool)
+	if err := cleanupAuthData(ctx, state); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database auth cleanup: %w", err)
+	}
+	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
+	cleanupDone := make(chan struct{})
+	go runAuthCleanup(cleanupCtx, state, cleanupDone)
+	log.Printf("database: ready (schema v%d)", latest)
+	return &appDB{pool: pool, auth: state, cleanupCancel: cancelCleanup, cleanupDone: cleanupDone}, nil
+}
+
+func cleanupAuthData(ctx context.Context, state *authState) error {
+	now := time.Now()
+	if _, err := auth.CleanupSessions(ctx, state.pool, now, state.sessions); err != nil {
+		return fmt.Errorf("sessions: %w", err)
+	}
+	if _, err := auth.CleanupLoginAttempts(ctx, state.pool, now.Add(-loginAttemptRetention)); err != nil {
+		return fmt.Errorf("login attempts: %w", err)
+	}
+	return nil
+}
+
+func runAuthCleanup(ctx context.Context, state *authState, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(authCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := cleanupAuthData(ctx, state); err != nil && ctx.Err() == nil {
+				log.Printf("database: auth cleanup failed: %v", err)
+			}
+		}
+	}
+}

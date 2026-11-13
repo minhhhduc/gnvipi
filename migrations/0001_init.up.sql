@@ -76,7 +76,7 @@ CREATE INDEX api_tokens_expires_at_idx ON api_tokens(expires_at);
 CREATE TABLE login_attempts (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ts timestamptz NOT NULL DEFAULT now(),
-  username citext NOT NULL,
+  username citext NOT NULL CHECK (length(username) <= 64),
   ip inet,
   success boolean NOT NULL
 );
