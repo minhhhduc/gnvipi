@@ -34,8 +34,8 @@ func testAdminEngine(t *testing.T, p *modelPrefs, token string, adminLimit int64
 	if adminLimit > 0 {
 		engine.Use(requestBodyLimit(1<<20, adminLimit))
 	}
-	engine.Use(adminAccess("127.0.0.1:8080", token))
-	registerAdminAPIRoutes(engine, p, nil, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", token, false))
+	registerAdminAPIRoutes(engine, p, nil, nil, nil)
 	engine.POST("/admin/providers", func(c *gin.Context) {
 		handleAdminProviders(c)
 	})

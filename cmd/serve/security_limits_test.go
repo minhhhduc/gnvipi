@@ -268,8 +268,8 @@ func TestSecurityLimits_AdminRouteProtectionAndCSRF(t *testing.T) {
 	setupAdminEngine := func(addr, token string) (*gin.Engine, *modelPrefs) {
 		p := &modelPrefs{}
 		e := gin.New()
-		e.Use(adminAccess(addr, token))
-		registerAdminAPIRoutes(e, p, nil, nil)
+		e.Use(adminAccess(addr, token, false))
+		registerAdminAPIRoutes(e, p, nil, nil, nil)
 		e.Any("/admin", func(c *gin.Context) {
 			handleAdminDashboard(c, nil)
 		})
@@ -488,8 +488,8 @@ func TestSecurityLimits_SecretRedactionEverywhere(t *testing.T) {
 
 	engine := gin.New()
 	engine.Use(secretResponseRedaction())
-	engine.Use(adminAccess("127.0.0.1:8080", ""))
-	registerAdminAPIRoutes(engine, m, nil, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.GET("/admin", func(c *gin.Context) {
 		handleAdminDashboard(c, nil)
 	})
@@ -599,8 +599,8 @@ func TestSecurityLimits_SSRFRejection(t *testing.T) {
 	t.Run("ProviderConnectionTests_RejectMetadataAndRestrictedLoopback", func(t *testing.T) {
 		p := &modelPrefs{}
 		engine := gin.New()
-		engine.Use(adminAccess("127.0.0.1:8080", ""))
-		registerAdminAPIRoutes(engine, p, nil, nil)
+		engine.Use(adminAccess("127.0.0.1:8080", "", false))
+		registerAdminAPIRoutes(engine, p, nil, nil, nil)
 
 		// 1. Cloud metadata endpoints must be rejected by default
 		metadataTargets := []string{

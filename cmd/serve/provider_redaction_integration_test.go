@@ -82,8 +82,8 @@ func TestGrepStyleAdminAPIsAndHTMLNeverExposeRawConfiguredKeys(t *testing.T) {
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", ""))
-	registerAdminAPIRoutes(engine, m, nil, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.GET("/admin", func(c *gin.Context) {
 		handleAdminDashboard(c, nil)
 	})
@@ -277,8 +277,8 @@ func TestPreservingSecretsWhenUpdatingProviderWithRedactedSentinel(t *testing.T)
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", ""))
-	registerAdminAPIRoutes(engine, m, nil, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.POST("/admin/providers", handleAdminProviders)
 
 	sentinels := []string{"[REDACTED]", "unchanged", "sk-...8888"}
@@ -401,8 +401,8 @@ func TestAdminClearKeyOrSwitchToKeyEnvOrAuthNone(t *testing.T) {
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", ""))
-	registerAdminAPIRoutes(engine, m, nil, nil)
+	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.POST("/admin/providers", handleAdminProviders)
 
 	// 1. Switch to KeyEnv via HTML form POST /admin/providers

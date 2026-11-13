@@ -170,7 +170,7 @@ func getProviderID(c *gin.Context) string {
 	return strings.TrimSpace(rest)
 }
 
-func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*cliproxy.ModelInfo, chromes *chromeLifecycle) {
+func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*cliproxy.ModelInfo, chromes *chromeLifecycle, state *authState) {
 	engine.GET("/admin/api/providers", func(c *gin.Context) { handleAdminAPIListProviders(c, p) })
 	engine.POST("/admin/api/providers", func(c *gin.Context) { handleAdminAPICreateProvider(c, p) })
 	engine.POST("/admin/api/providers/test", func(c *gin.Context) { handleAdminAPITestProviderDirect(c, p) })
@@ -216,6 +216,17 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 	}
 	engine.GET("/admin/api/chromes", chromeHandler)
 	engine.POST("/admin/api/chromes", chromeHandler)
+
+	// Without a database the gateway keeps the file-backed, token-gated API:
+	// there are no accounts to authenticate, so the identity routes stay absent
+	// rather than pretend to work.
+	if state == nil {
+		return
+	}
+	registerAdminAuthRoutes(engine, state)
+	registerAdminUserRoutes(engine, state)
+	registerAdminTokenRoutes(engine, state)
+	registerAdminAuditRoutes(engine, state)
 }
 
 func handleAdminAPIDispatch(c *gin.Context, p *modelPrefs) {
