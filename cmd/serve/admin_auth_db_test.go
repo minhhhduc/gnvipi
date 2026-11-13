@@ -362,6 +362,25 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	if actorType != "token" || actorUser != h.owner.ID || targetType != "user" || targetID != userID {
 		t.Fatalf("audit row = %s/%s target %s/%s, want token/%s target user/%s", actorType, actorUser, targetType, targetID, h.owner.ID, userID)
 	}
+
+	// An owner reset over the API must name the acting token too; only the CLI
+	// reset legitimately records actor_type = 'system'.
+	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/users/"+userID+"/password", gin.H{
+		"password": dbUserPassword,
+	}, bearer(h.token))
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("owner reset = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	var resetActor, resetActorID, resetUser string
+	err = h.pool.QueryRow(t.Context(),
+		`SELECT actor_type, actor_id::text, user_id::text FROM audit_log WHERE action = 'user.password_reset' AND target_id = $1`,
+		userID).Scan(&resetActor, &resetActorID, &resetUser)
+	if err != nil {
+		t.Fatalf("read user.password_reset audit row: %v", err)
+	}
+	if resetActor != "token" || resetActorID == "" || resetUser != userID {
+		t.Fatalf("reset audit row = %s/%s user %s, want token/<token id> user %s", resetActor, resetActorID, resetUser, userID)
+	}
 }
 
 // TestDBAdminAuth_PlaintextLoginRequiresLoopback pins the transport rule: the
