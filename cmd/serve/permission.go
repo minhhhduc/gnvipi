@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -31,10 +30,11 @@ const pepperEnv = "GNVIPI_PASSWORD_PEPPER"
 // /admin/api handler. A nil *authState means file-backed mode: the admin token
 // gate applies and no database-backed admin route is registered.
 type authState struct {
-	pool     *pgxpool.Pool
-	sessions auth.SessionConfig
-	login    auth.LoginConfig
-	password auth.BootstrapConfig
+	pool      *pgxpool.Pool
+	sessions  auth.SessionConfig
+	login     auth.LoginConfig
+	password  auth.BootstrapConfig
+	clientIPs clientIPResolver
 	// loopbackBind records whether the admin listener is bound to a loopback
 	// address. Plaintext cookies are only accepted on such a bind, matching the
 	// file-token policy in adminAccess.
@@ -396,21 +396,6 @@ func bearerCredential(r *http.Request) (raw string, present, wellFormed bool) {
 		return "", true, false
 	}
 	return fields[1], true, true
-}
-
-// adminRequestIP is the transport peer address. Forwarded headers stay unused:
-// the gateway has no trusted proxy list, and a spoofable lockout key is worse
-// than no key.
-func adminRequestIP(r *http.Request) string {
-	host := strings.TrimSpace(r.RemoteAddr)
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(host, "[]")
-	if net.ParseIP(host) == nil {
-		return ""
-	}
-	return host
 }
 
 // adminRequestOrigin rebuilds this listener's own origin so the CSRF origin
