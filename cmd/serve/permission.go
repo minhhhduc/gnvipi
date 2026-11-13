@@ -138,10 +138,10 @@ var adminRoutePermissions = map[string]adminPermission{
 	// Legacy configuration surface. Stats attribution per user arrives with the
 	// key-aware routing work, so it stays operator-only rather than leaking
 	// every caller's usage to a user-role account.
-	"GET /admin/api/providers":           {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
+	"GET /admin/api/providers":           {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
 	"POST /admin/api/providers":          {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/providers/test":     {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/providers/:id":       {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
+	"GET /admin/api/providers/:id":       {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
 	"PUT /admin/api/providers/:id":       {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"DELETE /admin/api/providers/:id":    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/providers/:id/test": {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
@@ -352,7 +352,8 @@ func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
 		return nil
 	}
 	cookie, _ := c.Cookie(auth.CSRFCookieName) //nolint:errcheck // a missing cookie is simply an empty CSRF token
-	if !auth.ValidDoubleSubmit(cookie, c.GetHeader(auth.CSRFHeaderName)) {
+	headers := c.Request.Header.Values(auth.CSRFHeaderName)
+	if len(headers) != 1 || !auth.ValidDoubleSubmit(cookie, headers[0]) {
 		return &adminAuthFailure{
 			status:  http.StatusForbidden,
 			code:    "csrf_failed",

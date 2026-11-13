@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
@@ -296,9 +297,14 @@ func handleAdminAPIListProviders(c *gin.Context, p *modelPrefs) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	out := make([]gatewayprovider.Provider, len(list))
+	identity := adminIdentityOf(c)
+	user := identity != nil && identity.Role == auth.RoleUser
+	out := make([]gatewayprovider.Provider, 0, len(list))
 	for i := range list {
-		out[i] = redactProvider(&list[i])
+		if user && !list[i].Enabled {
+			continue
+		}
+		out = append(out, redactProvider(&list[i]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -310,8 +316,14 @@ func handleAdminAPIGetProvider(c *gin.Context, p *modelPrefs) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if !found {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found", id)})
+	identity := adminIdentityOf(c)
+	user := identity != nil && identity.Role == auth.RoleUser
+	if !found || (user && !pv.Enabled) {
+		if user {
+			adminNotFoundResponse(c)
+		} else {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found", id)})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, redactProvider(&pv))
