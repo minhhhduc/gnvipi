@@ -46,13 +46,6 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
   throw "go is not in PATH"
 }
 
-# Check if port is already in use
-$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if ($busy) {
-  $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
-  throw "Port $Port is in use by $owner (PID $($busy[0].OwningProcess)) - terminate it or specify another -Port"
-}
-
 # -Claude authenticates with a real gateway token; the old hardcoded literal is
 # rejected. Never print the token.
 $gatewayToken = $env:GNVIPI_GATEWAY_TOKEN
@@ -146,6 +139,13 @@ if ($expectDb) {
   if (-not $dbReady) {
     throw "PostgreSQL is not ready. Start it with: docker compose up -d db"
   }
+}
+
+# Check if port is already in use
+$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+  $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
+  throw "Port $Port is in use by $owner (PID $($busy[0].OwningProcess)) - terminate it or specify another -Port"
 }
 
 # Configure model environment overrides

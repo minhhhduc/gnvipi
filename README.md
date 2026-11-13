@@ -86,6 +86,23 @@ To serve free models from the NVIDIA Playground (e.g.
    .\scripts\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
    ```
 
+For the DB-backed local flow, start PostgreSQL, migrate, create the first owner,
+and give `run.ps1 -Claude` the one-time gateway token:
+
+```powershell
+# Local-development credentials only; do not reuse them in production.
+docker compose up -d db
+$env:GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+$env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
+.\bin\serve.exe migrate
+.\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+$env:GNVIPI_GATEWAY_TOKEN='gw_...'
+.\scripts\run.ps1 -Claude
+```
+
+The bootstrap command prints the gateway token once. `run.ps1` forwards it to
+Claude Code as `ANTHROPIC_AUTH_TOKEN` without printing the token.
+
 ---
 
 ## Client Configuration

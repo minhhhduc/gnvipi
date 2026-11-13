@@ -1,0 +1,175 @@
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$runScript = Join-Path $PSScriptRoot 'run.ps1'
+$composeFile = Join-Path $root 'docker-compose.yml'
+$failures = [System.Collections.Generic.List[string]]::new()
+$checks = 0
+
+function Assert-DevEnvironment {
+  param([bool]$Condition, [string]$Message)
+  $script:checks++
+  if (-not $Condition) { $script:failures.Add($Message) }
+}
+
+# Docker is not required for these contract checks. Keep this parser deliberately
+# narrow: it validates the db service that `docker compose up -d db` selects.
+$compose = Get-Content -Raw -Path $composeFile
+$dbMatch = [regex]::Match($compose, '(?ms)^  db:\r?\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|^volumes:)')
+$dbBlock = $dbMatch.Groups['body'].Value
+Assert-DevEnvironment $dbMatch.Success 'docker-compose.yml must define a db service'
+Assert-DevEnvironment ($dbBlock -match '(?m)^    image: postgres:17-alpine\s*$') 'db must use postgres:17-alpine'
+Assert-DevEnvironment ($dbBlock -match 'pg_isready') 'db must have a pg_isready healthcheck'
+Assert-DevEnvironment ($dbBlock -match '(?m)^      - gnvipi_db:/var/lib/postgresql/data\s*$') 'db must mount the named gnvipi_db volume'
+Assert-DevEnvironment ($compose -match '(?ms)^volumes:\r?\n  gnvipi_db:\s*$') 'compose must declare the gnvipi_db named volume'
+Assert-DevEnvironment ($dbBlock -notmatch '8080') 'the db-only service must not publish or inspect port 8080'
+Assert-DevEnvironment ($compose -notmatch 'GNVIPI_MASTER_KEY:\s*["'']?\$\{GNVIPI_MASTER_KEY:\?') 'db-only compose startup must not require a serve-only master key'
+
+$modelsFile = Join-Path $root 'internal\models\playground_models.json'
+$modelsDefault = Join-Path $root 'internal\models\playground_models.default.json'
+$binDir = Join-Path $root 'bin'
+$serveExe = Join-Path $binDir 'serve.exe'
+$toolDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnvipi-run-test-" + [guid]::NewGuid().ToString('N'))
+$goLog = Join-Path $toolDir 'go.log'
+$createdModels = -not (Test-Path $modelsFile)
+$createdServe = -not (Test-Path $serveExe)
+$savedServeTimestamp = if ($createdServe) { $null } else { (Get-Item $serveExe).LastWriteTime }
+$createdBin = -not (Test-Path $binDir)
+$savedLocation = Get-Location
+$envNames = @(
+  'PATH', 'GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY',
+  'PGPASSWORD', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY',
+  'MODEL_OPUS', 'MODEL_SONNET', 'MODEL_HAIKU', 'MODEL_FABLE', 'GNVIPI_TEST_GO_LOG'
+)
+$savedEnv = @{}
+foreach ($name in $envNames) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+
+$global:GnvipiTestObservedPorts = @()
+$global:GnvipiTestClaudeToken = $null
+function Get-NetTCPConnection {
+  [CmdletBinding()]
+  param([int]$LocalPort, [string]$State)
+  $global:GnvipiTestObservedPorts += $LocalPort
+}
+
+function Start-Process {
+  [CmdletBinding()]
+  param([string]$FilePath, [object[]]$ArgumentList, [switch]$NoNewWindow, [switch]$PassThru)
+  return [pscustomobject]@{ HasExited = $true }
+}
+
+function Invoke-RestMethod {
+  [CmdletBinding()]
+  param([Parameter(Position = 0)][string]$Uri, [int]$TimeoutSec)
+  return @{ status = 'ok' }
+}
+
+function claude {
+  $global:GnvipiTestClaudeToken = $env:ANTHROPIC_AUTH_TOKEN
+}
+
+function Clear-RunEnvironment {
+  foreach ($name in @('GNVIPI_GATEWAY_TOKEN', 'GNVIPI_DATABASE_URL', 'GNVIPI_MASTER_KEY', 'PGPASSWORD', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY')) {
+    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+  }
+  $global:GnvipiTestObservedPorts = @()
+  $global:GnvipiTestClaudeToken = $null
+  Remove-Item $goLog -ErrorAction SilentlyContinue
+}
+
+function Invoke-RunScenario {
+  param([hashtable]$Parameters)
+  $errorMessage = $null
+  $records = try {
+    & $runScript @Parameters *>&1
+  } catch {
+    $errorMessage = $_.Exception.Message
+    $_
+  }
+  $output = $records | Out-String
+  return [pscustomobject]@{
+    Output = $output
+    Error = $errorMessage
+    Ports = @($global:GnvipiTestObservedPorts)
+  }
+}
+
+function Get-ClosedLoopbackPort {
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+  $listener.Stop()
+  return $port
+}
+
+try {
+  New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
+  Set-Content -Path (Join-Path $toolDir 'go.cmd') -Encoding Ascii -Value "@echo off`r`necho invoked>>`"%GNVIPI_TEST_GO_LOG%`"`r`nexit /b 0"
+  $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_TEST_GO_LOG = $goLog
+
+  if ($createdModels) { Copy-Item $modelsDefault $modelsFile }
+  if ($createdServe) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $serveExe) | Out-Null
+    [System.IO.File]::WriteAllBytes($serveExe, [byte[]]@())
+  }
+  (Get-Item $serveExe).LastWriteTime = (Get-Date).AddYears(10)
+
+  Clear-RunEnvironment
+  $missing = Invoke-RunScenario @{ Claude = $true }
+  Assert-DevEnvironment ($missing.Error -match 'GNVIPI_GATEWAY_TOKEN') '-Claude without a token must fail with the token requirement'
+  Assert-DevEnvironment ($missing.Output -match 'admin create-owner --username <owner> --with-gateway-token') 'missing-token output must document owner bootstrap'
+  Assert-DevEnvironment ($missing.Ports -notcontains 8080) 'missing-token flow must not inspect the default gateway port'
+
+  Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = 'local-gateway'
+  $legacy = Invoke-RunScenario @{ Claude = $true; Port = 18081 }
+  Assert-DevEnvironment ($legacy.Error -match 'GNVIPI_GATEWAY_TOKEN') '-Claude must reject the legacy local-gateway token'
+  Assert-DevEnvironment ($legacy.Output -match "'local-gateway' is rejected") 'legacy-token rejection must be explicit'
+
+  Clear-RunEnvironment
+  $closedPort = Get-ClosedLoopbackPort
+  $env:GNVIPI_DATABASE_URL = "postgres://gnvipi_dev:gnvipi_dev_only@127.0.0.1:$closedPort/gnvipi?sslmode=disable"
+  $dbDown = Invoke-RunScenario @{}
+  Assert-DevEnvironment ($dbDown.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'DB-down flow must print the exact compose readiness message'
+  Assert-DevEnvironment ($dbDown.Ports -notcontains 8080) 'DB readiness must fail before the default gateway port is inspected'
+  Assert-DevEnvironment (-not (Test-Path $goLog)) 'DB readiness must fail before a build is started'
+
+  Clear-RunEnvironment
+  $secret = 'gw_redaction_probe_7f28d9'
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  try {
+    $readyPort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $env:GNVIPI_DATABASE_URL = "postgres://gnvipi_dev:gnvipi_dev_only@127.0.0.1:$readyPort/gnvipi?sslmode=disable"
+    $valid = Invoke-RunScenario @{ Claude = $true; Port = 18081; NoCaptcha = $true }
+  } finally {
+    $listener.Stop()
+  }
+  Assert-DevEnvironment ($null -eq $valid.Error) 'valid -Claude flow must reach Claude when the DB is ready'
+  Assert-DevEnvironment ($global:GnvipiTestClaudeToken -eq $secret) '-Claude must pass GNVIPI_GATEWAY_TOKEN as ANTHROPIC_AUTH_TOKEN'
+  Assert-DevEnvironment ($valid.Output -notmatch [regex]::Escape($secret)) 'run.ps1 output must never disclose the gateway token'
+  Assert-DevEnvironment ($env:ANTHROPIC_BASE_URL -eq 'http://localhost:18081') '-Claude must point Claude at the explicitly selected gateway port'
+  Assert-DevEnvironment ($valid.Ports -notcontains 8080) 'an explicit non-default port must not inspect port 8080'
+} finally {
+  Set-Location $savedLocation
+  foreach ($name in $envNames) {
+    $value = $savedEnv[$name]
+    if ($null -eq $value) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable($name, $value, 'Process') }
+  }
+  if ($createdServe) { Remove-Item $serveExe -Force -ErrorAction SilentlyContinue }
+  elseif ($null -ne $savedServeTimestamp) { (Get-Item $serveExe).LastWriteTime = $savedServeTimestamp }
+  if ($createdModels) { Remove-Item $modelsFile -Force -ErrorAction SilentlyContinue }
+  if ($createdBin) { Remove-Item $binDir -Force -ErrorAction SilentlyContinue }
+  Remove-Item $toolDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Variable GnvipiTestObservedPorts, GnvipiTestClaudeToken -Scope Global -ErrorAction SilentlyContinue
+}
+
+if ($failures.Count -gt 0) {
+  throw (("{0} of {1} dev-environment checks failed:`n - " -f $failures.Count, $checks) + ($failures -join "`n - "))
+}
+Write-Host ("PASS: {0} dev-environment checks" -f $checks)
