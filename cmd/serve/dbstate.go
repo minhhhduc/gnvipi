@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/db"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
@@ -17,20 +19,35 @@ import (
 // database-backed admin API is never registered.
 const databaseEnv = "GNVIPI_DATABASE_URL"
 
+const (
+	authCleanupInterval   = 6 * time.Hour
+	loginAttemptRetention = 30 * 24 * time.Hour
+)
+
 // appDB is the process-wide PostgreSQL handle. A nil *appDB means file-backed
 // mode; callers must treat it as "no database-backed admin surface".
 type appDB struct {
-	pool *pgxpool.Pool
-	auth *authState
+	pool          *pgxpool.Pool
+	auth          *authState
+	cleanupCancel context.CancelFunc
+	cleanupDone   <-chan struct{}
 }
 
 // Close releases the pool. It is safe on the nil handle used by file-backed
 // mode so callers never need a nil check.
 func (d *appDB) Close() {
-	if d == nil || d.pool == nil {
+	if d == nil {
 		return
 	}
-	d.pool.Close()
+	if d.cleanupCancel != nil {
+		d.cleanupCancel()
+	}
+	if d.cleanupDone != nil {
+		<-d.cleanupDone
+	}
+	if d.pool != nil {
+		d.pool.Close()
+	}
 }
 
 // openAppDB connects when the operator configured a database. A configured but
@@ -66,6 +83,41 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 		pool.Close()
 		return nil, fmt.Errorf("database schema: %w (development: start with -auto-migrate)", err)
 	}
+	state := newAuthState(pool)
+	if err := cleanupAuthData(ctx, state); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database auth cleanup: %w", err)
+	}
+	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
+	cleanupDone := make(chan struct{})
+	go runAuthCleanup(cleanupCtx, state, cleanupDone)
 	log.Printf("database: ready (schema v%d)", latest)
-	return &appDB{pool: pool, auth: newAuthState(pool)}, nil
+	return &appDB{pool: pool, auth: state, cleanupCancel: cancelCleanup, cleanupDone: cleanupDone}, nil
+}
+
+func cleanupAuthData(ctx context.Context, state *authState) error {
+	now := time.Now()
+	if _, err := auth.CleanupSessions(ctx, state.pool, now, state.sessions); err != nil {
+		return fmt.Errorf("sessions: %w", err)
+	}
+	if _, err := auth.CleanupLoginAttempts(ctx, state.pool, now.Add(-loginAttemptRetention)); err != nil {
+		return fmt.Errorf("login attempts: %w", err)
+	}
+	return nil
+}
+
+func runAuthCleanup(ctx context.Context, state *authState, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(authCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := cleanupAuthData(ctx, state); err != nil && ctx.Err() == nil {
+				log.Printf("database: auth cleanup failed: %v", err)
+			}
+		}
+	}
 }

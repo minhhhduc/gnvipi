@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -85,6 +86,14 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "username", "username is required")
 			return
 		}
+		if n := utf8.RuneCountInString(req.Username); n < 3 || n > 64 {
+			adminFieldError(c, http.StatusBadRequest, "username", "username must be 3-64 characters")
+			return
+		}
+		if utf8.RuneCountInString(req.DisplayName) > 200 {
+			adminFieldError(c, http.StatusBadRequest, "display_name", "display_name must be at most 200 characters")
+			return
+		}
 		role := auth.RoleUser
 		if raw := strings.TrimSpace(req.Role); raw != "" {
 			role = auth.Role(raw)
@@ -127,10 +136,10 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusConflict, "email", "email is already taken")
 			return
 		case err != nil:
-			adminAPIError(c, http.StatusBadRequest, "invalid_user", err.Error())
+			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the user")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.create", "user", user.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.create", "user", user.ID, user.ID, map[string]any{
 			"username": user.Username,
 			"role":     string(user.Role),
 		}); err != nil {
@@ -228,7 +237,7 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.update", "user", user.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.update", "user", user.ID, user.ID, map[string]any{
 			"username": user.Username,
 			"role":     string(user.Role),
 			"status":   string(user.Status),
@@ -270,7 +279,7 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 			}
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.delete", "user", target.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.delete", "user", target.ID, target.ID, map[string]any{
 			"username": target.Username,
 			"role":     string(target.Role),
 		}); err != nil {
@@ -306,7 +315,7 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 				adminFieldError(c, http.StatusBadRequest, "current_password", "current password is required")
 				return
 			}
-			err := auth.ChangePassword(ctx, state.pool, targetID, identity.SessionToken, req.CurrentPassword, req.Password, state.password)
+			err := auth.ChangePassword(ctx, state.pool, targetID, identity.SessionToken, req.CurrentPassword, req.Password, state.password, adminAuditActor(identity))
 			switch {
 			case err == nil:
 				c.Status(http.StatusNoContent)
@@ -368,7 +377,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke credentials")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.revoke", "user", target.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.revoke", "user", target.ID, target.ID, map[string]any{
 			"username":         target.Username,
 			"revoked_sessions": sessions,
 			"revoked_tokens":   tokens,

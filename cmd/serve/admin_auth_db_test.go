@@ -210,7 +210,9 @@ func TestDBAdminAuth_LoginSessionLogout(t *testing.T) {
 
 	session, csrf := h.login(t, dbOwnerUsername, dbOwnerPassword)
 
-	res = makeRequest(t, h.engine, http.MethodGet, adminSessionPath, nil, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodGet, adminSessionPath, nil, map[string]string{
+		"Cookie": auth.SessionCookieName + "=" + session,
+	})
 	if res.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200 (body %s)", adminSessionPath, res.Code, res.Body.String())
 	}
@@ -337,6 +339,31 @@ func TestDBAdminAuth_TokenScopeAndUndeclaredRoute(t *testing.T) {
 	}
 }
 
+func TestDBAdminAuth_ExplicitBearerTakesPrecedenceOverCookie(t *testing.T) {
+	h := newDBAdminHarness(t)
+	session, _ := h.login(t, dbOwnerUsername, dbOwnerPassword)
+
+	res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users", gin.H{
+		"username": "bearer-wins",
+		"role":     string(auth.RoleUser),
+		"password": dbUserPassword,
+	}, map[string]string{
+		"Authorization": "Bearer " + h.token,
+		"Cookie":        auth.SessionCookieName + "=" + session,
+	})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("bearer plus cookie POST = %d, want 201 without CSRF (body %s)", res.Code, res.Body.String())
+	}
+
+	res = makeRequest(t, h.engine, http.MethodGet, adminSessionPath, nil, map[string]string{
+		"Authorization": "not-bearer",
+		"Cookie":        auth.SessionCookieName + "=" + session,
+	})
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("malformed explicit authorization plus valid cookie = %d, want 401 (body %s)", res.Code, res.Body.String())
+	}
+}
+
 func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	h := newDBAdminHarness(t)
 
@@ -350,17 +377,36 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	}
 	userID, _ := decodeBody(t, res)["id"].(string)
 
-	// The write used the owner's admin token, so the row is attributed to the
-	// token while user_id still names the human behind it.
-	var actorType, actorUser, targetType, targetID string
+	// The write used the owner's admin token, so actor_id names that token while
+	// user_id indexes the account affected by the mutation.
+	var actorType, actorID, subjectUser, targetType, targetID string
 	err := h.pool.QueryRow(t.Context(),
-		`SELECT actor_type, user_id::text, target_type, target_id FROM audit_log WHERE action = 'user.create' AND target_id = $1`,
-		userID).Scan(&actorType, &actorUser, &targetType, &targetID)
+		`SELECT actor_type, actor_id::text, user_id::text, target_type, target_id FROM audit_log WHERE action = 'user.create' AND target_id = $1`,
+		userID).Scan(&actorType, &actorID, &subjectUser, &targetType, &targetID)
 	if err != nil {
 		t.Fatalf("read user.create audit row: %v", err)
 	}
-	if actorType != "token" || actorUser != h.owner.ID || targetType != "user" || targetID != userID {
-		t.Fatalf("audit row = %s/%s target %s/%s, want token/%s target user/%s", actorType, actorUser, targetType, targetID, h.owner.ID, userID)
+	if actorType != "token" || actorID == "" || subjectUser != userID || targetType != "user" || targetID != userID {
+		t.Fatalf("audit row = %s/%s subject %s target %s/%s, want token/<token id> subject %s target user/%s", actorType, actorID, subjectUser, targetType, targetID, userID, userID)
+	}
+
+	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/tokens", gin.H{
+		"name":    "audited gateway token",
+		"kind":    string(auth.TokenKindGateway),
+		"user_id": userID,
+	}, bearer(h.token))
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create target token = %d, want 201 (body %s)", res.Code, res.Body.String())
+	}
+	createdTokenID, _ := decodeBody(t, res)["id"].(string)
+	var tokenSubject string
+	if err := h.pool.QueryRow(t.Context(),
+		`SELECT user_id::text FROM audit_log WHERE action = 'token.create' AND target_id = $1`,
+		createdTokenID).Scan(&tokenSubject); err != nil {
+		t.Fatalf("read token.create audit row: %v", err)
+	}
+	if tokenSubject != userID {
+		t.Fatalf("token.create subject = %s, want target user %s", tokenSubject, userID)
 	}
 
 	// An owner reset over the API must name the acting token too; only the CLI
@@ -380,6 +426,24 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	}
 	if resetActor != "token" || resetActorID == "" || resetUser != userID {
 		t.Fatalf("reset audit row = %s/%s user %s, want token/<token id> user %s", resetActor, resetActorID, resetUser, userID)
+	}
+
+	res = makeRequest(t, h.engine, http.MethodPost, adminPasswordPath, gin.H{
+		"current_password": dbOwnerPassword,
+		"new_password":     "Quartz-Meadow8-Signal!",
+	}, bearer(h.token))
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("bearer password change = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+	var changeActor, changeActorID string
+	err = h.pool.QueryRow(t.Context(),
+		`SELECT actor_type, actor_id::text FROM audit_log WHERE action = 'user.password_change' AND target_id = $1 ORDER BY id DESC LIMIT 1`,
+		h.owner.ID).Scan(&changeActor, &changeActorID)
+	if err != nil {
+		t.Fatalf("read user.password_change audit row: %v", err)
+	}
+	if changeActor != "token" || changeActorID == "" {
+		t.Fatalf("password change actor = %s/%s, want token/<token id>", changeActor, changeActorID)
 	}
 }
 
@@ -409,6 +473,20 @@ func TestDBAdminAuth_PlaintextLoginRequiresLoopback(t *testing.T) {
 	})
 	if res.Code != http.StatusForbidden || decodeBody(t, res)["code"] != "https_required" {
 		t.Fatalf("plaintext session read on a public bind = %d %s, want 403 https_required", res.Code, res.Body.String())
+	}
+}
+
+func TestDBAdminAuth_LogoutReportsRevocationFailure(t *testing.T) {
+	h := newDBAdminHarness(t)
+	h.pool.Close()
+
+	engine := gin.New()
+	engine.POST(adminLogoutPath, handleAdminLogout(h.state))
+	res := makeRequest(t, engine, http.MethodPost, adminLogoutPath, nil, map[string]string{
+		"Cookie": auth.SessionCookieName + "=known-session",
+	})
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("logout with unavailable session store = %d, want 500 (body %s)", res.Code, res.Body.String())
 	}
 }
 
@@ -443,5 +521,83 @@ func TestDBAdminAuth_LockoutDoesNotRevealAccounts(t *testing.T) {
 		if code := fail(username); code != http.StatusTooManyRequests {
 			t.Fatalf("sixth failure for %q = %d, want 429", username, code)
 		}
+	}
+}
+
+func TestDBAdminAuth_OversizedLoginUsernameIsBounded(t *testing.T) {
+	h := newDBAdminHarness(t)
+	username := strings.Repeat("x", 1024)
+	res := makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{
+		"username": username,
+		"password": "Wrong-Guess7-Anchor!",
+	}, nil)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("oversized username login = %d, want 401 (body %s)", res.Code, res.Body.String())
+	}
+	var storedLength int
+	if err := h.pool.QueryRow(t.Context(), `SELECT length(username) FROM login_attempts ORDER BY id DESC LIMIT 1`).Scan(&storedLength); err != nil {
+		t.Fatalf("read oversized login attempt: %v", err)
+	}
+	if storedLength > 64 {
+		t.Fatalf("stored login username length = %d, want <= 64", storedLength)
+	}
+}
+
+func TestDBAdminAuth_CreateUserValidatesBoundedFields(t *testing.T) {
+	h := newDBAdminHarness(t)
+	for _, tc := range []struct {
+		name  string
+		body  gin.H
+		field string
+	}{
+		{
+			name:  "short username",
+			body:  gin.H{"username": "ab", "password": dbUserPassword},
+			field: "username",
+		},
+		{
+			name:  "long display name",
+			body:  gin.H{"username": "bounded-user", "display_name": strings.Repeat("x", 201), "password": dbUserPassword},
+			field: "display_name",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users", tc.body, bearer(h.token))
+			if res.Code != http.StatusBadRequest || decodeBody(t, res)["field"] != tc.field {
+				t.Fatalf("create user = %d %s, want 400 field %s", res.Code, res.Body.String(), tc.field)
+			}
+		})
+	}
+}
+
+func TestVerifyAdminCookieWriteSkipsSafeMethods(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequestWithContext(t.Context(), method, dbTestOrigin+adminSessionPath, http.NoBody)
+			if failure := verifyAdminCookieWrite(c); failure != nil {
+				t.Fatalf("safe %s request required CSRF: %+v", method, failure)
+			}
+		})
+	}
+}
+
+func TestDBAdminAuth_RehashDoesNotOverwriteChangedPassword(t *testing.T) {
+	h := newDBAdminHarness(t)
+	replacement, err := auth.HashPassword("Quartz-Meadow8-Signal!", h.state.password.Params, h.state.password.Pepper)
+	if err != nil {
+		t.Fatalf("hash replacement password: %v", err)
+	}
+	if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.owner.ID, replacement); err != nil {
+		t.Fatalf("replace password hash: %v", err)
+	}
+
+	adminRehashPassword(t.Context(), h.state, h.owner.ID, dbOwnerPassword, h.owner.PasswordHash)
+	var got string
+	if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.owner.ID).Scan(&got); err != nil {
+		t.Fatalf("read password hash: %v", err)
+	}
+	if got != replacement {
+		t.Fatal("login rehash overwrote a concurrently changed password")
 	}
 }

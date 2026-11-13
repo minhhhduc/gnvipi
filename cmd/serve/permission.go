@@ -269,6 +269,45 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 	ctx := c.Request.Context()
 	now := time.Now()
 
+	// An explicit Authorization header selects bearer authentication. Never
+	// silently fall back to a cookie when the caller supplied malformed or
+	// invalid bearer credentials, and do not make bearer requests satisfy CSRF
+	// merely because a browser also attached a session cookie.
+	raw, present, wellFormed := bearerCredential(c.Request)
+	if present {
+		if !wellFormed {
+			return nil, &adminAuthFailure{
+				status:  http.StatusUnauthorized,
+				code:    "authentication_required",
+				message: "sign in to the admin console",
+			}
+		}
+		identity, err := auth.ValidateAPIToken(ctx, s.pool, raw, auth.TokenKindAdmin, now)
+		if err != nil {
+			if errors.Is(err, auth.ErrInvalidToken) {
+				return nil, &adminAuthFailure{
+					status:  http.StatusUnauthorized,
+					code:    "invalid_credentials",
+					message: "invalid or expired admin token",
+				}
+			}
+			return nil, &adminAuthFailure{
+				status:  http.StatusInternalServerError,
+				code:    "token_unavailable",
+				message: "could not validate the admin token",
+			}
+		}
+		return &adminIdentity{
+			UserID:             identity.UserID,
+			Username:           identity.Username,
+			Role:               identity.Role,
+			MustChangePassword: identity.MustChangePassword,
+			ViaToken:           true,
+			TokenID:            identity.TokenID,
+			Scope:              identity.Scope,
+		}, nil
+	}
+
 	if raw, err := c.Cookie(auth.SessionCookieName); err == nil && raw != "" {
 		if !s.cookieTransportAllowed(c.Request) {
 			return nil, &adminAuthFailure{
@@ -288,7 +327,7 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 				SessionToken:       raw,
 			}, nil
 		case errors.Is(err, auth.ErrInvalidSession):
-			// Fall through to token authentication.
+			// Fall through to the generic authentication-required response.
 		default:
 			return nil, &adminAuthFailure{
 				status:  http.StatusInternalServerError,
@@ -298,43 +337,20 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 		}
 	}
 
-	raw, present, wellFormed := bearerCredential(c.Request)
-	if !present || !wellFormed {
-		return nil, &adminAuthFailure{
-			status:  http.StatusUnauthorized,
-			code:    "authentication_required",
-			message: "sign in to the admin console",
-		}
+	return nil, &adminAuthFailure{
+		status:  http.StatusUnauthorized,
+		code:    "authentication_required",
+		message: "sign in to the admin console",
 	}
-	identity, err := auth.ValidateAPIToken(ctx, s.pool, raw, auth.TokenKindAdmin, now)
-	if err != nil {
-		if errors.Is(err, auth.ErrInvalidToken) {
-			return nil, &adminAuthFailure{
-				status:  http.StatusUnauthorized,
-				code:    "invalid_credentials",
-				message: "invalid or expired admin token",
-			}
-		}
-		return nil, &adminAuthFailure{
-			status:  http.StatusInternalServerError,
-			code:    "token_unavailable",
-			message: "could not validate the admin token",
-		}
-	}
-	return &adminIdentity{
-		UserID:             identity.UserID,
-		Username:           identity.Username,
-		Role:               identity.Role,
-		MustChangePassword: identity.MustChangePassword,
-		ViaToken:           true,
-		TokenID:            identity.TokenID,
-		Scope:              identity.Scope,
-	}, nil
 }
 
 // verifyAdminCookieWrite enforces the double-submit token and the same-origin
 // rule for state-changing requests authenticated by the session cookie.
 func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
+	switch c.Request.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return nil
+	}
 	cookie, _ := c.Cookie(auth.CSRFCookieName) //nolint:errcheck // a missing cookie is simply an empty CSRF token
 	if !auth.ValidDoubleSubmit(cookie, c.GetHeader(auth.CSRFHeaderName)) {
 		return &adminAuthFailure{
@@ -482,15 +498,16 @@ func adminPage(c *gin.Context) (limit, offset int, ok bool) {
 // adminAuditActor names the human behind a request: the token as the actor type
 // when the call authenticated with one, the user otherwise.
 func adminAuditActor(identity *adminIdentity) auth.AuditEntry {
-	entry := auth.AuditEntry{ActorType: "user", ActorID: identity.UserID, UserID: identity.UserID}
+	entry := auth.AuditEntry{ActorType: "user", ActorID: identity.UserID}
 	if identity.ViaToken {
 		entry.ActorType, entry.ActorID = "token", identity.TokenID
 	}
 	return entry
 }
 
-func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID string, details map[string]any) error {
+func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID, userID string, details map[string]any) error {
 	entry := adminAuditActor(identity)
-	entry.Action, entry.TargetType, entry.TargetID, entry.Details = action, targetType, targetID, details
+	entry.Action, entry.TargetType, entry.TargetID = action, targetType, targetID
+	entry.UserID, entry.Details = userID, details
 	return auth.WriteAudit(ctx, q, entry)
 }

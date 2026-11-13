@@ -119,6 +119,16 @@ func RecordLoginAttempt(ctx context.Context, db DB, in LoginAttempt, cfg Lockout
 	return tx.Commit(ctx)
 }
 
+// CleanupLoginAttempts removes lockout evidence older than the retention
+// cutoff. Callers schedule it; the auth package owns only the deletion.
+func CleanupLoginAttempts(ctx context.Context, q Querier, before time.Time) (int64, error) {
+	tag, err := q.Exec(ctx, `DELETE FROM login_attempts WHERE ts < $1`, before)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // CheckLockout returns ErrAccountLocked when the account is inside a lock
 // window and ErrIPLocked when the address has too many recent failures.
 func CheckLockout(ctx context.Context, q Querier, username, ip string, now time.Time, cfg LockoutConfig) error {
@@ -131,18 +141,17 @@ func CheckLockout(ctx context.Context, q Querier, username, ip string, now time.
 		username).Scan(&lockedUntil)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		// An unknown username never owns a users row, so derive the lock from
-		// the attempt log. Without this the 429 is an account-existence oracle:
-		// a known name locks after AccountThreshold failures, an unknown one
-		// never does.
+		// Unknown usernames follow the same exponential window as stored
+		// accounts. A fixed rolling window makes lock duration an account-
+		// existence oracle after a real account's shorter first lock expires.
 		var failures int
+		var lastFailure *time.Time
 		if err := q.QueryRow(ctx, `
-			SELECT count(*) FROM login_attempts
-			WHERE username = $1 AND success = false AND ts > $2`,
-			username, now.Add(-cfg.IPWindow)).Scan(&failures); err != nil {
+			SELECT count(*), max(ts) FROM login_attempts
+			WHERE username = $1 AND success = false`, username).Scan(&failures, &lastFailure); err != nil {
 			return err
 		}
-		if failures >= cfg.AccountThreshold {
+		if lastFailure != nil && now.Before(lastFailure.Add(cfg.AccountLockDuration(failures))) {
 			return ErrAccountLocked
 		}
 	case err != nil:

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/auth"
@@ -51,6 +52,12 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "username", "username and password are required")
 			return
 		}
+		// Invalid account names still execute the normal dummy-password and
+		// lockout path, but never persist an attacker-controlled megabyte-scale
+		// value. "-" cannot name a user because usernames require 3-64 runes.
+		if n := utf8.RuneCountInString(username); n < 3 || n > 64 {
+			username = "-"
+		}
 
 		ctx := c.Request.Context()
 		now := time.Now()
@@ -68,19 +75,32 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		}
 
 		// The verified password is in hand, so a hash written under stale Argon2
-		// parameters or a previous pepper is upgraded now. Best effort: the
-		// session about to be minted is already authenticated.
+		// parameters or a previous pepper is upgraded now. The compare-and-swap
+		// prevents a concurrent password reset from being overwritten.
 		if needsRehash {
-			adminRehashPassword(ctx, state, user.ID, req.Password)
+			adminRehashPassword(ctx, state, user.ID, req.Password, user.PasswordHash)
+		}
+		csrf, err := auth.NewCSRFToken()
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not create the admin session")
+			return
 		}
 
-		// Rotate: a session that already existed on this browser must not stay
-		// valid next to the freshly minted one.
-		if previous, cookieErr := c.Cookie(auth.SessionCookieName); cookieErr == nil && previous != "" {
-			//nolint:errcheck // best-effort rotation of a superseded session
-			_ = auth.RevokeSession(ctx, state.pool, previous)
+		// Rotate the previous session and create its replacement atomically. A
+		// failed revocation must never leave a stolen superseded token active.
+		tx, err := state.pool.Begin(ctx)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not create the admin session")
+			return
 		}
-		raw, _, err := auth.CreateSession(ctx, state.pool, auth.CreateSessionInput{
+		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
+		if previous, cookieErr := c.Cookie(auth.SessionCookieName); cookieErr == nil && previous != "" {
+			if err := auth.RevokeSession(ctx, tx, previous); err != nil {
+				adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not rotate the admin session")
+				return
+			}
+		}
+		raw, _, err := auth.CreateSession(ctx, tx, auth.CreateSessionInput{
 			UserID:    user.ID,
 			IP:        adminRequestIP(c.Request),
 			UserAgent: adminUserAgent(c.Request),
@@ -90,11 +110,11 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not create the admin session")
 			return
 		}
-		csrf, err := auth.NewCSRFToken()
-		if err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not create the admin session")
 			return
 		}
+
 		secure := adminTLSRequest(c.Request)
 		http.SetCookie(c.Writer, auth.SessionCookie(raw, secure, state.sessions))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, secure, state.sessions.AbsoluteTimeout))
@@ -105,8 +125,10 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 func handleAdminLogout(state *authState) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if raw, err := c.Cookie(auth.SessionCookieName); err == nil && raw != "" {
-			//nolint:errcheck // logout must clear the cookie even if the row is gone
-			_ = auth.RevokeSession(c.Request.Context(), state.pool, raw)
+			if err := auth.RevokeSession(c.Request.Context(), state.pool, raw); err != nil {
+				adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not revoke the admin session")
+				return
+			}
 		}
 		adminClearCredentials(c)
 		c.Status(http.StatusNoContent)
@@ -150,7 +172,7 @@ func handleAdminChangePassword(state *authState) gin.HandlerFunc {
 			return
 		}
 		err := auth.ChangePassword(c.Request.Context(), state.pool, identity.UserID,
-			identity.SessionToken, req.CurrentPassword, req.NewPassword, state.password)
+			identity.SessionToken, req.CurrentPassword, req.NewPassword, state.password, adminAuditActor(identity))
 		switch {
 		case err == nil:
 			c.Status(http.StatusNoContent)
@@ -198,11 +220,11 @@ func adminUserAgent(r *http.Request) string {
 // adminRehashPassword rewrites the stored hash when the login reported it as
 // stale. Failures are ignored: the caller is already authenticated and a stale
 // hash still verifies.
-func adminRehashPassword(ctx context.Context, state *authState, userID, password string) {
+func adminRehashPassword(ctx context.Context, state *authState, userID, password, expectedHash string) {
 	hash, err := auth.HashPassword(password, state.login.Params, state.login.Pepper)
 	if err != nil {
 		return
 	}
-	//nolint:errcheck // best-effort upgrade of an existing, still valid hash
-	_, _ = state.pool.Exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1::uuid`, userID, hash)
+	//nolint:errcheck // best-effort upgrade; a concurrent password change wins
+	_, _ = state.pool.Exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1::uuid AND password_hash = $3`, userID, hash, expectedHash)
 }
