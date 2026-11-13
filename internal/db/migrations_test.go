@@ -584,14 +584,36 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 	}
 	cfg.Database = database
 	isolatedDSN := cfg.ConnString()
-	if err := Migrate(ctx, isolatedDSN); err != nil {
-		t.Fatalf("migrate isolated database: %v", err)
-	}
 	conn, err := pgx.Connect(ctx, isolatedDSN)
 	if err != nil {
 		t.Fatalf("connect isolated database: %v", err)
 	}
 	defer func() { _ = conn.Close(context.Background()) }() //nolint:errcheck // best-effort test cleanup
+	if _, err := conn.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatalf("reset isolated public schema: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`); err != nil {
+		t.Fatalf("create migration metadata: %v", err)
+	}
+	v1, err := migrations.FS.ReadFile("0001_init.up.sql")
+	if err != nil {
+		t.Fatalf("read v1 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v1)); err != nil {
+		t.Fatalf("apply v1 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		GRANT CREATE ON SCHEMA public TO gnvipi_app;
+		GRANT ALL PRIVILEGES ON audit_log TO gnvipi_app`); err != nil {
+		t.Fatalf("seed excessive v1 privileges: %v", err)
+	}
+	v2, err := migrations.FS.ReadFile("0002_runtime_role_grants.up.sql")
+	if err != nil {
+		t.Fatalf("read v2 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v2)); err != nil {
+		t.Fatalf("apply v2 migration: %v", err)
+	}
 
 	checks := []struct {
 		name  string
