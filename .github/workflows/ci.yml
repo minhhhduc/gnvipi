@@ -73,3 +73,30 @@ jobs:
           go-version: "1.26.11"
       - name: Build
         run: go build -trimpath -ldflags="-s -w" ./cmd/serve
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/admin/.nvmrc
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+        working-directory: web/admin
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: web/admin
+      - name: Test
+        run: npm run test
+        working-directory: web/admin
+      - name: Build
+        run: npm run build
+        working-directory: web/admin
+      - name: Committed artifacts are current
+        run: git diff --exit-code -- web/admin
+      - name: Backend untouched
+        run: git diff --exit-code -- '*.go'

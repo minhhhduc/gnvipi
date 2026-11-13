@@ -1,0 +1,7 @@
+* text=auto
+
+web/admin/index.html text eol=lf
+web/admin/app.js text eol=lf
+web/admin/app.css text eol=lf
+web/admin/embed.go text eol=lf
+web/admin/go.mod text eol=lf

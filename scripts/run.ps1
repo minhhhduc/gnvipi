@@ -85,8 +85,12 @@ Write-Host ""
 $exe = Join-Path $root 'bin\serve.exe'
 $needBuild = $Build -or -not (Test-Path $exe)
 if (-not $needBuild) {
-  $newestSrc = Get-ChildItem -Recurse -Include *.go -Path (Join-Path $root 'cmd'), (Join-Path $root 'internal') |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  # The binary embeds web/admin/{index.html,app.js,app.css}, so their mtimes
+  # must trigger a rebuild too, not just Go sources.
+  $sources = @(Get-ChildItem -Recurse -Include *.go -Path (Join-Path $root 'cmd'), (Join-Path $root 'internal'))
+  $sources += Get-ChildItem -File -Path (Join-Path $root 'web\admin') |
+    Where-Object { $_.Extension -in '.go', '.html', '.js', '.css' }
+  $newestSrc = $sources | Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if ($newestSrc -and $newestSrc.LastWriteTime -gt (Get-Item $exe).LastWriteTime) { $needBuild = $true }
 }
 if ($needBuild) {

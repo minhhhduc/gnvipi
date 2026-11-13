@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Admin UI mockups</title>
+<style>
+:root{--bg:#f8f9fb;--panel:#fff;--panel2:#f3f5f8;--line:#e5e7eb;--line2:#d3d8e0;--fg:#111827;--dim:#6b7280;--dim2:#9aa3b2;--accent:#4338ca;--accent-soft:#eef0ff;--on:#047857;--on-soft:#e7f6ef;--bad:#b91c1c;--bad-soft:#fdecec;--warn:#b45309;--warn-soft:#fdf3e3;--shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.07);--mono:ui-monospace,"Cascadia Mono",Consolas,monospace}
+[data-theme=dark]{--bg:#0b0f17;--panel:#131a24;--panel2:#18212e;--line:#243041;--line2:#334155;--fg:#e5edf7;--dim:#94a3b8;--dim2:#64748b;--accent:#818cf8;--accent-soft:#1e1b4b;--on:#34d399;--on-soft:#0d2b23;--bad:#f87171;--bad-soft:#331516;--warn:#fbbf24;--warn-soft:#332610;--shadow:0 1px 2px rgba(0,0,0,.3);--mono:ui-monospace,"Cascadia Mono",Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}
+.app{display:flex;min-height:100vh}
+.rail{width:220px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:4px}
+.brand{display:flex;align-items:center;gap:9px;padding:2px 6px 18px}
+.mark{width:30px;height:30px;border-radius:9px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800}
+.brand b{font-size:15px;letter-spacing:-.02em}
+.nav{display:flex;flex-direction:column;gap:3px}
+.nav a{padding:8px 10px;border-radius:8px;color:var(--dim);text-decoration:none;font-size:13px;font-weight:550}
+.nav a.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.rail-foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;padding:10px 6px 0;border-top:1px solid var(--line);font-size:12px;color:var(--dim)}
+.toggle{width:36px;height:20px;border-radius:10px;background:var(--line2);position:relative;display:inline-block}
+.toggle:after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--panel)}
+.main{flex:1;min-width:0;padding:22px 26px 60px;max-width:1240px}
+.head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+.head h1{margin:0;font-size:23px;letter-spacing:-.03em;font-weight:700}
+.head .sub{color:var(--dim);font-size:13px;margin-top:2px}
+.head .right{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.card-h{display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid var(--line)}
+.card-h h2{margin:0;font-size:14px;font-weight:650;letter-spacing:-.01em}
+.card-h .sub{margin-left:auto;color:var(--dim);font-size:12px}
+.card-b{padding:14px 15px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.kpi{padding:12px 13px}
+.kpi .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.kpi .v{font-size:25px;font-weight:700;letter-spacing:-.03em;margin-top:3px;font-variant-numeric:tabular-nums}
+.kpi .v small{font-size:12px;color:var(--dim);font-weight:500;letter-spacing:0}
+.kpi .d{font-size:11px;color:var(--dim);margin-top:2px}
+.chart{width:100%}
+.chart svg{width:100%;height:150px;display:block}
+.chart .legend{display:flex;gap:14px;font-size:11px;color:var(--dim);flex-wrap:wrap;margin-bottom:2px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap;flex:none}
+.pill.ok{color:var(--on);background:var(--on-soft);border-color:var(--on)}
+.pill.warn{color:var(--warn);background:var(--warn-soft);border-color:var(--warn)}
+.pill.bad{color:var(--bad);background:var(--bad-soft);border-color:var(--bad)}
+.pill.mute{color:var(--dim);background:var(--panel2);border-color:var(--line2)}
+.btn{border:1px solid var(--line2);background:var(--panel);color:var(--fg);border-radius:8px;padding:6px 11px;font:inherit;font-size:12px;font-weight:600;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{border-color:var(--bad);color:var(--bad);background:var(--panel)}
+.btn:disabled{opacity:.45}
+.btn.sm{padding:4px 8px;font-size:11px}
+.input{border:1px solid var(--line2);background:var(--panel);color:var(--fg);border-radius:8px;padding:7px 10px;font:inherit;font-size:12px;width:100%}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--dim)}
+.row{display:flex;align-items:center;gap:10px}
+.spread{justify-content:space-between}
+.table{width:100%;border-collapse:collapse;font-size:12px}
+.table th{text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:7px 10px;border-bottom:1px solid var(--line);font-weight:650}
+.table td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+.table tr:last-child td{border-bottom:0}
+.chip{display:inline-flex;align-items:center;justify-content:center;border-radius:6px;background:var(--panel2);border:1px solid var(--line);padding:1px 7px;font-size:11px;color:var(--dim);font-weight:600;line-height:16px;white-space:nowrap;flex:none}
+.sw{display:inline-block;width:32px;height:18px;border-radius:9px;background:var(--accent);position:relative;vertical-align:middle}
+.sw:after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.06)}
+.sw.off{background:var(--line2)}
+.sw.off:after{right:auto;left:2px}
+.prov{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:var(--panel);position:relative}
+.prov+.prov{margin-top:8px}
+.prov:has(.menu-pop){z-index:10}
+.prov .url{color:var(--dim);font-size:11px;font-family:var(--mono);word-break:break-all;max-width:270px}
+.menu{width:26px;height:26px;border-radius:7px;border:1px solid var(--line);display:grid;place-items:center;color:var(--dim);font-weight:700;background:var(--panel)}
+.menu.open{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.menu-pop{position:absolute;right:8px;top:40px;z-index:5;background:var(--panel);border:1px solid var(--line2);border-radius:9px;box-shadow:var(--shadow);padding:5px;width:150px}
+.menu-pop div{padding:7px 9px;border-radius:6px;font-size:12px;color:var(--fg)}
+.menu-pop div.danger{color:var(--bad)}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:44px 16px;color:var(--dim);text-align:center}
+.empty .big{font-size:15px;color:var(--fg);font-weight:600}
+.split{display:grid;grid-template-columns:380px 1fr;gap:14px;align-items:start}
+.hero{padding:24px 22px;display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.hero .state{font-size:30px;font-weight:750;letter-spacing:-.04em}
+.hero .state small{display:block;font-size:12px;font-weight:500;color:var(--dim);letter-spacing:0;margin-top:2px}
+.stat{text-align:center;padding:0 18px;border-left:1px solid var(--line)}
+.stat .v{font-size:24px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.stat .l{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;font-weight:650}
+.savebar{display:flex;align-items:center;gap:10px;border-top:1px solid var(--line);padding:10px 15px;background:var(--panel2);border-radius:0 0 12px 12px}
+.savedot{width:7px;height:7px;border-radius:50%;background:var(--on)}
+h3{margin:0 0 8px;font-size:13px;font-weight:650}
+label{display:block;font-size:12px;font-weight:600;margin:0 0 4px}
+.hint{font-size:11px;color:var(--dim);margin:4px 0 0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg span{padding:5px 10px;font-size:11px;font-weight:600;color:var(--dim)}
+.seg span.on{background:var(--accent-soft);color:var(--accent)}
+.banner{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--bad);background:var(--bad-soft);color:var(--fg);border-radius:10px;padding:11px 13px;margin-bottom:12px;font-size:12px}
+.banner b{color:var(--bad)}
+.toast{position:fixed;right:22px;bottom:22px;background:var(--bad);color:#fff;border-radius:9px;padding:10px 14px;font-size:12px;box-shadow:var(--shadow)}
+.overlay{position:fixed;inset:0;background:rgba(8,12,20,.45);display:flex;align-items:center;justify-content:center;padding:24px}
+.drawer{position:fixed;inset:0 0 0 auto;width:560px;max-width:92vw;background:var(--panel);border-left:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column}
+.drawer-h{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.drawer-b{padding:16px 18px;overflow:auto;flex:1}
+.drawer-f{padding:12px 18px;border-top:1px solid var(--line);background:var(--panel2);display:flex;gap:8px;align-items:center}
+.field{margin-bottom:12px}
+.field .err{color:var(--bad);font-size:11px;margin-top:3px}
+.group{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.group h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+.dialog{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);width:420px;max-width:100%}
+.dialog-h{padding:14px 16px;font-weight:700;border-bottom:1px solid var(--line)}
+.dialog-b{padding:14px 16px;font-size:13px;color:var(--dim)}
+.dialog-f{padding:10px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const q = new URLSearchParams(location.search);
+const theme = q.get('theme') || 'light';
+const view = q.get('view') || 'stats';
+const dataMode = q.get('data') || 'normal';
+const state = q.get('state') || 'idle';
+document.documentElement.dataset.theme = theme;
+
+const C = {req:'var(--accent)', tok:'var(--on)', out:'var(--warn)', err:'var(--bad)', dim:'var(--dim2)', purple:'#a855f7', cyan:'#06b6d4'};
+const XLABELS = ['12:00','12:15','12:30','12:45','13:00'];
+
+function niceTicks(max){
+  if (max <= 2) return [0,1,2];
+  const raw = max / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = 0; v <= max + step * .001; v += step) out.push(Math.round(v * 100) / 100);
+  if (out.length < 2) out.push(step);
+  return [...new Set(out)];
+}
+
+function chart({w=540,h=168,series,labels=XLABELS,gaps=false,max}){
+  const PL=36, PB=18, PT=10, PR=10;
+  const iw=w-PL-PR, ih=h-PT-PB;
+  const all=series.flatMap(s=>s.values.filter(v=>v!=null));
+  const top = max != null ? max : Math.max(1,...all);
+  const ticks=niceTicks(top);
+  const yMax=ticks[ticks.length-1]||1;
+  const x=i=>PL+(i/(Math.max(1,series[0].values.length-1)))*iw;
+  const y=v=>PT+ih-(v/yMax)*ih;
+  let grid='';
+  ticks.forEach(t=>{const yy=y(t).toFixed(1);grid+=`<line x1="${PL}" x2="${w-PR}" y1="${yy}" y2="${yy}" stroke="var(--line)" stroke-width="1"/><text x="${PL-5}" y="${+yy+3.5}" text-anchor="end" font-size="9" fill="var(--dim)">${t}</text>`;});
+  labels.forEach((l,k)=>{const last=k===labels.length-1;const xx=(last?w-PR:PL+(k/(labels.length-1))*iw).toFixed(1);grid+=`<text x="${xx}" y="${h-4}" text-anchor="${last?'end':'middle'}" font-size="9" fill="var(--dim)">${l}</text>`;});
+  let paths='';
+  series.forEach(s=>{
+    let d='', pen=false;
+    s.values.forEach((v,i)=>{
+      if(v==null){pen=false;return;}
+      d += (pen?' L':' M')+x(i).toFixed(1)+','+y(v).toFixed(1);
+      pen=true;
+    });
+    paths+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.8" vector-effect="non-scaling-stroke"/>`;
+    if(!gaps){const last=s.values.length-1; if(s.values[last]!=null) paths+=`<circle cx="${x(last)}" cy="${y(s.values[last])}" r="2.5" fill="${s.color}"/>`;}
+  });
+  const legend=series.length>1?`<div class="legend">${series.map(s=>`<span><span class="dot" style="background:${s.color}"></span>${s.label}</span>`).join('')}</div>`:'';
+  return `<div class="chart">${legend}<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}${paths}</svg></div>`;
+}
+
+function seriesData(kind){
+  const normal={
+    req:[5,7,6,9,8,11,10,13,12,15,14,17,16,18,17,19],
+    tin:[18,22,20,28,26,34,30,40,38,46,44,52,49,58,55,62],
+    tout:[6,8,7,10,9,12,11,14,13,17,15,19,18,21,20,23],
+    ttfb:[380,410,395,null,null,430,440,null,420,405,null,415,430,425,null,418],
+    m1:[3,4,4,5,5,7,6,8,7,9,9,10,10,11,11,12],
+    m2:[2,2,3,3,4,4,5,5,5,6,6,7,7,8,8,9],
+    m3:[1,2,2,2,3,3,3,4,4,4,5,5,5,5,6,6],
+    m4:[1,2,1,2,2,3,3,3,4,4,4,4,5,5,5,5],
+    m5:[1,1,2,2,2,2,3,3,3,3,4,4,4,4,4,4]
+  };
+  const tiny={req:[0,1,2,1,0,2,1,1,0,1,2,1,0,0,1,2], tin:[0,2,3,1,0,4,2,1,0,2,3,1,0,0,2,4], tout:[0,1,1,0,0,2,1,0,0,1,1,0,0,0,1,2], ttfb:[null,120,null,null,null,90,null,null,null,110,null,null,null,null,95,null],
+    m1:[0,1,1,0,0,1,1,0,0,1,1,0,0,0,1,1],m2:[0,0,1,0,0,1,0,0,0,1,0,0,0,0,1,1],m3:[0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1],m4:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],m5:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]};
+  const empty={req:Array(16).fill(0),tin:Array(16).fill(0),tout:Array(16).fill(0),ttfb:Array(16).fill(null),m1:Array(16).fill(0),m2:Array(16).fill(0),m3:Array(16).fill(0),m4:Array(16).fill(0),m5:Array(16).fill(0)};
+  return dataMode==='tiny'?tiny:dataMode==='empty'?empty:normal;
+}
+
+function head(title,sub,right=''){return `<div class="head"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="right">${right}</div></div>`}
+function shell(active,body){return `<div class="app"><aside class="rail">
+  <div class="brand"><span class="mark">GW</span><b>Gateway</b></div>
+  <nav class="nav">${['stats','models','config','chromes'].map(p=>`<a class="${p===active?'on':''}" href="#">${({stats:'Stats',models:'Models',config:'Config',chromes:'Chrome'})[p]}</a>`).join('')}</nav>
+  <div class="rail-foot"><span>${theme==='dark'?'Dark':'Light'} theme</span><span class="toggle"></span></div>
+</aside><main class="main">${body}</main></div>`}
+
+function healthPill(){
+  if(dataMode==='empty') return '<span class="pill mute">No traffic yet</span>';
+  if(dataMode==='tiny') return '<span class="pill mute">Low traffic · 18 requests</span>';
+  return '<span class="pill ok">● Healthy · 99.2% success</span>';
+}
+
+function stats(){
+  const d=seriesData();
+  const empty=dataMode==='empty';
+  const tiny=dataMode==='tiny';
+  const kpis=[
+    ['Total requests',empty?'0':tiny?'18':'128,431',empty?'no traffic':tiny?'since 12:00':'since 09:14'],
+    ['Req / min',empty?'0':tiny?'1':'184',empty?'no traffic':tiny?'last 60 min':'+12 vs prev min'],
+    ['Input tokens',empty?'0':tiny?'41':'2.41M','input tokens (sum)'],
+    ['Output tokens',empty?'0':tiny?'12':'814K','output tokens (sum)'],
+    ['Errors',empty?'0':tiny?'0 (0%)':'0.8%',empty?'no traffic':tiny?'0 total':'1,027 total'],
+    ['Avg TTFB',empty?'—':dataMode==='tiny'?'95ms':'380ms','last 200 events · streamed only'],
+    ['p95 latency',empty?'—':dataMode==='tiny'?'132ms':'412ms','last 200 events'],
+    ['Uptime',empty?'6h 12m':'6h 12m','started 09:14']
+  ];
+  const chartCard=(title,sub,body)=>`<div class="card"><div class="card-h"><h2>${title}</h2><span class="sub">${sub}</span></div><div class="card-b">${empty?'<div class="empty"><span class="big">No requests yet</span><span>Charts appear after the first upstream call.</span></div>':body}</div></div>`;
+  const maxTop = Math.max(...['m1','m2','m3','m4','m5'].flatMap(k=>d[k]));
+  return shell('stats', head('Stats','Live traffic across every upstream API',
+    `${healthPill()}<span class="muted" style="font-size:12px">Updated 2s ago · auto-refresh 2s</span>`)
+    + `<div class="grid4" style="margin-bottom:12px">${kpis.map(k=>`<div class="card kpi"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="d">${k[2]}</div></div>`).join('')}</div>`
+    + `<div class="grid2" style="margin-bottom:12px">
+      ${chartCard('Requests per minute','last 60 min',chart({series:[{label:'requests / min',color:C.req,values:d.req}],max:dataMode==='tiny'?2:null}))}
+      ${chartCard('Tokens per minute','input vs output',chart({series:[{label:'input tokens / min',color:C.tok,values:d.tin},{label:'output tokens / min',color:C.out,values:d.tout}],max:dataMode==='tiny'?4:null}))}
+      ${chartCard('Average TTFB','streamed requests · gaps = no streamed request',chart({series:[{label:'avg TTFB / min',color:C.dim,values:d.ttfb.map(v=>v?v:null)}],gaps:true,max:dataMode==='tiny'?120:500}))}
+      ${chartCard('Top models','requests / min · top 5 by window total',chart({series:[
+        {label:'anthropic/claude-opus-4',color:C.req,values:d.m1},
+        {label:'openai/gpt-5',color:C.tok,values:d.m2},
+        {label:'google/gemini-3-pro',color:C.out,values:d.m3},
+        {label:'meta/llama-4',color:C.purple,values:d.m4},
+        {label:'mistral/large',color:C.cyan,values:d.m5}
+      ],max:dataMode==='tiny'?2:null,maxTop}))}
+    </div>`
+    + `<div class="card"><div class="card-h"><h2>Request log</h2><span class="sub">${empty?'0 events':tiny?'3 events':'frame 1 of 12 · 200 events'}</span>${empty||tiny?'':`<div class="row" style="margin-left:auto"><button class="btn sm">«</button><button class="btn sm primary">1</button><button class="btn sm">2</button><button class="btn sm">3</button><button class="btn sm">»</button></div>`}</div>
+      ${empty?'<div class="empty"><span class="big">No requests yet</span><span>The log fills as soon as traffic arrives.</span></div>':`<table class="table"><thead><tr><th>Time</th><th>Model</th><th>Stream</th><th>In</th><th>Out</th><th>Latency</th><th>TTFB</th><th>Status</th></tr></thead><tbody>
+      <tr><td class="muted">12:04:21</td><td class="mono">anthropic/claude-opus-4</td><td>yes</td><td>1,240</td><td>312</td><td>380ms</td><td>120ms</td><td><span class="pill ok">ok</span></td></tr>
+      <tr><td class="muted">12:04:19</td><td class="mono">openai/gpt-5</td><td>yes</td><td>980</td><td>204</td><td>510ms</td><td>160ms</td><td><span class="pill ok">ok</span></td></tr>
+      <tr><td class="muted">12:04:17</td><td class="mono">google/gemini-3-pro</td><td>no</td><td>420</td><td>88</td><td>1.2s</td><td>—</td><td><span class="pill bad">error</span></td></tr>
+      </tbody></table>`}</div>`);
+}
+
+function providers(){
+  return [
+    ['openrouter','OpenRouter','openai-chat','https://openrouter.ai/api/v1',12,true],
+    ['anthropic','Anthropic','anthropic-messages','https://api.anthropic.com',4,true],
+    ['local-ollama','Ollama (local)','openai-chat','http://127.0.0.1:11434/v1',3,false]
+  ].map(p=>`<div class="prov">
+    <div class="row"><span class="pill ${p[5]?'ok':'mute'}">● ${p[5]?'enabled':'disabled'}</span><b style="font-size:13px">${p[1]}</b><span class="chip">${p[2]}</span><button class="menu ${q.get('menu')===p[0]?'open':''}" style="margin-left:auto">⋯</button></div>
+    <div class="row" style="margin-top:6px"><span class="url" title="${p[3]}">${p[3]}</span><span class="muted" style="font-size:11px;margin-left:auto;white-space:nowrap">${p[4]} aliases</span><span class="sw ${p[5]?'':'off'}" style="margin-left:8px"></span></div>
+    <div class="row" style="margin-top:8px;gap:5px;flex-wrap:wrap"><span class="chip">gpt-5</span><span class="chip">claude-opus-4</span><span class="chip">gemini-3-pro</span><span class="muted" style="font-size:11px;margin-left:auto;white-space:nowrap">not tested</span></div>
+    ${q.get('menu')===p[0]?`<div class="menu-pop"><div>Edit provider</div><div>Test connection</div><div class="danger">Delete provider…</div></div>`:''}
+  </div>`).join('');
+}
+
+function models(){
+  const rows=[
+    ['claude-opus-4','anthropic/claude-opus-4','Anthropic',true],
+    ['gpt-5','openai/gpt-5','OpenAI',true],
+    ['gemini-3-pro','google/gemini-3-pro','Google',false],
+    ['yi-large','01-ai/yi-large','01.AI',true]
+  ];
+  const deletedExpanded=q.get('deleted')==='1';
+  return shell('models', head('Models','Providers and the model catalog',
+    `<span class="muted" style="font-size:12px">19 on · 2 off</span><button class="btn primary">Add provider</button>`)
+    + `<div class="split"><div>
+      <div class="row spread" style="margin-bottom:10px"><h2 style="margin:0;font-size:14px">Upstream providers</h2><span class="muted" style="font-size:12px">3 configured</span></div>
+      ${providers()}
+    </div><div class="card">
+      <div class="card-h"><h2>Model catalog</h2><div class="seg" style="margin-left:auto"><span class="on">All</span><span>On</span><span>Off</span></div></div>
+      <div class="card-b" style="padding-bottom:8px"><input class="input" placeholder="Search name, id or publisher…"></div>
+      <table class="table"><thead><tr><th style="width:44px">On</th><th>Model</th><th>ID</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td><span class="sw ${r[3]?'':'off'}"></span></td><td><b>${r[0]}</b><div class="muted" style="font-size:11px">${r[2]}</div></td><td class="mono muted">${r[1]}</td></tr>`).join('')}
+      </tbody></table>
+      <div style="border-top:1px solid var(--line)">
+        <div class="row" style="padding:11px 15px;color:var(--dim);font-size:12px"><b style="color:var(--fg);font-size:12px">Deleted models</b><span class="chip" style="margin-left:6px">3</span><span style="margin-left:auto">${deletedExpanded?'▾':'▸'} ${deletedExpanded?'hide':'show'}</span></div>
+        ${deletedExpanded?`<table class="table"><tbody>
+          ${['google/gemini-2','meta/llama-3','qwen/qwen2'].map(m=>`<tr><td class="mono muted">${m}</td><td style="text-align:right"><button class="btn sm">Restore</button></td></tr>`).join('')}
+        </tbody></table>`:''}
+      </div>
+    </div></div>`);
+}
+
+function config(){
+  return shell('config', head('Config','Auto model, web search and the cycle chain',`<span class="pill ok">● Saved 12:04:22</span>`)
+    + `<div class="grid2" style="margin-bottom:12px">
+      <div class="card"><div class="card-h"><h2>Auto model</h2><span class="pill ok" style="margin-left:auto">Saved 12:04:22</span></div><div class="card-b">
+        <p class="muted" style="margin:0 0 10px;font-size:12px">Requests with <span class="mono">model: "automode"</span> forward unchanged to this model.</p>
+        <label>Target model</label><select class="input"><option>anthropic/claude-opus-4</option></select>
+        <p class="hint">Current target: <span class="mono">anthropic/claude-opus-4</span></p></div></div>
+      <div class="card"><div class="card-h"><h2>Web search</h2><span class="pill ok" style="margin-left:auto">Saved 12:04:22</span></div><div class="card-b">
+        <p class="muted" style="margin:0 0 10px;font-size:12px">Backs the gateway search tool. Saves immediately and survives restarts.</p>
+        <label>Search engine</label><select class="input"><option>Google</option></select>
+        <label style="margin-top:10px">Search URL</label><input class="input mono" value="https://www.google.com/search?q={query}">
+      </div></div></div>
+      <div class="card"><div class="card-h"><h2>Model cycle</h2><span class="sub">3 of 7 selected · selected list always visible</span></div>
+      <div class="card-b"><div class="split" style="grid-template-columns:1fr 1fr;gap:16px">
+        <div><h3>Selected (priority order)</h3>
+          ${['anthropic/claude-opus-4','openai/gpt-5','google/gemini-3-pro'].map((m,i)=>`<div class="row" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px"><span class="chip">${i+1}</span><span class="mono" style="font-size:12px">${m}</span><span style="margin-left:auto" class="row"><button class="btn sm" aria-label="Move up" title="Move up"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 10l4-4 4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="btn sm" aria-label="Move down" title="Move down"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="btn sm" aria-label="Remove" title="Remove"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg></button></span></div>`).join('')}
+          <p class="hint">Current target: <span class="mono">anthropic/claude-opus-4</span></p></div>
+        <div><h3>Unselected</h3>
+          ${['meta/llama-4','mistral/large','qwen/qwen3-max','01-ai/yi-large'].map(m=>`<div class="row" style="border:1px dashed var(--line2);border-radius:8px;padding:8px 10px;margin-bottom:6px"><span class="mono" style="font-size:12px">${m}</span><button class="btn sm" style="margin-left:auto">Add</button></div>`).join('')}
+        </div></div></div>
+        <div class="savebar"><span class="savedot"></span><span class="muted" style="font-size:12px">Saved 12:04:22</span><span class="hint" style="margin:0 0 0 auto">Changes save automatically</span></div></div>`);
+}
+
+function chromes(){
+  const running=state==='running';
+  const body=`<div class="card" style="margin-bottom:12px"><div class="hero">
+      <div class="state">${running?'Enabled':'Idle'}<small>${running?'2 workers allocated':'No Chrome processes allocated'}</small></div>
+      <div class="stat"><div class="v">${running?'2':'0'}</div><div class="l">ready tokens</div></div>
+      <div class="stat"><div class="v">${running?'2 / 2':'0 / 0'}</div><div class="l">workers running</div></div>
+      <div class="stat"><div class="v">${running?'1':'0'}</div><div class="l">in use now</div></div>
+      <div class="stat"><div class="v">${running?'58':'0'}</div><div class="l">captcha extracts</div></div>
+      <div class="row" style="margin-left:auto"><button class="btn primary">Start All</button><button class="btn danger" ${running?'':'disabled title="Nothing to kill — no workers are running"'}>Kill All…</button></div>
+    </div></div>`
+    + `<div class="card"><div class="card-h"><h2>Workers</h2><span class="sub">${running?'2 allocated':'0 allocated'}</span></div>
+      ${running?`<table class="table"><thead><tr><th style="width:52px">#</th><th>State</th><th>PID</th><th>Extracts</th><th>Last OK</th><th></th></tr></thead><tbody>
+      <tr><td><span class="chip">0</span></td><td><span class="pill ok">running</span> <span class="pill mute">warm</span></td><td class="mono">48212</td><td>37</td><td class="muted">12:03:58</td><td style="text-align:right"><button class="btn sm">Kill…</button></td></tr>
+      <tr><td><span class="chip">1</span></td><td><span class="pill warn">in use</span></td><td class="mono">48244</td><td>21</td><td class="muted">12:04:11</td><td style="text-align:right"><button class="btn sm">Kill…</button></td></tr>
+      </tbody></table>`:`<div class="empty"><span class="big">No Chrome processes allocated</span><span>Start All launches the pool; each worker can be killed to free its RAM.</span></div>`}</div>`;
+  return shell('chromes', head('Chrome','Captcha browser pool — start on demand, kill to free RAM',
+    `<span class="pill ${running?'ok':'mute'}">● ${running?'Enabled':'Idle'}</span><span class="muted" style="font-size:12px">Updated 5s ago · auto-refresh 5s</span>`)+body);
+}
+
+function editor(){
+  const f=(label,value,err)=>`<div class="field"><label>${label}</label><input class="input" value="${value||''}">${err?`<div class="err">${err}</div>`:''}</div>`;
+  const e=`<div class="overlay"><div class="drawer">
+    <div class="drawer-h"><b style="font-size:15px">Edit provider · openrouter</b><span class="pill mute" style="margin-left:auto">unsaved changes</span><button class="btn sm">×</button></div>
+    <div class="drawer-b">
+      <div class="group" style="border-top:0;padding-top:0;margin-top:0"><h3>Identity</h3>
+        <div class="field"><label>Provider ID</label><input class="input mono" value="openrouter" readonly><div class="hint">Provider IDs are immutable.</div></div> ${f('Name','OpenRouter')} ${f('Base URL','https://openrouter.ai/api/v1')}
+        <div class="field"><label>Protocol</label><select class="input"><option>openai-chat</option></select></div>
+        <div class="field"><label class="row" style="gap:8px"><span class="sw"></span> Enabled</label></div>
+      </div>
+      <div class="group"><h3>Authentication</h3>
+        <div class="field"><label>Auth scheme</label><select class="input"><option>Bearer</option></select></div>
+        ${f('API key','•••••••• (leave blank to keep)')} ${f('API key env var','OPENROUTER_API_KEY')} ${f('Key ref','')}
+        ${f('Header name','Authorization')}
+      </div>
+      <div class="group"><h3>Model mappings</h3>
+        <div class="row" style="margin-bottom:6px"><span class="mono" style="flex:1">gpt-5</span><span class="mono muted" style="flex:1">openai/gpt-5</span><span class="chip">visible</span><button class="btn sm">×</button></div>
+        <div class="row" style="margin-bottom:6px"><span class="mono" style="flex:1">claude-opus-4</span><span class="mono muted" style="flex:1">anthropic/claude-opus-4</span><span class="chip">hidden</span><button class="btn sm">×</button></div>
+        <div style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
+          <div class="row" style="margin-bottom:5px"><span class="mono" style="flex:1">gpt-5</span><span class="mono muted" style="flex:1">openai/gpt-5</span><span class="chip">visible</span><button class="btn sm">Less</button></div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <span class="hint" style="margin:0">Fallbacks: <span class="mono">gpt-5-mini, claude-haiku</span></span>
+            <span class="hint" style="margin:0">Statuses: <span class="mono">429, 500</span></span>
+            <span class="chip">allow_shadow</span><span class="chip">legacy_position 2</span>
+          </div>
+        </div>
+        <div class="row"><button class="btn sm">+ Add mapping</button><span class="hint" style="margin:0">Expand a row for fallbacks, fallback_statuses, allow_shadow and legacy_position</span></div>
+      </div>
+      <div class="group"><h3>Headers &amp; routing</h3>
+        <div class="row" style="margin-bottom:6px"><span class="mono" style="flex:1">HTTP-Referer</span><span class="mono muted" style="flex:1">https://example.com</span><button class="btn sm">×</button></div>
+        <div class="row"><button class="btn sm">+ Add header</button></div>
+        <div class="field" style="margin-top:10px"><label>Forward headers</label><input class="input" value="x-request-id, traceparent"></div>
+        <div class="field"><label>Endpoint path overrides</label><input class="input" placeholder="openai-chat: /v1/chat/completions"></div>
+        <div class="field"><label>Proxy URL</label><input class="input" placeholder="(empty uses environment proxy)"></div>
+      </div>
+      <div class="group"><h3>Timeouts &amp; limits</h3>
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:120px">${f('Connect (s)','10')}</div><div style="flex:1;min-width:120px">${f('TLS (s)','10')}</div>
+          <div style="flex:1;min-width:120px">${f('Response header (s)','30')}</div><div style="flex:1;min-width:120px">${f('Idle (s)','30')}</div>
+          <div style="flex:1;min-width:120px">${f('Total (s)','120')}</div><div style="flex:1;min-width:120px">${f('Max concurrency','0')}</div>
+          <div style="flex:1;min-width:120px">${f('Queue timeout (s)','5')}</div>
+        </div>
+        <div class="field"><label>TLS profile</label><select class="input"><option>default</option></select></div>
+        <div class="field"><label>Extra body (JSON)</label><input class="input mono" value='{"provider":{"order":["anthropic"]}}'>${''}</div>
+        <div class="field"><label>Extensions (JSON)</label><input class="input mono" placeholder="{}"><div class="err">Invalid JSON: expected object</div></div>
+      </div>
+      <div class="group"><h3>Advanced</h3>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:100px">${f('TLS timeout (s)','10')}</div>
+          <div style="flex:1;min-width:100px">${f('Response header (s)','30')}</div>
+          <div style="flex:1;min-width:100px">${f('Total timeout (s)','120')}</div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:100px">${f('Max concurrency','0')}</div>
+          <div style="flex:1;min-width:100px">${f('Queue timeout (s)','5')}</div>
+          <div style="flex:1;min-width:100px">${f('Key ref','')}</div>
+        </div>
+        <div class="hint">Timeouts, tls, extra_body, extensions, max_concurrency, queue_timeout and key_ref are all reachable here or above.</div>
+      </div>
+    </div>
+    <div class="drawer-f"><span class="pill ok">✓ last test OK · 214ms</span><span style="margin-left:auto"></span><button class="btn">Test connection</button><button class="btn">Cancel</button><button class="btn primary">Save provider</button></div>
+  </div></div>`;
+  return shell('models', head('Models','Providers and the model catalog','<span class="muted" style="font-size:12px">19 on · 2 off</span><button class="btn primary">Add provider</button>') + e);
+}
+
+function dialogs(){
+  const dlg=(title,body,confirm,danger)=>`<div class="dialog"><div class="dialog-h">${title}</div><div class="dialog-b">${body}</div><div class="dialog-f"><button class="btn">Cancel</button><button class="btn ${danger?'danger':'primary'}">${confirm}</button></div></div>`;
+  return `<div style="padding:26px;background:var(--bg);min-height:100vh"><h1 style="margin:0 0 4px;font-size:20px">Destructive-action confirmations</h1><p class="muted" style="margin:0 0 18px;font-size:13px">Every destructive action opens this dialog first; Escape and backdrop click cancel.</p><div class="row" style="align-items:flex-start;gap:18px;flex-wrap:wrap">
+    ${dlg('Delete provider?','This removes <b>openrouter</b> and its 12 model mappings from the gateway configuration.','Delete provider',true)}
+    ${dlg('Kill all Chrome workers?','This stops <b>2 workers</b> and frees their RAM.','Kill all',true)}
+    ${dlg('Kill Chrome #1?','This stops worker <b>#1</b> (PID 48244). If it is in use, the current captcha extraction is interrupted.','Kill worker',true)}
+  </div></div>`;
+}
+
+function errorState(){
+  return shell('stats', head('Stats','Live traffic across every upstream API','<span class="pill bad">● Degraded · 6.4% errors</span><span class="muted" style="font-size:12px">Updated 2s ago</span>')
+    + `<div class="banner"><span>⚠</span><div><b>Provider test failed:</b> OpenRouter returned <span class="mono">auth_failure</span> (HTTP 401) — the key was rejected. Stats still load; provider actions may fail. <a href="#" style="color:var(--accent)">Retry</a> · <a href="#" style="color:var(--accent)">Edit provider</a></div></div>`
+    + `<div class="grid4" style="margin-bottom:12px">${[['Total requests','—','unavailable'],['Req / min','—','unavailable'],['Input tokens','—','unavailable'],['Output tokens','—','unavailable'],['Errors','6.4%','8,219 total'],['Avg TTFB','—','unavailable'],['p95 latency','412ms','last 200 events'],['Uptime','6h 12m','started 09:14']].map(k=>`<div class="card kpi"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="d">${k[2]}</div></div>`).join('')}</div>`
+    + `<div class="card"><div class="empty"><span class="big">Charts unavailable</span><span>Request log loaded, but the stats frame read was throttled (429). Retry in 3s.</span></div></div>`
+    + `<div class="toast">Save failed: provider update returned 500</div>`);
+}
+
+const views={stats,models,config,chromes,editor,dialogs,error:errorState};
+document.getElementById('root').innerHTML=views[view]();
+</script>
+</body>
+</html>
