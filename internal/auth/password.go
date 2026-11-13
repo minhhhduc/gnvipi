@@ -19,9 +19,14 @@ import (
 )
 
 const (
-	argon2Version = 19
-	minPassword   = 12
-	maxPassword   = 128
+	argon2Version        = 19
+	maxArgon2Memory      = 256 * 1024 // KiB
+	maxArgon2Iterations  = 10
+	maxArgon2Parallelism = 16
+	maxArgon2SaltLength  = 64
+	maxArgon2KeyLength   = 64
+	minPassword          = 12
+	maxPassword          = 128
 )
 
 var (
@@ -51,14 +56,24 @@ func (p Params) Validate() error {
 	switch {
 	case p.Memory < 8*1024:
 		return fmt.Errorf("auth: argon2 memory must be at least 8192 KiB")
+	case p.Memory > maxArgon2Memory:
+		return fmt.Errorf("auth: argon2 memory must be at most %d KiB", maxArgon2Memory)
 	case p.Iterations < 1:
 		return fmt.Errorf("auth: argon2 iterations must be positive")
+	case p.Iterations > maxArgon2Iterations:
+		return fmt.Errorf("auth: argon2 iterations must be at most %d", maxArgon2Iterations)
 	case p.Parallelism < 1:
 		return fmt.Errorf("auth: argon2 parallelism must be positive")
+	case p.Parallelism > maxArgon2Parallelism:
+		return fmt.Errorf("auth: argon2 parallelism must be at most %d", maxArgon2Parallelism)
 	case p.SaltLength < 8:
 		return fmt.Errorf("auth: argon2 salt length must be at least 8 bytes")
+	case p.SaltLength > maxArgon2SaltLength:
+		return fmt.Errorf("auth: argon2 salt length must be at most %d bytes", maxArgon2SaltLength)
 	case p.KeyLength < 16:
 		return fmt.Errorf("auth: argon2 key length must be at least 16 bytes")
+	case p.KeyLength > maxArgon2KeyLength:
+		return fmt.Errorf("auth: argon2 key length must be at most %d bytes", maxArgon2KeyLength)
 	}
 	return nil
 }
@@ -125,6 +140,23 @@ func VerifyPassword(password, encoded string, params Params, pepper []byte) (ok,
 		p.Iterations, p.Memory, p.Parallelism, uint32(len(key)))
 	ok = subtle.ConstantTimeCompare(derived, key) == 1
 	return ok, NeedsRehash(encoded, params), nil
+}
+
+// verifyPasswordWithPrevious verifies both configured peppers when a rotation
+// window is active. Both hashes run even when the current pepper succeeds so
+// account state does not change verification timing. A previous-pepper match
+// always requests an upgrade to the current pepper.
+func verifyPasswordWithPrevious(password, encoded string, params Params, pepper, previousPepper []byte, previousPepperSet bool) (ok, needsRehash bool, err error) {
+	ok, needsRehash, err = VerifyPassword(password, encoded, params, pepper)
+	if err != nil || !previousPepperSet {
+		return ok, needsRehash, err
+	}
+	previousOK, _, previousErr := VerifyPassword(password, encoded, params, previousPepper)
+	if previousErr != nil {
+		return false, false, previousErr
+	}
+	return ok || previousOK, needsRehash || (!ok && previousOK), nil
+
 }
 
 // NeedsRehash reports whether encoded was made with different parameters.
@@ -213,7 +245,7 @@ func ValidatePassword(password, username, email string) error {
 	}
 	for _, part := range []string{username, emailLocalPart(email)} {
 		part = strings.ToLower(strings.TrimSpace(part))
-		if utf8.RuneCountInString(part) >= 3 && strings.Contains(lower, part) {
+		if part != "" && strings.Contains(lower, part) {
 			return ErrPasswordContainsIdentity
 		}
 	}
@@ -228,18 +260,48 @@ func emailLocalPart(email string) string {
 	return local
 }
 
-var (
-	dummyHashOnce sync.Once
-	dummyHash     string
-)
+type dummyHashEntry struct {
+	once sync.Once
+	hash string
+	err  error
+}
 
-// dummyVerification burns the same Argon2id work as a real verification for an
-// unknown username, reducing username timing enumeration.
-func dummyVerification(password string, pepper []byte) {
-	dummyHashOnce.Do(func() {
-		// Params match DefaultParams; a deployment using custom params sees a
-		// slightly different cost on unknown users only.
-		dummyHash, _ = HashPassword("gnvipi-dummy-password", DefaultParams(), nil) //nolint:errcheck // best-effort cleanup/best-effort parse
+var dummyHashes = struct {
+	sync.Mutex
+	entries map[Params]*dummyHashEntry
+}{entries: make(map[Params]*dummyHashEntry)}
+
+func dummyHashForParams(params Params) (string, error) {
+	if err := params.Validate(); err != nil {
+		return "", err
+	}
+	dummyHashes.Lock()
+	entry := dummyHashes.entries[params]
+	if entry == nil {
+		entry = &dummyHashEntry{}
+		dummyHashes.entries[params] = entry
+	}
+	dummyHashes.Unlock()
+	entry.once.Do(func() {
+		entry.hash, entry.err = HashPassword("gnvipi-dummy-password", params, nil)
 	})
-	_, _, _ = VerifyPassword(password, dummyHash, DefaultParams(), pepper) //nolint:errcheck // best-effort cleanup/best-effort parse
+	return entry.hash, entry.err
+}
+
+// PrepareDummyVerification pays the dummy-hash setup cost at startup rather
+// than on the first unknown-user login.
+func PrepareDummyVerification(params Params) error {
+	_, err := dummyHashForParams(params)
+	return err
+}
+
+// dummyVerification burns the same configured Argon2id passes as a real
+// verification, including an active previous-pepper rotation window.
+func dummyVerification(password string, params Params, pepper, previousPepper []byte, previousPepperSet bool) error {
+	hash, err := dummyHashForParams(params)
+	if err != nil {
+		return err
+	}
+	_, _, err = verifyPasswordWithPrevious(password, hash, params, pepper, previousPepper, previousPepperSet)
+	return err
 }

@@ -177,9 +177,11 @@ func CheckLockout(ctx context.Context, q Querier, username, ip string, now time.
 
 // LoginConfig bundles the hashing and lockout settings for Login.
 type LoginConfig struct {
-	Params  Params
-	Pepper  []byte
-	Lockout LockoutConfig
+	Params            Params
+	Pepper            []byte
+	PreviousPepper    []byte
+	PreviousPepperSet bool
+	Lockout           LockoutConfig
 }
 
 func (c LoginConfig) normalized() LoginConfig {
@@ -205,14 +207,16 @@ func Login(ctx context.Context, db DB, username, password, ip string, now time.T
 	}
 	u, err := GetUserByUsername(ctx, db, username)
 	if errors.Is(err, ErrUserNotFound) {
-		dummyVerification(password, cfg.Pepper)
+		if err := dummyVerification(password, cfg.Params, cfg.Pepper, cfg.PreviousPepper, cfg.PreviousPepperSet); err != nil {
+			return nil, false, err
+		}
 		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, false, ErrInvalidCredentials
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	ok, needsRehash, verifyErr := VerifyPassword(password, u.PasswordHash, cfg.Params, cfg.Pepper)
+	ok, needsRehash, verifyErr := verifyPasswordWithPrevious(password, u.PasswordHash, cfg.Params, cfg.Pepper, cfg.PreviousPepper, cfg.PreviousPepperSet)
 	if verifyErr != nil || !ok || u.Status != StatusActive {
 		_ = RecordLoginAttempt(ctx, db, LoginAttempt{Username: username, IP: ip, Now: now}, cfg.Lockout) //nolint:errcheck // best-effort cleanup/best-effort parse
 		return nil, false, ErrInvalidCredentials

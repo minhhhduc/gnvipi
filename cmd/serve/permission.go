@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -22,9 +22,13 @@ const (
 	adminPasswordPath = "/admin/api/auth/password"
 )
 
-// pepperEnv supplies the optional peppered-password secret. Rotating it
-// invalidates every stored hash, so it is read once per process.
-const pepperEnv = "GNVIPI_PASSWORD_PEPPER"
+const (
+	pepperEnv            = "GNVIPI_PASSWORD_PEPPER"
+	argon2MemoryEnv      = "GNVIPI_PASSWORD_ARGON2_MEMORY_KIB"
+	previousPepperEnv    = "GNVIPI_PASSWORD_PEPPER_PREVIOUS"
+	argon2IterationsEnv  = "GNVIPI_PASSWORD_ARGON2_ITERATIONS"
+	argon2ParallelismEnv = "GNVIPI_PASSWORD_ARGON2_PARALLELISM"
+)
 
 // authState is the database-backed identity configuration shared by every
 // /admin/api handler. A nil *authState means file-backed mode: the admin token
@@ -41,17 +45,70 @@ type authState struct {
 	loopbackBind bool
 }
 
-func newAuthState(pool *pgxpool.Pool) *authState {
-	pepper := []byte(strings.TrimSpace(os.Getenv(pepperEnv)))
+func loadPasswordHashConfig(lookup func(string) (string, bool)) (auth.BootstrapConfig, error) {
+	params := auth.DefaultParams()
+	memory, set, err := passwordHashUintEnv(lookup, argon2MemoryEnv, 32)
+	if err != nil {
+		return auth.BootstrapConfig{}, err
+	}
+	if set {
+		params.Memory = uint32(memory)
+	}
+	iterations, set, err := passwordHashUintEnv(lookup, argon2IterationsEnv, 32)
+	if err != nil {
+		return auth.BootstrapConfig{}, err
+	}
+	if set {
+		params.Iterations = uint32(iterations)
+	}
+	parallelism, set, err := passwordHashUintEnv(lookup, argon2ParallelismEnv, 8)
+	if err != nil {
+		return auth.BootstrapConfig{}, err
+	}
+	if set {
+		params.Parallelism = uint8(parallelism)
+	}
+	if err := params.Validate(); err != nil {
+		return auth.BootstrapConfig{}, err
+	}
+	if err := auth.PrepareDummyVerification(params); err != nil {
+		return auth.BootstrapConfig{}, fmt.Errorf("prepare dummy password hash: %w", err)
+	}
+	pepper, _ := lookup(pepperEnv)
+	previousPepper, previousPepperSet := lookup(previousPepperEnv)
+	return auth.BootstrapConfig{
+		Params:            params,
+		Pepper:            []byte(pepper),
+		PreviousPepper:    []byte(previousPepper),
+		PreviousPepperSet: previousPepperSet,
+	}, nil
+}
+
+func passwordHashUintEnv(lookup func(string) (string, bool), name string, bits int) (value uint64, set bool, err error) {
+	raw, ok := lookup(name)
+	raw = strings.TrimSpace(raw)
+	if !ok || raw == "" {
+		return 0, false, nil
+	}
+	value, err = strconv.ParseUint(raw, 10, bits)
+	if err != nil || value == 0 {
+		return 0, false, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, true, nil
+}
+
+func newAuthState(pool *pgxpool.Pool, password *auth.BootstrapConfig) *authState {
 	return &authState{
 		pool:     pool,
 		sessions: auth.DefaultSessionConfig(),
 		login: auth.LoginConfig{
-			Params:  auth.DefaultParams(),
-			Pepper:  pepper,
-			Lockout: auth.DefaultLockoutConfig(),
+			Params:            password.Params,
+			Pepper:            password.Pepper,
+			PreviousPepper:    password.PreviousPepper,
+			PreviousPepperSet: password.PreviousPepperSet,
+			Lockout:           auth.DefaultLockoutConfig(),
 		},
-		password: auth.BootstrapConfig{Params: auth.DefaultParams(), Pepper: pepper},
+		password: *password,
 	}
 }
 

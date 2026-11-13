@@ -88,6 +88,10 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("database configuration: %w", err)
 	}
+	password, err := loadPasswordHashConfig(os.LookupEnv)
+	if err != nil {
+		return nil, fmt.Errorf("password hashing configuration: %w", err)
+	}
 	if autoMigrate {
 		if !db.AutoMigrateAllowed(cfg.Env) {
 			return nil, fmt.Errorf("--auto-migrate is not allowed when GNVIPI_ENV=%s; run 'serve migrate' instead", cfg.Env)
@@ -115,7 +119,7 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 		pool.Close()
 		return nil, databaseSchemaError(err)
 	}
-	state := newAuthState(pool)
+	state := newAuthState(pool, &password)
 	if err := cleanupAuthData(ctx, state); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("database auth cleanup: %w", err)

@@ -9,8 +9,10 @@ import (
 
 // BootstrapConfig controls hashing during owner creation and recovery.
 type BootstrapConfig struct {
-	Params Params
-	Pepper []byte
+	Params            Params
+	Pepper            []byte
+	PreviousPepper    []byte
+	PreviousPepperSet bool
 }
 
 func (c BootstrapConfig) normalized() BootstrapConfig {
@@ -174,7 +176,7 @@ func ChangePassword(ctx context.Context, db DB, userID, currentSessionToken, old
 	if err != nil {
 		return err
 	}
-	ok, _, err := VerifyPassword(oldPassword, u.PasswordHash, cfg.Params, cfg.Pepper)
+	ok, _, err := verifyPasswordWithPrevious(oldPassword, u.PasswordHash, cfg.Params, cfg.Pepper, cfg.PreviousPepper, cfg.PreviousPepperSet)
 	if err != nil || !ok {
 		return ErrInvalidCredentials
 	}
