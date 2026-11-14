@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
-import { niceTicks, segments } from "../lib/chart";
+import { niceTicks, segments, smoothPath } from "../lib/chart";
 
 export interface ChartSeries {
   label: string;
@@ -134,9 +134,7 @@ export function LineChart({ series, labels, height = 176, emptyMessage, format }
                   if (part.length === 1) {
                     return <circle key={pi} cx={x(part[0].index)} cy={y(part[0].value)} r="2.5" fill={s.color} />;
                   }
-                  const line = part
-                    .map((p, i) => `${i === 0 ? "M" : "L"}${x(p.index).toFixed(1)},${y(p.value).toFixed(1)}`)
-                    .join(" ");
+                  const line = smoothPath(part.map((p) => ({ x: x(p.index), y: y(p.value) })));
                   return (
                     <g key={pi}>
                       {showArea && (
