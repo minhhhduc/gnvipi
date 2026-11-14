@@ -19,15 +19,20 @@ import (
 // ErrV2SourceChanged requires an explicit force flag before replacing an earlier import.
 var ErrV2SourceChanged = errors.New("v2 import source differs from the previous import; pass --force to replace it")
 
+// ErrV2ProviderConflict reports an imported provider ID that already exists in
+// the database outside this import. Replacement must never delete it.
+var ErrV2ProviderConflict = errors.New("v2 import provider already exists outside the import")
+
 type v2ImportMarker struct {
-	SourceSHA256 string `json:"source_sha256"`
-	ImportedAt   string `json:"imported_at"`
-	Owner        string `json:"owner"`
+	SourceSHA256 string   `json:"source_sha256"`
+	ImportedAt   string   `json:"imported_at"`
+	Owner        string   `json:"owner"`
+	ProviderIDs  []string `json:"provider_ids,omitempty"`
 }
 
 // ImportV2 imports one v2 provider document in a single transaction. It returns
 // false when source has already been imported byte-for-byte.
-func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner string, force bool, keyring *Keyring) (bool, error) {
+func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner string, force bool, keyring *Keyring, refs RefResolver) (bool, error) {
 	if pool == nil {
 		return false, errors.New("providerstore: nil database pool")
 	}
@@ -94,17 +99,31 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 		}
 		return false, fmt.Errorf("providerstore: find import owner: %w", err)
 	}
+	providerIDs := make([]string, len(doc.Providers))
+	for i := range doc.Providers {
+		providerIDs[i] = doc.Providers[i].ID
+	}
 	if force {
-		if _, err := tx.Exec(ctx, `DELETE FROM providers`); err != nil {
-			return false, fmt.Errorf("providerstore: replace prior v2 providers: %w", err)
+		// Replacement is limited to the providers the previous import created;
+		// DB-managed providers, keys and models are never removed here.
+		if _, err := tx.Exec(ctx, `DELETE FROM providers WHERE id = ANY($1::text[])`, marker.ProviderIDs); err != nil {
+			return false, fmt.Errorf("providerstore: remove prior v2 import providers: %w", err)
 		}
+	}
+	var conflicts []string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id ORDER BY id), '{}')
+		FROM providers WHERE id = ANY($1::text[])`, providerIDs).Scan(&conflicts); err != nil {
+		return false, fmt.Errorf("providerstore: check existing providers: %w", err)
+	}
+	if len(conflicts) > 0 {
+		return false, fmt.Errorf("%w: %s", ErrV2ProviderConflict, strings.Join(conflicts, ", "))
 	}
 
 	for i, p := range doc.Providers {
 		if err := insertImportedProvider(ctx, tx, providerRows[i]); err != nil {
 			return false, err
 		}
-		key, err := importedKey(ctx, tx, p, ownerID, keyring)
+		key, err := importedKey(ctx, tx, p, ownerID, keyring, refs)
 		if err != nil {
 			return false, err
 		}
@@ -126,6 +145,7 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 		SourceSHA256: sourceHash,
 		ImportedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 		Owner:        owner,
+		ProviderIDs:  providerIDs,
 	}
 	markerRaw, err = json.Marshal(marker)
 	if err != nil {
@@ -235,7 +255,7 @@ func insertImportedProvider(ctx context.Context, tx pgx.Tx, row ProviderRow) err
 	return nil
 }
 
-func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID string, keyring *Keyring) (KeyRow, error) {
+func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID string, keyring *Keyring, refs RefResolver) (KeyRow, error) {
 	var id string
 	if err := tx.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&id); err != nil {
 		return KeyRow{}, fmt.Errorf("providerstore: allocate key for provider %q: %w", p.ID, err)
@@ -259,8 +279,10 @@ func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID st
 	}
 
 	sources := 0
+	var plaintext []byte
 	if p.Auth.Key != "" {
 		sources++
+		plaintext = []byte(p.Auth.Key)
 	}
 	if p.Auth.KeyEnv != "" {
 		sources++
@@ -268,7 +290,16 @@ func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID st
 	}
 	if p.Auth.KeyRef != "" {
 		sources++
-		key.KeyRef = p.Auth.KeyRef
+		if refs == nil {
+			return KeyRow{}, &provider.FieldError{Provider: p.ID, Field: "auth.key_ref", Problem: "reference cannot be resolved without the imported secrets map"}
+		}
+		value, ok := refs.ResolveRef(ctx, p.Auth.KeyRef)
+		if !ok {
+			return KeyRow{}, &provider.FieldError{Provider: p.ID, Field: "auth.key_ref", Problem: fmt.Sprintf("reference %q is not present in the imported secrets map", p.Auth.KeyRef)}
+		}
+		// Database keys hold secrets encrypted; a v2 key_ref cannot be resolved
+		// at request time, so the imported value becomes the stored secret.
+		plaintext = []byte(value)
 	}
 	if key.AuthScheme == SchemeNone && sources != 0 {
 		return KeyRow{}, fmt.Errorf("providerstore: provider %q none auth carries a credential", p.ID)
@@ -276,16 +307,16 @@ func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID st
 	if key.AuthScheme != SchemeNone && sources != 1 {
 		return KeyRow{}, fmt.Errorf("providerstore: provider %q must have exactly one credential source", p.ID)
 	}
-	if p.Auth.Key != "" {
+	if plaintext != nil {
 		if keyring == nil {
 			return KeyRow{}, fmt.Errorf("providerstore: provider %q literal credential requires GNVIPI_MASTER_KEY", p.ID)
 		}
 		var err error
-		key.SecretEnc, key.SecretNonce, key.SecretKVer, err = keyring.Encrypt([]byte(p.Auth.Key), key.ID, key.ScopeOwner(), key.AuthScheme)
+		key.SecretEnc, key.SecretNonce, key.SecretKVer, err = keyring.Encrypt(plaintext, key.ID, key.ScopeOwner(), key.AuthScheme)
 		if err != nil {
 			return KeyRow{}, fmt.Errorf("providerstore: encrypt provider %q credential: %w", p.ID, err)
 		}
-		key.SecretLast4 = SecretLast4([]byte(p.Auth.Key), key.AuthScheme)
+		key.SecretLast4 = SecretLast4(plaintext, key.AuthScheme)
 	}
 	if err := ValidateKeyRow(key); err != nil {
 		return KeyRow{}, fmt.Errorf("providerstore: provider %q key: %w", p.ID, err)

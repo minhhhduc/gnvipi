@@ -135,7 +135,7 @@ func TestImportV2RoundTripScopesModelsAndAPIKeyMapping(t *testing.T) {
 		]
 	}`)
 
-	imported, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, ring)
+	imported, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, ring, nil)
 	if err != nil {
 		t.Fatalf("import v2: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	ring := importTestKeyring(t)
 	first := importDocument(t, "first", "First")
 
-	imported, err := providerstore.ImportV2(t.Context(), pool, first, "legacy-owner", false, ring)
+	imported, err := providerstore.ImportV2(t.Context(), pool, first, "legacy-owner", false, ring, nil)
 	if err != nil || !imported {
 		t.Fatalf("first import = imported %v err %v", imported, err)
 	}
@@ -202,7 +202,7 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 		t.Fatalf("import marker = hash %q at %q owner %q", firstHash, firstImportedAt, markerOwner)
 	}
 
-	imported, err = providerstore.ImportV2(t.Context(), pool, first, "legacy-owner", false, ring)
+	imported, err = providerstore.ImportV2(t.Context(), pool, first, "legacy-owner", false, ring, nil)
 	if err != nil || imported {
 		t.Fatalf("same-source import = imported %v err %v, want no-op", imported, err)
 	}
@@ -215,7 +215,7 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	}
 
 	changed := importDocument(t, "second", "Second")
-	if _, err := providerstore.ImportV2(t.Context(), pool, changed, "legacy-owner", false, ring); !errors.Is(err, providerstore.ErrV2SourceChanged) {
+	if _, err := providerstore.ImportV2(t.Context(), pool, changed, "legacy-owner", false, ring, nil); !errors.Is(err, providerstore.ErrV2SourceChanged) {
 		t.Fatalf("changed source error = %v, want ErrV2SourceChanged", err)
 	}
 	var currentID string
@@ -223,7 +223,7 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 		t.Fatalf("rejected changed source left provider %q, err %v", currentID, err)
 	}
 
-	imported, err = providerstore.ImportV2(t.Context(), pool, changed, "legacy-owner", true, ring)
+	imported, err = providerstore.ImportV2(t.Context(), pool, changed, "legacy-owner", true, ring, nil)
 	if err != nil || !imported {
 		t.Fatalf("forced changed import = imported %v err %v", imported, err)
 	}
@@ -246,6 +246,48 @@ func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	}
 }
 
+func TestImportV2ForcePreservesUnimportedProviders(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	ring := importTestKeyring(t)
+	if _, err := providerstore.ImportV2(t.Context(), pool, importDocument(t, "first", "First"), "legacy-owner", false, ring, nil); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	seedDatabaseProvider(t, pool, "manual")
+
+	if _, err := providerstore.ImportV2(t.Context(), pool, importDocument(t, "second", "Second"), "legacy-owner", true, ring, nil); err != nil {
+		t.Fatalf("forced import: %v", err)
+	}
+	if got, want := databaseProviderIDs(t, pool), []string{"manual", "second"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("providers after forced import = %v, want %v", got, want)
+	}
+	var manualKeys int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM provider_keys WHERE provider_id = 'manual'`).Scan(&manualKeys); err != nil {
+		t.Fatal(err)
+	}
+	if manualKeys != 1 {
+		t.Fatalf("database-managed provider keys after forced import = %d, want 1", manualKeys)
+	}
+}
+
+func TestImportV2ForceRejectsProviderOwnedByDatabase(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	ring := importTestKeyring(t)
+	if _, err := providerstore.ImportV2(t.Context(), pool, importDocument(t, "first", "First"), "legacy-owner", false, ring, nil); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	seedDatabaseProvider(t, pool, "manual")
+
+	_, err := providerstore.ImportV2(t.Context(), pool, importDocument(t, "manual", "Conflicting"), "legacy-owner", true, ring, nil)
+	if !errors.Is(err, providerstore.ErrV2ProviderConflict) || !strings.Contains(err.Error(), "manual") {
+		t.Fatalf("conflicting forced import error = %v, want ErrV2ProviderConflict naming manual", err)
+	}
+	if got, want := databaseProviderIDs(t, pool), []string{"first", "manual"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("providers after rejected forced import = %v, want %v", got, want)
+	}
+}
+
 func TestImportV2RejectsBearerHeaderOverride(t *testing.T) {
 	pool := newAdminTestPool(t, requiredImportTestDSN(t))
 	createImportOwner(t, pool)
@@ -263,7 +305,7 @@ func TestImportV2RejectsBearerHeaderOverride(t *testing.T) {
 		}]
 	}`)
 
-	_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t))
+	_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t), nil)
 	if err == nil || !strings.Contains(err.Error(), "auth.header_name") {
 		t.Fatalf("bearer header override error = %v, want auth.header_name rejection", err)
 	}
@@ -273,6 +315,70 @@ func TestImportV2RejectsBearerHeaderOverride(t *testing.T) {
 	}
 	if providers != 0 {
 		t.Fatalf("providers after rejected bearer override = %d, want 0", providers)
+	}
+}
+
+func TestImportV2RejectsUnresolvedKeyRef(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	raw := []byte(`{
+		"schema_version": 2,
+		"providers_v2": [{
+			"id":"referenced-key",
+			"name":"Referenced Key",
+			"base_url":"https://ref.example/v1",
+			"protocol":"openai-chat",
+			"auth":{"scheme":"bearer","key_ref":"provider-secret"},
+			"models":[{"alias":"ref/m","upstream_model":"m"}],
+			"timeouts":{},
+			"enabled":true
+		}]
+	}`)
+
+	_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t), nil)
+	if err == nil || !strings.Contains(err.Error(), "auth.key_ref") {
+		t.Fatalf("unresolved key_ref error = %v, want auth.key_ref rejection", err)
+	}
+	var providers int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM providers`).Scan(&providers); err != nil {
+		t.Fatal(err)
+	}
+	if providers != 0 {
+		t.Fatalf("providers after unresolved key_ref = %d, want 0", providers)
+	}
+}
+
+func TestImportV2EncryptsResolvedKeyRef(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	createImportOwner(t, pool)
+	ring := importTestKeyring(t)
+	raw := []byte(`{
+		"schema_version": 2,
+		"providers_v2": [{
+			"id":"referenced-key",
+			"name":"Referenced Key",
+			"base_url":"https://ref.example/v1",
+			"protocol":"openai-chat",
+			"auth":{"scheme":"bearer","key_ref":"provider-secret"},
+			"models":[{"alias":"ref/m","upstream_model":"m"}],
+			"timeouts":{},
+			"enabled":true
+		}]
+	}`)
+	refs := providerstore.MapRefResolver{"provider-secret": "resolved-secret"}
+	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, ring, refs); err != nil {
+		t.Fatalf("import resolved key_ref: %v", err)
+	}
+	rows, _, err := providerstore.NewDBRowSource(pool).LoadConfig(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Keys) != 1 || rows.Keys[0].KeyRef != "" || !rows.Keys[0].HasSecret() {
+		t.Fatalf("resolved key_ref row = %+v, want encrypted-only credential", rows.Keys)
+	}
+	credential, err := providerstore.ResolveKeyCredential(t.Context(), rows.Keys[0], ring, nil)
+	if err != nil || credential.Raw != "resolved-secret" {
+		t.Fatalf("resolved imported key_ref = %q, %v", credential.Raw, err)
 	}
 }
 
@@ -286,7 +392,7 @@ func TestImportV2PreservesUnpositionedSourceOrder(t *testing.T) {
 			{"id":"a-backup","name":"Backup","base_url":"https://backup.example/v1","protocol":"openai-chat","auth":{"scheme":"none"},"models":[{"alias":"shared","upstream_model":"backup"}],"timeouts":{},"enabled":true}
 		]
 	}`)
-	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t)); err != nil {
+	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t), nil); err != nil {
 		t.Fatalf("import v2: %v", err)
 	}
 	store := providerstore.NewStore(providerstore.NewDBRowSource(pool), providerstore.StoreOptions{})
@@ -314,7 +420,7 @@ func TestImportV2RollsBackEveryRowOnFailure(t *testing.T) {
 		]
 	}`)
 
-	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, ring); err == nil {
+	if _, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, ring, nil); err == nil {
 		t.Fatal("import with a DB-invalid second provider succeeded")
 	}
 	for _, table := range []string{"providers", "provider_keys", "key_models"} {
@@ -349,6 +455,41 @@ func createImportOwner(t *testing.T, pool *pgxpool.Pool) {
 	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, password_hash) VALUES ($1::uuid, 'legacy-owner', 'owner', 'test-hash')`, importOwnerID); err != nil {
 		t.Fatalf("create import owner: %v", err)
 	}
+}
+
+// seedDatabaseProvider inserts a provider and key that the v2 import did not
+// create, as an operator would through the admin API.
+func seedDatabaseProvider(t *testing.T, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO providers (id, name, protocol, base_url)
+		VALUES ($1, $1, 'openai-chat', 'https://' || $1 || '.example/v1')`, id); err != nil {
+		t.Fatalf("seed provider %s: %v", id, err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_keys (provider_id, name, auth_scheme)
+		VALUES ($1, 'manual', 'none')`, id); err != nil {
+		t.Fatalf("seed provider key %s: %v", id, err)
+	}
+}
+
+func databaseProviderIDs(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), `SELECT id FROM providers ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func importTestKeyring(t *testing.T) *providerstore.Keyring {

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/db"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
@@ -37,6 +38,12 @@ func runImportV2Command(ctx context.Context, args []string, lookup func(string) 
 	if err != nil {
 		return fmt.Errorf("v2 source: %w", err)
 	}
+	// v2 providers may reference credentials in the adjacent secrets map; the
+	// import resolves and encrypts them so database keys stay self-contained.
+	secrets, err := gatewayprovider.LoadSecrets(gatewayprovider.DefaultSecretsPath(*file))
+	if err != nil {
+		return fmt.Errorf("v2 secrets: %w", err)
+	}
 	cfg, err := db.LoadConfigFrom(lookup)
 	if err != nil {
 		return fmt.Errorf("database configuration: %w", err)
@@ -61,7 +68,7 @@ func runImportV2Command(ctx context.Context, args []string, lookup func(string) 
 	if err != nil {
 		return fmt.Errorf("provider key encryption: %w", err)
 	}
-	imported, err := providerstore.ImportV2(ctx, pool, source, *owner, *force, keyring)
+	imported, err := providerstore.ImportV2(ctx, pool, source, *owner, *force, keyring, providerstore.MapRefResolver(secrets))
 	if err != nil {
 		return fmt.Errorf("v2 import: %w", err)
 	}
