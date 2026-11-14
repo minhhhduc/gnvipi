@@ -176,7 +176,7 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	keyring, err := providerstore.LoadKeyringFromEnv()
 	if err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("provider key encryption: %w (set GVIPI_MASTER_KEY to the base64 32-byte key)", err)
+		return nil, fmt.Errorf("provider key encryption: %w (set GNVIPI_MASTER_KEY to the base64 32-byte key)", err)
 	}
 	state := newAuthState(pool, &password)
 	state.keyring = keyring

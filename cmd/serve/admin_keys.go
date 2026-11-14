@@ -53,7 +53,7 @@ func keyReachFor(identity *adminIdentity, key *providerstore.KeyRow) keyReach {
 	if identity.Role == auth.RoleOwner {
 		return keyReachFull
 	}
-	if key.OwnerID != "" && key.OwnerID == identity.UserID {
+	if key.OwnerID != "" && sameUserID(key.OwnerID, identity.UserID) {
 		return keyReachFull
 	}
 	if identity.Role == auth.RoleAdmin {
@@ -133,9 +133,14 @@ func patchScheme(current string, patch providerstore.KeyPatch) string {
 // keyPatch builds the providerstore patch. AllowKeyRef is only ever set for
 // owner and admin callers, which is what keeps key_ref out of user writes.
 func (r *keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPatch {
+	scheme := r.AuthScheme
+	if scheme != nil {
+		trimmed := strings.TrimSpace(*scheme)
+		scheme = &trimmed
+	}
 	return providerstore.KeyPatch{
 		Enabled:        r.Enabled,
-		AuthScheme:     r.AuthScheme,
+		AuthScheme:     scheme,
 		AuthHeaderName: r.AuthHeaderName,
 		Secret:         r.secretValue(),
 		KeyEnv:         r.KeyEnv,
@@ -211,8 +216,6 @@ func keyJSON(record *providerstore.KeyRecord) gin.H {
 		"secret_last4":     record.SecretLast4,
 		"has_key_env":      record.KeyEnv != "",
 		"has_key_ref":      record.KeyRef != "",
-		"key_env":          record.KeyEnv,
-		"key_ref":          record.KeyRef,
 		"created_at":       record.CreatedAt,
 		"updated_at":       record.UpdatedAt,
 	}
@@ -406,11 +409,22 @@ func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteReque
 		}
 		return "", true
 	}
-	if identity.Role == auth.RoleOwner || id == identity.UserID {
+	if identity.Role == auth.RoleOwner || sameUserID(id, identity.UserID) {
 		return id, true
 	}
 	adminAPIError(c, http.StatusForbidden, "forbidden", "a key may only be created for yourself")
 	return "", false
+}
+
+// sameUserID compares two UUID spellings. Postgres and pgtype both accept
+// upper-case and dashless forms, so a raw string compare would reject a caller
+// passing their own id in a different (but equivalent) notation.
+func sameUserID(a, b string) bool {
+	var left, right pgtype.UUID
+	if left.Scan(a) != nil || right.Scan(b) != nil {
+		return a == b
+	}
+	return left.Bytes == right.Bytes
 }
 
 func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
@@ -540,6 +554,12 @@ func handleAdminKeyTest(state *authState) gin.HandlerFunc {
 		}
 		credential, err := providerstore.ResolveKeyCredential(ctx, record.KeyRow, state.keyring, nil)
 		if err != nil {
+			// A missing or rotated master key is a server-side failure, not a
+			// problem with the caller's key.
+			if errors.Is(err, providerstore.ErrMissingMasterKey) {
+				adminAPIError(c, http.StatusInternalServerError, "credential_unavailable", "stored key material cannot be decrypted")
+				return
+			}
 			adminFieldError(c, http.StatusUnprocessableEntity, "credential", strings.TrimPrefix(err.Error(), "providerstore: "))
 			return
 		}
