@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,29 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
+// serveTestApplicationName scopes the listener-count queries to this package's
+// test connections. go test runs packages in parallel against one
+// GNVIPI_TEST_DATABASE_URL, so a database-global count collides with
+// internal/providerstore's watchers.
+const serveTestApplicationName = "gnvipi-serve-test"
+
+// captureLogf collects log lines emitted by the runtime under test.
+func captureLogf() (logf func(string, ...any), logged func() string) {
+	var mu sync.Mutex
+	var lines []string
+	logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	logged = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Join(lines, "\n")
+	}
+	return logf, logged
+}
+
 // stubSnapshotSource lets the runtime tests control the first load and the
 // config_state.version without a database.
 type stubSnapshotSource struct {
@@ -25,6 +50,12 @@ type stubSnapshotSource struct {
 	rows    providerstore.Rows
 	version int64
 	loadErr error
+	// versionHook, when set, replaces Version so a test can observe the
+	// deadline the health probe passes to the version read.
+	versionHook func(context.Context) (int64, error)
+	// loadHook, when set, replaces LoadConfig so a load can fail while the
+	// version read still succeeds (a reload failure, not a database outage).
+	loadHook func(context.Context) (providerstore.Rows, int64, error)
 }
 
 func (s *stubSnapshotSource) LoadConfig(ctx context.Context) (providerstore.Rows, int64, error) {
@@ -32,16 +63,27 @@ func (s *stubSnapshotSource) LoadConfig(ctx context.Context) (providerstore.Rows
 		return providerstore.Rows{}, 0, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.loadErr != nil {
-		return providerstore.Rows{}, 0, s.loadErr
+	hook := s.loadHook
+	rows, version, loadErr := s.rows, s.version, s.loadErr
+	s.mu.Unlock()
+	if hook != nil {
+		return hook(ctx)
 	}
-	return s.rows, s.version, nil
+	if loadErr != nil {
+		return providerstore.Rows{}, 0, loadErr
+	}
+	return rows, version, nil
 }
 
 func (s *stubSnapshotSource) Version(ctx context.Context) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	s.mu.Lock()
+	hook := s.versionHook
+	s.mu.Unlock()
+	if hook != nil {
+		return hook(ctx)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,6 +192,7 @@ func TestProviderRuntimeHealthReportsLastSnapshotWhenDatabaseIsDown(t *testing.T
 	if err != nil {
 		t.Fatalf("open provider runtime: %v", err)
 	}
+	runtime.healthTTL = -1 // no probe cache: the test changes state between checks
 	t.Cleanup(runtime.Close)
 
 	health := runtime.health(t.Context())
@@ -207,6 +250,7 @@ func TestProviderRuntimeHealthReportsFailedReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open provider runtime: %v", err)
 	}
+	runtime.healthTTL = -1
 	t.Cleanup(runtime.Close)
 
 	if err := runtime.store.Reload(t.Context()); err != nil {
@@ -267,6 +311,7 @@ func TestHealthzReportsSnapshotState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open provider runtime: %v", err)
 	}
+	runtime.healthTTL = -1
 	t.Cleanup(runtime.Close)
 
 	rec, body = serve(modelsAndHealthMiddleware(getModels, exec, runtime))
@@ -336,6 +381,7 @@ func TestProviderRuntimeKeepsLastSnapshotWhenDatabaseGoesDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open provider runtime: %v", err)
 	}
+	runtime.healthTTL = -1
 	t.Cleanup(runtime.Close)
 
 	var configVersion int64
@@ -424,6 +470,7 @@ func TestProviderRuntimeWatchesCommittedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open provider runtime: %v", err)
 	}
+	runtime.healthTTL = -1
 	t.Cleanup(runtime.Close)
 	baseline := runtime.health(ctx).SnapshotVersion
 	waitForListenerSessions(t, ctx, pool, before+1)
@@ -457,14 +504,17 @@ func TestProviderRuntimeWatchesCommittedWrites(t *testing.T) {
 	waitForListenerSessions(t, ctx, pool, before)
 }
 
-// listenerSessions counts sessions in this database parked in
-// LISTEN gnvipi_config.
+// listenerSessions counts this test package's sessions parked in
+// LISTEN gnvipi_config. Counting is scoped by application_name because another
+// package's watcher against the same database must not satisfy this assertion.
 func listenerSessions(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
 	t.Helper()
 	var count int
 	if err := pool.QueryRow(ctx,
 		`SELECT count(*) FROM pg_stat_activity
-		  WHERE datname = current_database() AND query = 'LISTEN gnvipi_config'`).Scan(&count); err != nil {
+		  WHERE datname = current_database()
+		    AND application_name = $1
+		    AND query = 'LISTEN gnvipi_config'`, serveTestApplicationName).Scan(&count); err != nil {
 		t.Fatalf("count listener sessions: %v", err)
 	}
 	return count
@@ -482,6 +532,269 @@ func waitForListenerSessions(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		case <-ctx.Done():
 			t.Fatalf("wait for %d listener sessions: %v", want, ctx.Err())
 		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// TestProviderRuntimeHealthRedactsDatabaseErrors keeps driver text — DSN host,
+// user, database and relation/schema names — out of the unauthenticated
+// /healthz body while retaining an operator signal in the server log.
+func TestProviderRuntimeHealthRedactsDatabaseErrors(t *testing.T) {
+	logf, logged := captureLogf()
+	const connectionDetail = "failed to connect to `host=db.internal user=gnvipi database=gnvipi`: dial error"
+	pingErr := errors.New(connectionDetail)
+	source := &stubSnapshotSource{version: 7, rows: stubSnapshotRows()}
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error { return pingErr },
+		Logf: logf,
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	runtime.healthTTL = -1
+	t.Cleanup(runtime.Close)
+
+	health := runtime.health(t.Context())
+	if health.Detail != "database unreachable" {
+		t.Fatalf("health detail = %q, want the fixed category \"database unreachable\"", health.Detail)
+	}
+	for _, secret := range []string{"db.internal", "user=gnvipi", "database=gnvipi"} {
+		if strings.Contains(health.Detail, secret) {
+			t.Fatalf("health detail leaks %q: %q", secret, health.Detail)
+		}
+	}
+	if !strings.Contains(logged(), "host=db.internal") {
+		t.Fatalf("operator log is missing the raw probe error: %q", logged())
+	}
+
+	// A failed reload has its own category and must not leak relation or schema
+	// names either.
+	pingErr = nil
+	source.mu.Lock()
+	source.loadHook = func(context.Context) (providerstore.Rows, int64, error) {
+		return providerstore.Rows{}, 0, errors.New(`failed to read relation "provider_keys": permission denied`)
+	}
+	source.mu.Unlock()
+	if err := runtime.store.Reload(t.Context()); err == nil {
+		t.Fatal("reload with a failing source returned no error")
+	}
+	health = runtime.health(t.Context())
+	if health.Detail != "reload failed" {
+		t.Fatalf("health detail = %q, want the fixed category \"reload failed\"", health.Detail)
+	}
+	if strings.Contains(health.Detail, "provider_keys") {
+		t.Fatalf("health detail leaks a relation name: %q", health.Detail)
+	}
+	if !strings.Contains(logged(), "provider_keys") {
+		t.Fatalf("operator log is missing the raw reload error: %q", logged())
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(modelsAndHealthMiddleware(func() []gatewayModel { return nil }, nvidia.NewExecutor(&nvidia.Options{}), runtime))
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse /healthz body: %v", err)
+	}
+	detail, _ := body["detail"].(string)
+	if detail == "" || detail != "reload failed" {
+		t.Fatalf("/healthz detail = %q, want the fixed category \"reload failed\"", detail)
+	}
+}
+
+// TestProviderRuntimeHealthProbeSharesOneDeadline proves the database probe
+// gives both the reachability check and the version read one 2s budget, not two
+// sequential 2s budgets that hold a pool connection each.
+func TestProviderRuntimeHealthProbeSharesOneDeadline(t *testing.T) {
+	source := &stubSnapshotSource{version: 5, rows: stubSnapshotRows()}
+	var remaining time.Duration
+	source.versionHook = func(ctx context.Context) (int64, error) {
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining = time.Until(deadline)
+		}
+		return 5, nil
+	}
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error {
+			time.Sleep(500 * time.Millisecond)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	runtime.health(t.Context())
+	if remaining <= 0 {
+		t.Fatal("version probe received no deadline")
+	}
+	if remaining > 1700*time.Millisecond {
+		t.Fatalf("version probe deadline = %v remaining after a 500ms ping, want the shared budget (<1.7s)", remaining)
+	}
+}
+
+// TestProviderRuntimeHealthProbeCollapsesConcurrentChecks proves a burst of
+// unauthenticated /healthz requests shares one database probe instead of
+// leasing a pool connection each.
+func TestProviderRuntimeHealthProbeCollapsesConcurrentChecks(t *testing.T) {
+	source := &stubSnapshotSource{version: 5, rows: stubSnapshotRows()}
+	var pings int32
+	release := make(chan struct{})
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error {
+			atomic.AddInt32(&pings, 1)
+			<-release
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	const callers = 8
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			runtime.health(context.Background())
+		}()
+	}
+	close(start)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&pings) == 0 {
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatal("no health probe started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&pings); got != 1 {
+		t.Fatalf("concurrent health checks issued %d probes, want 1 shared probe", got)
+	}
+}
+
+// TestProviderRuntimeHealthReportsWatcherError keeps "not refreshing" distinct
+// from "database down": the watcher cannot connect, but the published snapshot
+// and the database probe are fine.
+func TestProviderRuntimeHealthReportsWatcherError(t *testing.T) {
+	source := &stubSnapshotSource{version: 6, rows: stubSnapshotRows()}
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	runtime.healthTTL = -1
+	t.Cleanup(runtime.Close)
+
+	runtime.noteWatcherError(errors.New("providerstore: listen connection: connection refused"))
+	health := runtime.health(t.Context())
+	if !health.DBOK {
+		t.Fatal("db_ok = false while the database is reachable")
+	}
+	if health.WatcherOK {
+		t.Fatal("watcher_ok = true after a watcher connect failure")
+	}
+	if health.Detail != "watcher not refreshing" {
+		t.Fatalf("health detail = %q, want \"watcher not refreshing\"", health.Detail)
+	}
+	if !health.Degraded {
+		t.Fatal("health is not degraded while the watcher cannot refresh")
+	}
+
+	runtime.noteWatcherError(nil)
+	health = runtime.health(t.Context())
+	if !health.WatcherOK || health.Degraded {
+		t.Fatalf("watcher recovery: watcher_ok=%v degraded=%v", health.WatcherOK, health.Degraded)
+	}
+}
+
+// TestProviderRuntimeHealthKeepsObservedConfigVersionDuringOutage proves
+// config_version reports the last observed value and does not regress to the
+// snapshot version when a probe fails.
+func TestProviderRuntimeHealthKeepsObservedConfigVersionDuringOutage(t *testing.T) {
+	source := &stubSnapshotSource{version: 8, rows: stubSnapshotRows()}
+	var pingErr error
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error { return pingErr },
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	runtime.healthTTL = -1
+	t.Cleanup(runtime.Close)
+
+	// A committed write advances config_state.version before this instance
+	// reloads; the probe observes it.
+	source.setVersion(9)
+	health := runtime.health(t.Context())
+	if health.SnapshotVersion != 8 || health.ConfigVersion != 9 {
+		t.Fatalf("versions = snapshot %d config %d, want 8/9", health.SnapshotVersion, health.ConfigVersion)
+	}
+
+	pingErr = errors.New("connection refused")
+	health = runtime.health(t.Context())
+	if health.ConfigVersion != 9 {
+		t.Fatalf("config_version = %d during an outage, want the last observed 9", health.ConfigVersion)
+	}
+}
+
+// TestProviderRuntimeLogsCredentialDiagnosticsAndAudits proves per-key decrypt
+// failures are surfaced: one audit event and a log line naming the key and
+// reason, never the credential material.
+func TestProviderRuntimeLogsCredentialDiagnosticsAndAudits(t *testing.T) {
+	rows := stubSnapshotRows()
+	rows.Keys[0].AuthScheme = providerstore.SchemeBearer
+	rows.Keys[0].SecretEnc = []byte("sealed-secret-material")
+	rows.Keys[0].SecretNonce = make([]byte, providerstore.SecretNonceSize)
+	rows.Keys[0].SecretKVer = 1
+	rows.Keys[0].SecretLast4 = "l4st"
+	source := &stubSnapshotSource{version: 2, rows: rows}
+
+	logf, logged := captureLogf()
+	var auditEvents []providerstore.AuditEvent
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Logf: logf,
+		Audit: func(event providerstore.AuditEvent) {
+			auditEvents = append(auditEvents, event)
+		},
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	diagnostics := runtime.store.Current().Diagnostics()
+	if len(diagnostics) != 1 || diagnostics[0].KeyID != "stub-key" {
+		t.Fatalf("diagnostics = %+v, want one for stub-key", diagnostics)
+	}
+	if len(auditEvents) != 1 {
+		t.Fatalf("audit events = %+v, want one", auditEvents)
+	}
+	if got := auditEvents[0].Code; got != providerstore.AuditDecryptFailed {
+		t.Fatalf("audit code = %q, want %q", got, providerstore.AuditDecryptFailed)
+	}
+	if len(auditEvents[0].KeyIDs) != 1 || auditEvents[0].KeyIDs[0] != "stub-key" {
+		t.Fatalf("audit key ids = %v, want [stub-key]", auditEvents[0].KeyIDs)
+	}
+
+	lines := logged()
+	if !strings.Contains(lines, "stub-key") || !strings.Contains(lines, "cannot be decrypted") {
+		t.Fatalf("diagnostic log = %q, want the key id and reason", lines)
+	}
+	for _, secret := range []string{"sealed-secret-material"} {
+		if strings.Contains(lines, secret) {
+			t.Fatalf("diagnostic log leaks credential material: %q", lines)
 		}
 	}
 }

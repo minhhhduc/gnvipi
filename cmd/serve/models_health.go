@@ -67,6 +67,7 @@ func modelsAndHealthMiddleware(getModels func() []gatewayModel, exec *nvidia.Exe
 				out["status"] = status
 				out["degraded"] = health.Degraded
 				out["db_ok"] = health.DBOK
+				out["watcher_ok"] = health.WatcherOK
 				out["snapshot_version"] = health.SnapshotVersion
 				out["config_version"] = health.ConfigVersion
 				out["snapshot_age"] = health.SnapshotAge.Seconds()
