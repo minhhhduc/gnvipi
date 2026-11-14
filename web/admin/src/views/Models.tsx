@@ -476,7 +476,6 @@ function KeyEditorDialog({
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<KeyModel[] | null>(target ? null : []);
   const [modelAlias, setModelAlias] = useState("");
-  const [modelUpstream, setModelUpstream] = useState("");
 
   const base = `/admin/api/providers/${encodeURIComponent(provider.id)}/keys`;
 
@@ -491,9 +490,8 @@ function KeyEditorDialog({
 
   const addModel = () => {
     if (!modelAlias.trim()) return;
-    setRows(toggleKeyModel(rows ?? [], { alias: modelAlias.trim(), upstream_model: buildUpstreamModel(modelAlias.trim(), modelUpstream) }, true));
+    setRows(toggleKeyModel(rows ?? [], { alias: modelAlias.trim(), upstream_model: buildUpstreamModel(modelAlias.trim(), "") }, true));
     setModelAlias("");
-    setModelUpstream("");
   };
 
   const effectiveScheme = shared ? "none" : "bearer";
@@ -588,10 +586,8 @@ function KeyEditorDialog({
               </div>
             ))}
             <div class="flex flex-wrap items-center gap-2">
-              <input class="input mono h-7 w-[150px]" aria-label="New model alias" placeholder="alias or vendor/*" value={modelAlias}
+              <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={modelAlias}
                 onInput={(e) => setModelAlias((e.currentTarget as HTMLInputElement).value)} />
-              <input class="input mono h-7 w-[190px]" aria-label="New upstream model" placeholder="upstream model (defaults to alias)" value={modelUpstream}
-                onInput={(e) => setModelUpstream((e.currentTarget as HTMLInputElement).value)} />
               <button class="btn btn-sm" disabled={!modelAlias.trim()} onClick={addModel}>Add model</button>
             </div>
             <span class="block text-[11px] font-normal text-dim">
@@ -618,7 +614,6 @@ function KeyModelsPanel({
 }) {
   const [rows, setRows] = useState<KeyModel[]>(initial);
   const [alias, setAlias] = useState("");
-  const [upstream, setUpstream] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choices = modelChoices(provider.models, rows);
@@ -627,7 +622,6 @@ function KeyModelsPanel({
     if (!value.trim()) return;
     setRows(toggleKeyModel(rows, { alias: value, upstream_model: buildUpstreamModel(value, upstreamModel) }, true));
     setAlias("");
-    setUpstream("");
   };
 
   const update = (target: string, next: Partial<KeyModel>) => {
@@ -678,11 +672,9 @@ function KeyModelsPanel({
       ))}
       {rows.length === 0 && <div class="text-[11px] text-dim">No models selected for this key.</div>}
       <div class="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-        <input class="input mono h-7 w-[180px]" aria-label="New model alias" placeholder="alias or vendor/*" value={alias}
+        <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={alias}
           onInput={(e) => setAlias((e.currentTarget as HTMLInputElement).value)} />
-        <input class="input mono h-7 w-[220px]" aria-label="New upstream model" placeholder="upstream model (defaults to alias)" value={upstream}
-          onInput={(e) => setUpstream((e.currentTarget as HTMLInputElement).value)} />
-        <button class="btn btn-sm" disabled={!alias.trim()} onClick={() => add(alias, upstream)}>Add model</button>
+        <button class="btn btn-sm" disabled={!alias.trim()} onClick={() => add(alias, "")}>Add model</button>
       </div>
       {choices.length > 0 && (
         <div class="flex flex-wrap items-center gap-1.5">
