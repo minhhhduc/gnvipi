@@ -394,3 +394,94 @@ func TestProviderRuntimeKeepsLastSnapshotWhenDatabaseGoesDown(t *testing.T) {
 		t.Fatalf("/healthz snapshot_version = %v, want %d", body["snapshot_version"], configVersion)
 	}
 }
+
+// TestProviderRuntimeWatchesCommittedWrites proves the wiring, not just the
+// library: the runtime opened for a real pool publishes a committed write
+// through LISTEN gnvipi_config (the poll interval is an hour), and Close tears
+// down the listener connection.
+func TestProviderRuntimeWatchesCommittedWrites(t *testing.T) {
+	dsn := os.Getenv("GNVIPI_TEST_DATABASE_URL")
+	if dsn == "" {
+		if os.Getenv("GNVIPI_REQUIRE_DB_TESTS") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when GNVIPI_REQUIRE_DB_TESTS=true")
+		}
+		t.Skip("GNVIPI_TEST_DATABASE_URL is not set; skipping DB-backed runtime tests")
+	}
+	ctx := t.Context()
+	pool := newAdminTestPool(t, dsn)
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO providers(id, name, protocol, base_url)
+		 VALUES('watch201', 'Watch 201', 'openai-chat', 'https://watch201.example.com/v1')`); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+
+	before := listenerSessions(t, ctx, pool)
+	runtime, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(pool), providerRuntimeOptions{
+		ListenPool:   pool,
+		PollInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+	baseline := runtime.health(ctx).SnapshotVersion
+	waitForListenerSessions(t, ctx, pool, before+1)
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO providers(id, name, protocol, base_url)
+		 VALUES('watch201-second', 'Watch 201 second', 'openai-chat', 'https://watch201b.example.com/v1')`); err != nil {
+		t.Fatalf("insert second provider: %v", err)
+	}
+	var committed int64
+	if err := pool.QueryRow(ctx, `SELECT version FROM config_state WHERE id`).Scan(&committed); err != nil {
+		t.Fatalf("read config_state.version: %v", err)
+	}
+	if committed <= baseline {
+		t.Fatalf("config_state.version = %d after a committed write, want > %d", committed, baseline)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for runtime.health(ctx).SnapshotVersion != committed {
+		if time.Now().After(deadline) {
+			t.Fatalf("snapshot version = %d after 10s, want %d (last error: %v)",
+				runtime.health(ctx).SnapshotVersion, committed, runtime.store.LastError())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, ok := runtime.store.Current().Provider("watch201-second"); !ok {
+		t.Fatal("snapshot is missing the provider written after startup")
+	}
+
+	runtime.Close()
+	waitForListenerSessions(t, ctx, pool, before)
+}
+
+// listenerSessions counts sessions in this database parked in
+// LISTEN gnvipi_config.
+func listenerSessions(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM pg_stat_activity
+		  WHERE datname = current_database() AND query = 'LISTEN gnvipi_config'`).Scan(&count); err != nil {
+		t.Fatalf("count listener sessions: %v", err)
+	}
+	return count
+}
+
+func waitForListenerSessions(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for listenerSessions(t, ctx, pool) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("LISTEN gnvipi_config sessions = %d after 10s, want %d",
+				listenerSessions(t, ctx, pool), want)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for %d listener sessions: %v", want, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
