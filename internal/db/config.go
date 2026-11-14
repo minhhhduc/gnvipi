@@ -123,6 +123,31 @@ func LoadMigrationURLFrom(lookup func(string) (string, bool)) (string, error) {
 	return appURL, nil
 }
 
+// MaintenanceEnv names the optional phase-2 retention credential. Audit rows
+// are append-only for the application role, so pruning them requires a separate
+// role that holds DELETE on audit_log.
+const MaintenanceEnv = "GNVIPI_MAINTENANCE_DATABASE_URL"
+
+// LoadMaintenanceURL reads the optional retention credential. An empty value
+// disables audit pruning; it never falls back to the runtime DSN, because the
+// application role is denied DELETE on audit_log and a fallback would surface
+// as a nightly permission error instead of a configuration error.
+func LoadMaintenanceURL() (string, error) {
+	return LoadMaintenanceURLFrom(os.LookupEnv)
+}
+
+// LoadMaintenanceURLFrom is LoadMaintenanceURL with an injectable environment.
+func LoadMaintenanceURLFrom(lookup func(string) (string, bool)) (string, error) {
+	raw := strings.TrimSpace(envValue(lookup, MaintenanceEnv))
+	if raw == "" {
+		return "", nil
+	}
+	if err := ValidateDSN(raw); err != nil {
+		return "", fmt.Errorf("%s: %w", MaintenanceEnv, err)
+	}
+	return raw, nil
+}
+
 // IsProduction reports whether env selects production mode.
 func IsProduction(env string) bool {
 	return strings.EqualFold(strings.TrimSpace(env), EnvProduction)
