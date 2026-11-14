@@ -624,7 +624,7 @@ func TestModelsAndHealthMiddleware(t *testing.T) {
 	}
 
 	engine := gin.New()
-	engine.Use(modelsAndHealthMiddleware(func() []gatewayModel { return modelsList }, nil))
+	engine.Use(modelsAndHealthMiddleware(func() []gatewayModel { return modelsList }, nil, nil))
 
 	for _, path := range []string{"/v1/models", "/v1/models/"} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)

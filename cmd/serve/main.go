@@ -223,6 +223,16 @@ func runServer() (err error) {
 		adminAuth.clientIPs = clientIPs
 	}
 
+	// Database mode also owns routing configuration: one immutable snapshot per
+	// process, replaced after every committed write. A configured database that
+	// cannot produce a valid first snapshot is a startup error, so the process
+	// never serves an empty or partially validated configuration.
+	snapshotRuntime, err := openConfiguredProviderRuntime(ctx, appState)
+	if err != nil {
+		return err
+	}
+	defer snapshotRuntime.Close()
+
 	exec := nvidia.NewExecutor(&nvidia.Options{
 		FlagCaptcha:  *captchaFlag,
 		Coalesce:     time.Duration(*coalesceMs) * time.Millisecond,
@@ -483,7 +493,7 @@ func runServer() (err error) {
 				// engine.POST("/internal/openrouter/chat/completions", openRouterProxyHandler)
 
 				// Catalog and health middleware must be installed before default routes.
-				engine.Use(modelsAndHealthMiddleware(getModels, exec))
+				engine.Use(modelsAndHealthMiddleware(getModels, exec, snapshotRuntime))
 			}),
 		).
 		WithHooks(hooks).
