@@ -75,6 +75,12 @@ func runCLICommand(
 		command = func(ctx context.Context) error { return runMigrateCommand(ctx, args[1:], lookup, migrate) }
 	case len(args) > 1 && args[0] == "admin" && args[1] == "import-v2":
 		command = func(ctx context.Context) error { return importV2(ctx, args[2:], lookup) }
+	case len(args) > 1 && args[0] == "admin" && args[1] == "create-owner":
+		command = func(ctx context.Context) error {
+			return runCreateOwnerCommand(ctx, args[2:], lookup, os.Stdin, os.Stdout)
+		}
+	case len(args) > 1 && args[0] == "admin" && args[1] == "reset-password":
+		command = func(ctx context.Context) error { return runResetPasswordCommand(ctx, args[2:], lookup, os.Stdin) }
 	default:
 		return false, nil
 	}
@@ -221,6 +227,9 @@ func runServer() (err error) {
 		// which openAppDB does not know.
 		adminAuth.loopbackBind = adminLoopbackBind(*addr)
 		adminAuth.clientIPs = clientIPs
+		// GNVIPI_ADMIN_TOKEN (or -admin-token) is a one-time bootstrap
+		// credential in database mode: it works only while no owner exists.
+		adminAuth.bootstrapToken = *adminToken
 	}
 
 	// Database mode also owns routing configuration: one immutable snapshot per

@@ -94,6 +94,35 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "display_name", "display_name must be at most 200 characters")
 			return
 		}
+		// The one-time bootstrap token creates the first owner through the same
+		// advisory-locked path as the CLI, so a concurrent bootstrap cannot
+		// create two owners.
+		if identity := adminIdentityOf(c); identity != nil && identity.Bootstrap {
+			role := auth.Role(strings.TrimSpace(req.Role))
+			if role != "" && role != auth.RoleOwner {
+				adminFieldError(c, http.StatusBadRequest, "role", "the bootstrap token may only create the first owner")
+				return
+			}
+			if err := auth.ValidatePassword(req.Password, req.Username, req.Email); err != nil {
+				adminFieldError(c, http.StatusBadRequest, "password", err.Error())
+				return
+			}
+			user, err := auth.CreateFirstOwner(c.Request.Context(), state.pool, auth.CreateOwnerInput{
+				Username:    req.Username,
+				Email:       req.Email,
+				DisplayName: req.DisplayName,
+				Password:    req.Password,
+			}, state.password)
+			switch {
+			case errors.Is(err, auth.ErrUsersExist):
+				adminAPIError(c, http.StatusConflict, "users_exist", "an owner already exists; the bootstrap token is ignored")
+			case err != nil:
+				adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the owner")
+			default:
+				c.JSON(http.StatusCreated, adminUserJSON(user))
+			}
+			return
+		}
 		role := auth.RoleUser
 		if raw := strings.TrimSpace(req.Role); raw != "" {
 			role = auth.Role(raw)
