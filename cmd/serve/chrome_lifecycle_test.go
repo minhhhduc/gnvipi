@@ -98,6 +98,7 @@ func TestChromeAdminStartsIdle(t *testing.T) {
 }
 
 func TestChromeAdminStartStopRestartUsesCurrentTokens(t *testing.T) {
+	seedRequestFixture(t)
 	tokens := make(chan string, 2)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokens <- r.Header.Get("nv-captcha-token")
@@ -126,7 +127,7 @@ func TestChromeAdminStartStopRestartUsesCurrentTokens(t *testing.T) {
 		return &lifecycleTestBrowser{}, pool, nil
 	})
 	t.Cleanup(lifecycle.Close)
-	request := clipexec.Request{Model: "deepseek-ai/deepseek-v4-pro", Payload: []byte(`{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`)}
+	request := clipexec.Request{Model: requestFixture, Payload: []byte(`{"model":"` + requestFixture + `","messages":[{"role":"user","content":"hi"}]}`)}
 	options := clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 	for _, wantToken := range []string{"generation-1", "generation-2"} {
 		code, status := lifecycleTestHTTP(t, lifecycle, http.MethodPost, `{"mode":"start","all":true}`)
@@ -470,6 +471,7 @@ func TestChromeLifecycleSlowSnapshotDoesNotBlockKillAllCancellation(t *testing.T
 }
 
 func TestChromeLifecycleOverlappingStopsRetireRestartedGeneration(t *testing.T) {
+	seedRequestFixture(t)
 	tokens := make(chan string, 2)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokens <- r.Header.Get("nv-captcha-token")
@@ -567,7 +569,7 @@ func TestChromeLifecycleOverlappingStopsRetireRestartedGeneration(t *testing.T) 
 			t.Fatalf("retired generation %d left a browser running", i+1)
 		}
 	}
-	request := clipexec.Request{Model: "deepseek-ai/deepseek-v4-pro", Payload: []byte(`{"model":"deepseek-ai/deepseek-v4-pro","messages":[{"role":"user","content":"hi"}]}`)}
+	request := clipexec.Request{Model: requestFixture, Payload: []byte(`{"model":"` + requestFixture + `","messages":[{"role":"user","content":"hi"}]}`)}
 	options := clipexec.Options{SourceFormat: sdktranslator.FormatOpenAI}
 	if _, err := exec.Execute(t.Context(), nil, request, options); err == nil || !strings.Contains(err.Error(), "captcha token required") {
 		t.Fatalf("stopped executor still consults a retired pool: %v", err)

@@ -16,17 +16,13 @@ import (
 )
 
 func TestCycleConfigPersists(t *testing.T) {
-	first := models.DefaultModel
-	second := ""
-	for id := range models.Snapshot() {
-		if id != first {
-			second = id
-			break
-		}
-	}
-	if second == "" {
-		t.Fatal("test catalog needs two models")
-	}
+	const first, second = "fixture/cycle-one", "fixture/cycle-two"
+	saved := models.Snapshot()
+	models.Replace(map[string]models.ModelInfo{
+		first:  {Slug: "cycle-one", Namespace: models.Namespace, FunctionID: "00000000-0000-0000-0000-000000000006"},
+		second: {Slug: "cycle-two", Namespace: models.Namespace, FunctionID: "00000000-0000-0000-0000-000000000007"},
+	})
+	t.Cleanup(func() { models.Replace(saved) })
 	path := filepath.Join(t.TempDir(), "models.json")
 	p := &modelPrefs{path: path}
 	if err := p.setCycle(cycleConfig{Models: []string{first, second}}); err != nil {

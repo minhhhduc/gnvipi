@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 func TestStatsEventsRingAndTTFBAvg(t *testing.T) {
@@ -105,6 +107,18 @@ func TestMain(m *testing.M) {
 		}
 		panic(err)
 	}
+	// The catalog is runtime state; publish a synthetic fixture for every model
+	// the executor's reasoning profiles know about.
+	fixtures := make(map[string]models.ModelInfo, len(reasoningProfiles))
+	for id := range reasoningProfiles {
+		fixtures[id] = models.ModelInfo{
+			Slug:       "synthetic",
+			Namespace:  models.Namespace,
+			FunctionID: "00000000-0000-0000-0000-000000000004",
+		}
+	}
+	models.Replace(fixtures)
+
 	code := m.Run()
 	if statLog != nil {
 		statLog.close()

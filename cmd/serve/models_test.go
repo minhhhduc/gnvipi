@@ -53,15 +53,20 @@ func TestBuildCatalogVirtualModels(t *testing.T) {
 }
 
 func TestBuildCatalogNvidiaModels(t *testing.T) {
+	const (
+		visible  = "fixture/vendor-visible"
+		hidden   = "fixture/vendor-hidden"
+		implicit = "fixture/vendor-implicit"
+	)
 	fakeNvidiaModels := []*cliproxy.ModelInfo{
-		{ID: "nvidia/llama-3.1-nemotron-70b-instruct", OwnedBy: "nvidia", Created: 100},
-		{ID: "moonshotai/kimi-k3", OwnedBy: "moonshotai", Created: 200},
-		{ID: "meta/llama-3.1-8b-instruct", OwnedBy: "meta", Created: 300},
+		{ID: visible, OwnedBy: "fixture", Created: 100},
+		{ID: hidden, OwnedBy: "fixture", Created: 200},
+		{ID: implicit, OwnedBy: "fixture", Created: 300},
 	}
 	getNvidia := func() []*cliproxy.ModelInfo { return fakeNvidiaModels }
 
 	p := &modelPrefs{
-		hidden:  map[string]struct{}{"meta/llama-3.1-8b-instruct": {}},
+		hidden:  map[string]struct{}{hidden: {}},
 		deleted: map[string]struct{}{},
 	}
 
@@ -72,33 +77,25 @@ func TestBuildCatalogNvidiaModels(t *testing.T) {
 		byID[m.ID] = m
 	}
 
-	if _, exists := byID["meta/llama-3.1-8b-instruct"]; exists {
+	if _, exists := byID[hidden]; exists {
 		t.Errorf("hidden NVIDIA model should be excluded from catalog")
 	}
 
-	kimi, exists := byID["moonshotai/kimi-k3"]
+	model, exists := byID[visible]
 	if !exists {
-		t.Fatalf("expected kimi-k3 in catalog")
+		t.Fatalf("expected %s in catalog", visible)
 	}
-	if kimi.OwnedBy != "moonshotai" {
-		t.Errorf("kimi owned_by = %q, want moonshotai", kimi.OwnedBy)
+	if model.OwnedBy != "fixture" {
+		t.Errorf("owned_by = %q, want fixture", model.OwnedBy)
 	}
-	if kimi.UpstreamProtocol != string(ir.ProtocolOpenAIChat) {
-		t.Errorf("kimi upstream_protocol = %q, want %q", kimi.UpstreamProtocol, ir.ProtocolOpenAIChat)
+	if model.UpstreamProtocol != string(ir.ProtocolOpenAIChat) {
+		t.Errorf("upstream_protocol = %q, want %q", model.UpstreamProtocol, ir.ProtocolOpenAIChat)
 	}
-	if kimi.Capabilities == nil || !kimi.Capabilities.Reasoning || !kimi.Capabilities.Streaming {
-		t.Errorf("kimi capabilities mismatch: %+v", kimi.Capabilities)
-	}
-
-	nemo, exists := byID["nvidia/llama-3.1-nemotron-70b-instruct"]
-	if !exists {
-		t.Fatalf("expected nemotron in catalog")
-	}
-	if nemo.OwnedBy != "nvidia" {
-		t.Errorf("nemo owned_by = %q, want nvidia", nemo.OwnedBy)
-	}
-	if nemo.Capabilities == nil || !nemo.Capabilities.Streaming {
-		t.Errorf("nemo capabilities should have streaming=true")
+	// No per-model capability metadata: every playground model keeps the
+	// generic streaming-only default.
+	caps := model.Capabilities
+	if caps == nil || !caps.Streaming || caps.Tools || caps.Reasoning || caps.StructuredOutput || caps.Images != "" {
+		t.Errorf("capabilities = %+v, want streaming-only defaults", caps)
 	}
 }
 

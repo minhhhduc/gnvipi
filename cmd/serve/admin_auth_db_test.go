@@ -32,6 +32,7 @@ const (
 type dbAdminHarness struct {
 	engine *gin.Engine
 	pool   *pgxpool.Pool
+	prefs  *modelPrefs
 	state  *authState
 	owner  *auth.User
 	token  string
@@ -83,10 +84,13 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 	}
 
 	gin.SetMode(gin.TestMode)
+	prefs := setupTestPrefs(t)
+	prefs.catalogRead = pool
+	prefs.catalogWrite = pool
 	engine := gin.New()
 	engine.Use(adminAPIAuthorization(state))
-	registerAdminAPIRoutes(engine, setupTestPrefs(t), nil, nil, state)
-	return &dbAdminHarness{engine: engine, pool: pool, state: state, owner: owner, token: token}
+	registerAdminAPIRoutes(engine, prefs, nil, nil, state)
+	return &dbAdminHarness{engine: engine, pool: pool, prefs: prefs, state: state, owner: owner, token: token}
 }
 
 // adminTestDDL is the production initial migration with its hardcoded public
@@ -96,7 +100,12 @@ func adminTestDDL(schema string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.ReplaceAll(string(raw), "SET search_path = public, pg_temp", "SET search_path = "+schema+", pg_temp"), nil
+	catalog, err := migrations.FS.ReadFile("0003_nvidia_catalog.up.sql")
+	if err != nil {
+		return "", err
+	}
+	ddl := strings.ReplaceAll(string(raw), "SET search_path = public, pg_temp", "SET search_path = "+schema+", pg_temp")
+	return ddl + "\n" + string(catalog), nil
 }
 
 // newAdminTestPool installs the production schema into a throwaway schema, so

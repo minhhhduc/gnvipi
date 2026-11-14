@@ -41,7 +41,13 @@ func TestAdminAPIContract_Matrix(t *testing.T) {
 	prefs = p
 	t.Cleanup(func() { prefs = oldPrefs })
 
-	catalog := []*cliproxy.ModelInfo{{ID: "vendor/model-a"}, {ID: models.DefaultModel}}
+	saved := models.Snapshot()
+	models.Replace(map[string]models.ModelInfo{
+		syntheticModel: {Slug: "synthetic-model", Namespace: models.Namespace, FunctionID: "00000000-0000-0000-0000-000000000001"},
+	})
+	t.Cleanup(func() { models.Replace(saved) })
+
+	catalog := []*cliproxy.ModelInfo{{ID: "vendor/model-a"}, {ID: syntheticModel}}
 	engine := contractEngine(t, p, "", catalog)
 
 	provider := gatewayprovider.Provider{
@@ -73,9 +79,9 @@ func TestAdminAPIContract_Matrix(t *testing.T) {
 		{"models.restore", http.MethodPost, "/admin/api/models/vendor/model-a/restore", nil, http.StatusOK, []string{"restored"}},
 		{"models.retry", http.MethodPost, "/admin/api/models/retry-failed", nil, http.StatusOK, []string{"ok"}},
 		{"automode.get", http.MethodGet, "/admin/api/config/automode", nil, http.StatusOK, []string{"model", "chat_responses"}},
-		{"automode.set", http.MethodPost, "/admin/api/config/automode", map[string]any{"model": models.DefaultModel}, http.StatusOK, []string{"model"}},
+		{"automode.set", http.MethodPost, "/admin/api/config/automode", map[string]any{"model": syntheticModel}, http.StatusOK, []string{"model"}},
 		{"cycle.get", http.MethodGet, "/admin/api/config/cycle", nil, http.StatusOK, []string{"name", "models", "available", "current"}},
-		{"cycle.set", http.MethodPost, "/admin/api/config/cycle", map[string]any{"models": []string{models.DefaultModel}}, http.StatusOK, []string{"models"}},
+		{"cycle.set", http.MethodPost, "/admin/api/config/cycle", map[string]any{"models": []string{syntheticModel}}, http.StatusOK, []string{"models"}},
 		{"search.get", http.MethodGet, "/admin/api/config/search", nil, http.StatusOK, []string{"url"}},
 		{"search.set", http.MethodPost, "/admin/api/config/search", map[string]any{"url": "https://www.google.com/search?q={query}"}, http.StatusOK, []string{"url"}},
 		{"chromes.get", http.MethodGet, "/admin/api/chromes", nil, http.StatusOK, []string{"enabled", "state", "chromes", "ready"}},

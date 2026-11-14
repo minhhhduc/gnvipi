@@ -1,12 +1,16 @@
 <#
 .SYNOPSIS
-  One-time setup: create internal/models/playground_models.json from the
-  committed default (the real file is gitignored because it holds local keys).
+  One-time setup: create an empty internal/models/playground_models.json.
 
-  No-op if the file already exists — safe to re-run anytime.
+  The NVIDIA catalog has no built-in defaults: in database mode it lives in
+  PostgreSQL, and in file mode it starts empty until an owner/admin runs
+  Rescan on the Models page. The file only holds per-machine preferences and
+  custom endpoints.
+
+  No-op if the file already exists - safe to re-run anytime.
 
 .EXAMPLE
-  .\init.ps1           # copy default -> playground_models.json (if missing)
+  .\init.ps1           # create an empty playground_models.json (if missing)
   .\init.ps1 -Force    # overwrite, resetting masks/providers to defaults
 #>
 [CmdletBinding()]
@@ -23,9 +27,14 @@ if ((Test-Path $target) -and -not $Force) {
   return
 }
 
-$default = Join-Path $root 'internal\models\playground_models.default.json'
-if (-not (Test-Path $default)) { throw "missing default file: $default" }
-
-Copy-Item $default $target
-$n = (Get-Content $target | ConvertFrom-Json)._meta.count
-Write-Host "created $target ($n models) - add custom API keys via /admin if needed" -ForegroundColor Green
+$doc = @'
+{
+  "groups": [],
+  "masks_id": [],
+  "deleted_id": [],
+  "schema_version": 2,
+  "providers_v2": []
+}
+'@
+[System.IO.File]::WriteAllText($target, $doc, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "created $target (empty catalog - run Rescan on the Models page)" -ForegroundColor Green

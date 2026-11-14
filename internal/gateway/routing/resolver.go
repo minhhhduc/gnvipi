@@ -374,7 +374,7 @@ func (r *LegacyResolver) Resolve(ctx context.Context, clientModel string, protoc
 		}
 		target := current.virtual.AutoModel
 		if target == "" {
-			target = models.DefaultModel
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is not configured"}
 		}
 		if current.hidden[target] {
 			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}
@@ -1034,7 +1034,7 @@ func (r *RegistryResolver) Resolve(ctx context.Context, clientModel string, prot
 		}
 		target := current.virtual.AutoModel
 		if target == "" {
-			target = models.DefaultModel
+			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is not configured"}
 		}
 		if current.hidden[target] {
 			return Route{}, &gwerr.Error{Kind: gwerr.KindNotFound, Message: "automode target is hidden"}

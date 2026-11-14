@@ -10,7 +10,25 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
+
+// protectedFixture is a synthetic catalog entry. The catalog is runtime state,
+// so collision tests publish the entry they exercise.
+const protectedFixture = "nvidia/synthetic-protected"
+
+func seedProtectedFixture(t *testing.T) {
+	t.Helper()
+	saved := models.Snapshot()
+	t.Cleanup(func() { models.Replace(saved) })
+	models.Replace(map[string]models.ModelInfo{
+		protectedFixture: {
+			Slug:       "synthetic-protected",
+			Namespace:  models.Namespace,
+			FunctionID: "00000000-0000-0000-0000-000000000003",
+		},
+	})
+}
 
 func TestLegacyResolverPreservesFlatOrderAndMaskPrecedence(t *testing.T) {
 	list := []provider.LegacyProvider{
@@ -384,7 +402,7 @@ func TestLegacyResolverVirtualModels(t *testing.T) {
 	}
 }
 
-func makeTestProvider(id, name, baseURL string, models []provider.ModelMapping) provider.Provider {
+func makeTestProvider(id, name, baseURL string, mappings []provider.ModelMapping) provider.Provider {
 	return provider.Provider{
 		ID:       id,
 		Name:     name,
@@ -392,7 +410,7 @@ func makeTestProvider(id, name, baseURL string, models []provider.ModelMapping) 
 		Protocol: ir.ProtocolOpenAIChat,
 		Enabled:  true,
 		Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret-" + id},
-		Models:   models,
+		Models:   mappings,
 	}
 }
 
@@ -609,6 +627,7 @@ func TestRegistryResolverInvalidAndCanceledRequests(t *testing.T) {
 }
 
 func TestRegistryResolverSaveTimeCollisions(t *testing.T) {
+	seedProtectedFixture(t)
 	tests := []struct {
 		name        string
 		providers   []provider.Provider
@@ -646,7 +665,7 @@ func TestRegistryResolverSaveTimeCollisions(t *testing.T) {
 			name: "exact alias shadows NVIDIA model without allow_shadow",
 			providers: []provider.Provider{
 				makeTestProvider("p1", "p1", "https://p1.example.com/v1", []provider.ModelMapping{
-					{Alias: "nvidia/nemotron-3.5-lightning-30b-a3b", UpstreamModel: "m"},
+					{Alias: protectedFixture, UpstreamModel: "m"},
 				}),
 			},
 			expectError: true,
@@ -656,7 +675,7 @@ func TestRegistryResolverSaveTimeCollisions(t *testing.T) {
 			name: "exact alias shadows NVIDIA model with allow_shadow true",
 			providers: []provider.Provider{
 				makeTestProvider("p1", "p1", "https://p1.example.com/v1", []provider.ModelMapping{
-					{Alias: "nvidia/nemotron-3.5-lightning-30b-a3b", UpstreamModel: "m", AllowShadow: true},
+					{Alias: protectedFixture, UpstreamModel: "m", AllowShadow: true},
 				}),
 			},
 			expectError: false,
@@ -684,7 +703,7 @@ func TestRegistryResolverSaveTimeCollisions(t *testing.T) {
 			name: "global WithAllowNvidiaShadow permits shadowing",
 			providers: []provider.Provider{
 				makeTestProvider("p1", "p1", "https://p1.example.com/v1", []provider.ModelMapping{
-					{Alias: "nvidia/nemotron-3.5-lightning-30b-a3b", UpstreamModel: "m"},
+					{Alias: protectedFixture, UpstreamModel: "m"},
 				}),
 			},
 			opts:        []ResolverOption{WithAllowNvidiaShadow(true)},
@@ -742,6 +761,7 @@ func TestRegistryResolverSaveTimeCollisions(t *testing.T) {
 }
 
 func TestRegistryResolverLoadTimeCollisionsAndDeterministicWinner(t *testing.T) {
+	seedProtectedFixture(t)
 	t.Run("exact alias collision picks first provider as deterministic winner", func(t *testing.T) {
 		p1 := makeTestProvider("prov-1", "prov-1", "https://p1.example.com/v1", []provider.ModelMapping{
 			{Alias: "shared-model", UpstreamModel: "upstream-1"},
@@ -796,7 +816,7 @@ func TestRegistryResolverLoadTimeCollisionsAndDeterministicWinner(t *testing.T) 
 	})
 
 	t.Run("NVIDIA model ID protected against custom alias shadowing without allow_shadow", func(t *testing.T) {
-		const nvidiaModel = "nvidia/nemotron-3.5-lightning-30b-a3b"
+		const nvidiaModel = protectedFixture
 		p := makeTestProvider("prov-custom", "prov-custom", "https://custom.example.com/v1", []provider.ModelMapping{
 			{Alias: nvidiaModel, UpstreamModel: "custom-upstream", AllowShadow: false},
 			{Alias: "legit-model", UpstreamModel: "custom-upstream"},
@@ -821,7 +841,7 @@ func TestRegistryResolverLoadTimeCollisionsAndDeterministicWinner(t *testing.T) 
 	})
 
 	t.Run("NVIDIA model ID protected against wildcard shadowing without allow_shadow", func(t *testing.T) {
-		const nvidiaModel = "nvidia/nemotron-3.5-lightning-30b-a3b"
+		const nvidiaModel = protectedFixture
 		p := makeTestProvider("prov-custom", "prov-custom", "https://custom.example.com/v1", []provider.ModelMapping{
 			{Alias: "nvidia/*", UpstreamModel: "", AllowShadow: false},
 		})
@@ -845,7 +865,7 @@ func TestRegistryResolverLoadTimeCollisionsAndDeterministicWinner(t *testing.T) 
 	})
 
 	t.Run("NVIDIA model ID shadows when explicitly allowed", func(t *testing.T) {
-		const nvidiaModel = "nvidia/nemotron-3.5-lightning-30b-a3b"
+		const nvidiaModel = protectedFixture
 		p := makeTestProvider("prov-custom", "prov-custom", "https://custom.example.com/v1", []provider.ModelMapping{
 			{Alias: nvidiaModel, UpstreamModel: "custom-upstream", AllowShadow: true},
 		})

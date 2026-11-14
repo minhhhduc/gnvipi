@@ -2,20 +2,21 @@
 """Scrape https://build.nvidia.com/models for the complete NIM model registry.
 
 Data source:
-  https://build.nvidia.com/models?pageSize=200\
-  &filters=nimType%3Anim_type_preview%2CnimType%3Anim_type_upgrade_available
+  https://build.nvidia.com/models?pageSize=200
 
-  The filter URL shows only models with interactive playgrounds (preview
-  status or upgrade available).  The page server-side renders every model
-  card as an <a> link with href="/{publisher}/{slug}".  We fetch the HTML,
-  extract all model URLs, then probe each model's playground page for the
-  server-rendered NVCF function id and namespace.
+  The catalog must include every Playground model, not just preview /
+  upgrade-available ones, so there is no nimType filter.  The page
+  server-side renders every model card as an <a> link with
+  href="/{publisher}/{slug}".  We fetch the HTML, extract all model URLs, then
+  probe each model's playground page for the server-rendered NVCF function id
+  and namespace.
 
   Only models whose playground page contains a valid UUID-shaped
   "nvcfFunctionId" are reported as ok=true -- those are the ones that can
   be called via the anonymous (hCaptcha-gated) predict endpoint.
 
-Output: JSON in the exact runtime schema internal/models/registry.go embeds:
+Output: JSON in the saved-catalog schema consumed by cmd/serve (and importable
+into the nvidia_models table):
   {_meta, groups[{publisher, models[{model,slug,namespace,function_id}]}],
    masks_id[], deleted_id[], providers[]}
 `providers` is preserved from any existing -o target (it holds local API keys);
@@ -32,7 +33,7 @@ import urllib.request
 import concurrent.futures as cf
 import time
 
-MODELS_PAGE = "https://build.nvidia.com/models?pageSize=200&filters=nimType%3Anim_type_preview%2CnimType%3Anim_type_upgrade_available"
+MODELS_PAGE = "https://build.nvidia.com/models?pageSize=200"
 PLAYGROUND = "https://build.nvidia.com/{publisher}/{slug}/playground"
 
 FNID_RE = re.compile(r'"nvcfFunctionId\\?":\\?"([a-f0-9-]{36})\\"?')

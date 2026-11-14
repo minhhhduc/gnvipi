@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,20 +20,28 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
+func TestModelPrefsLoadUsesOnlyTheSavedCatalog(t *testing.T) {
+	saved := models.Snapshot()
+	published := "acme/published"
+	models.Replace(map[string]models.ModelInfo{
+		published: {Slug: "published", Namespace: models.Namespace, FunctionID: "11111111-1111-1111-1111-111111111111"},
+	})
+	t.Cleanup(func() { models.Replace(saved) })
+
 	path := filepath.Join(t.TempDir(), "models.json")
-	if err := os.WriteFile(path, []byte(`{"groups":[{"publisher":"old","models":[{"model":"old/retired","slug":"retired","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000000"}]}],"providers":[]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"groups":[{"publisher":"local","models":[{"model":"local/catalog","slug":"catalog","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000000"}]}],"providers":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var prefs modelPrefs
 	if err := prefs.load(path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := models.Lookup("nvidia/nemotron-3.5-lightning-30b-a3b"); err != nil {
-		t.Fatalf("embedded new model missing after loading saved prefs: %v", err)
+	if _, err := models.Lookup("local/catalog"); err != nil {
+		t.Fatalf("saved catalog model was not published: %v", err)
 	}
-	if _, err := models.Lookup("old/retired"); err != nil {
-		t.Fatalf("local catalog model was not merged into registry: %v", err)
+	var unknown *models.ErrUnknownModel
+	if _, err := models.Lookup(published); !errors.As(err, &unknown) {
+		t.Fatalf("catalog from a previous registry survived load: %v", err)
 	}
 }
 
@@ -108,6 +117,7 @@ func TestBuildConfigEmptyAPIKeys(t *testing.T) {
 }
 
 func TestNvidiaModelHookReregisters(t *testing.T) {
+	seedRequestFixture(t)
 	catalog := nvidia.RegistryModels()
 	if len(catalog) == 0 {
 		t.Fatal("empty registry models")
@@ -128,6 +138,7 @@ func TestNvidiaModelHookReregisters(t *testing.T) {
 }
 
 func TestBindNvidiaRuntimeRegistersExecutor(t *testing.T) {
+	seedRequestFixture(t)
 	catalog := nvidia.RegistryModels()
 	core := coreauth.NewManager(nil, nil, nil)
 	exec := nvidia.NewExecutor(&nvidia.Options{})
@@ -152,6 +163,7 @@ func TestBindNvidiaRuntimeRegistersExecutor(t *testing.T) {
 }
 
 func TestBindNvidiaRuntimePrimesModelsBeforeAuthLoad(t *testing.T) {
+	seedRequestFixture(t)
 	catalog := nvidia.RegistryModels()
 	reg := cliproxy.GlobalModelRegistry()
 	reg.UnregisterClient(nvidiaAuthFileName)
