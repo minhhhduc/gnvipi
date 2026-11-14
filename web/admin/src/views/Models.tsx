@@ -37,6 +37,7 @@ import {
   Switch,
   useUi,
 } from "../components/ui";
+import { useGateway } from "../lib/context";
 import { HealthPill } from "../components/Shell";
 import { formatProviderTestResult, ProviderEditor, ProviderTestResultBadge } from "../components/ProviderEditor";
 
@@ -48,10 +49,17 @@ type KeyDialogState =
 
 export function ModelsView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
+  const { navSeq } = useGateway();
   const operator = canManageProviders(user.role);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedID, setSelectedID] = useState<string | null>(null);
+
+  // Clicking Models in the nav returns to the provider list, even when the
+  // view is already on screen with a provider open.
+  useEffect(() => {
+    setSelectedID(null);
+  }, [navSeq]);
   const [menu, setMenu] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ open: boolean; provider: Provider | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Provider | null>(null);
