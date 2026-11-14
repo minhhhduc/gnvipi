@@ -27,16 +27,16 @@ const COLORS = {
   input: "var(--on)",
   output: "var(--warn)",
   ttfb: "var(--dim2)",
-  top: ["var(--accent)", "var(--on)", "var(--warn)", "#a855f7", "#06b6d4"],
+  top: ["var(--accent)", "var(--on)", "var(--warn)", "var(--dim2)", "var(--dim)"],
 };
 
 function Kpi({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <Card class="px-[13px] py-3">
-      <div class="text-[11px] font-semibold uppercase tracking-[0.05em] text-dim">{label}</div>
-      <div class="mt-0.5 text-[25px] font-bold tabular-nums tracking-[-0.03em]">{value}</div>
+    <div class="bg-panel px-3.5 py-3">
+      <div class="text-[11px] text-dim">{label}</div>
+      <div class="mt-1 text-[22px] font-semibold tabular-nums tracking-[-0.02em]">{value}</div>
       <div class="mt-0.5 text-[11px] text-dim">{detail}</div>
-    </Card>
+    </div>
   );
 }
 
@@ -210,7 +210,8 @@ export function StatsView() {
         </span>
       </PageHeader>
 
-      <div class="mb-3 grid grid-cols-4 gap-2.5">
+      <Card class="mb-3 overflow-hidden">
+      <div class="grid grid-cols-2 gap-px bg-[var(--line)] sm:grid-cols-4">
         <Kpi label="Total requests" value={value(fmtInt(totalRequests))} detail={hasTraffic ? "since start" : "no traffic"} />
         <Kpi label="Req / min" value={value(hasTraffic ? fmtInt(latest?.requests || 0) : "0")} detail={hasTraffic ? "latest minute" : "no traffic"} />
         <Kpi label="Input tokens" value={value(fmtCompact(inputTokens))} detail="input tokens (sum)" />
@@ -224,6 +225,7 @@ export function StatsView() {
         <Kpi label="p95 latency" value={value(fmtMs(p95Ms))} detail="last 200 events" />
         <Kpi label="Uptime" value={data.started_at ? uptime(data.started_at) : "—"} detail="since process start" />
       </div>
+      </Card>
 
       <div class="mb-3 grid grid-cols-2 gap-3">
         <ChartCard title="Requests per minute" sub="last 60 min">
