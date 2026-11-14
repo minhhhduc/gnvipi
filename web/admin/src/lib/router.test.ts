@@ -29,7 +29,7 @@ describe("pageFromUrl", () => {
 
     expect(forRole("?page=config", "owner")).toBe("config");
     expect(forRole("?page=chromes", "admin")).toBe("chromes");
-    expect(forRole("?page=models", "user")).toBe("stats");
+    expect(forRole("?page=models", "user")).toBe("models");
     expect(forRole("?page=config", "user")).toBe("stats");
     expect(forRole("?page=chromes", "user")).toBe("stats");
   });

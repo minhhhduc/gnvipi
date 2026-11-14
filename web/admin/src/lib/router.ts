@@ -8,7 +8,9 @@ export function rawPageFromUrl(search: string): string {
 
 const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   stats: ["owner", "admin", "user"],
-  models: ["owner", "admin"],
+  // Every role reaches Models, because that is where users manage their own
+  // provider keys and per-key model aliases.
+  models: ["owner", "admin", "user"],
   config: ["owner", "admin"],
   chromes: ["owner", "admin"],
   // Every role holds gateway tokens, so every role can reach its own list.
