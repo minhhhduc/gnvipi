@@ -125,7 +125,11 @@ export function firstAuditRequest(limit: number): AuditRequest {
 }
 
 export function nextAuditRequest(request: AuditRequest, page: AuditPage): AuditRequest | null {
-  if (!page.has_more || !page.next_cursor) return null;
+  // A backward response reports has_more in the newer direction, so it cannot
+  // speak for the next page. Requesting backward means we came from a page
+  // that still exists, so the forward link stays available.
+  const forward = page.has_more || request.before != null;
+  if (!forward || !page.next_cursor) return null;
   return { limit: request.limit, after: page.next_cursor, before: null, depth: request.depth + 1 };
 }
 

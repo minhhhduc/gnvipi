@@ -196,6 +196,13 @@ describe("audit cursor pagination", () => {
     const backward = previousAuditRequest(forward!, second);
     expect(backward).toEqual({ limit: 2, after: null, before: "cursor-5", depth: 1 });
     expect(auditPath(backward!)).toBe("/admin/api/audit?limit=2&before=cursor-5");
+
+    // The backward response reports has_more in the newer direction (false at
+    // the newest page), but the reproduced page still has a forward page.
+    const previousPage = parseAuditPage({ ...firstPageBody, has_more: false });
+    const forwardAgain = nextAuditRequest(backward!, previousPage);
+    expect(forwardAgain).toEqual({ limit: 2, after: "cursor-4", before: null, depth: 2 });
+    expect(auditPath(forwardAgain!)).toBe("/admin/api/audit?limit=2&after=cursor-4");
   });
 
   it("stops at the oldest page and at the newest page", () => {
