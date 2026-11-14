@@ -12,6 +12,8 @@ import { StatsView } from "./views/Stats";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
+import { TokensView } from "./views/Tokens";
+import { UsersView } from "./views/Users";
 
 /** Stats refresh cadence, and the point at which a request counts as stalled. */
 const STATS_POLL_INTERVAL_MS = 2000;
@@ -227,17 +229,23 @@ export function App() {
   }
 
   const operator = isOperatorRole(user.role);
-  const body = !operator ? (
-    <>
-      <PageHeader title="Stats" sub="Usage for this gateway account" />
-      <Card>
-        <Empty
-          title="Per-user stats are not available yet"
-          body="Request attribution is still pending. Operator statistics are never shown to user accounts."
-        />
-      </Card>
-    </>
-  ) :
+  // Every role holds gateway tokens; account administration is owner-only. The
+  // router already rejects an unauthorised ?page=, so these branches are the
+  // render half of the same gate.
+  const body =
+    effectivePage === "tokens" ? <TokensView user={user} /> :
+    effectivePage === "users" && operator ? <UsersView user={user} /> :
+    !operator ? (
+      <>
+        <PageHeader title="Stats" sub="Usage for this gateway account" />
+        <Card>
+          <Empty
+            title="Per-user stats are not available yet"
+            body="Request attribution is still pending. Operator statistics are never shown to user accounts."
+          />
+        </Card>
+      </>
+    ) :
     effectivePage === "models" ? <ModelsView /> :
     effectivePage === "config" ? <ConfigView /> :
     effectivePage === "chromes" ? <ChromesView /> :

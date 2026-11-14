@@ -1,3 +1,5 @@
+import type { AdminRole } from "./auth";
+
 export type TestStatus = "success" | "auth_failure" | "connect_failure" | "error";
 
 export interface TestResult {
@@ -153,4 +155,48 @@ export interface ApiErrorBody {
   errors?: string[];
   fields?: Record<string, string>;
   field_errors?: { field: string; message: string }[];
+}
+
+/** One account row on the owner-only Users screen. */
+export interface AdminUserRecord {
+  id: string;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  role: AdminRole;
+  status: "active" | "disabled";
+  must_change_password: boolean;
+  failed_attempts: number;
+  locked_until: string | null;
+  last_login_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  created_by: string | null;
+}
+
+export interface UserList {
+  users: AdminUserRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** One gateway or admin token row. The plaintext and hash never appear here. */
+export interface TokenRecord {
+  id: string;
+  user_id: string;
+  kind: string;
+  name: string;
+  token_prefix: string;
+  scope: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string | null;
+}
+
+export interface TokenList {
+  tokens: TokenRecord[];
+  limit: number;
+  offset: number;
 }
