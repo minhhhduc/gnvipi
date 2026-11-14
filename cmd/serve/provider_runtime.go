@@ -233,7 +233,7 @@ func providerAuditWriter(pool *pgxpool.Pool) providerstore.AuditFunc {
 // protectedModel mirrors the routing registry's protected-model set, so a
 // database alias cannot shadow an NVIDIA model unless it sets allow_shadow.
 func protectedModel(model string) bool {
-	_, ok := models.Models[model]
+	_, ok := models.Get(model)
 	return ok
 }
 

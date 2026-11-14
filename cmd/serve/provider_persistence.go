@@ -85,7 +85,8 @@ func (p *modelPrefs) applyPrefsLocked(file *prefsFile) {
 // _meta remain byte-for-byte JSON data so scraper and extension metadata survive.
 func initialCatalog() (groups []ModelGroup, meta map[string]any) {
 	byPublisher := map[string][]ModelItem{}
-	for id, m := range models.Models {
+	registry := models.Snapshot()
+	for id, m := range registry {
 		publisher, _, _ := strings.Cut(id, "/")
 		if publisher == "" {
 			publisher = "unknown"
@@ -97,7 +98,7 @@ func initialCatalog() (groups []ModelGroup, meta map[string]any) {
 		groups = append(groups, ModelGroup{Publisher: publisher, Models: entries})
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Publisher < groups[j].Publisher })
-	return groups, map[string]any{"count": len(models.Models), "namespaces": []string{models.Namespace}}
+	return groups, map[string]any{"count": len(registry), "namespaces": []string{models.Namespace}}
 }
 
 // commitPrefs requires changeMu. The runtime read lock covers candidate writes
@@ -171,6 +172,11 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 			if _, exists := doc.Fields["_meta"]; !exists {
 				values["_meta"] = meta
 			}
+		}
+		// A rescan replaces the catalog through the edit callback; persist the
+		// edited groups whenever the document already carries them.
+		if file.Groups != nil {
+			values["groups"] = file.Groups
 		}
 		for key, value := range values {
 			raw, err := json.Marshal(value)

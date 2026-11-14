@@ -354,10 +354,12 @@ func runServer() (err error) {
 	nvidiaModels := nvidia.RegistryModels()
 	// getNvidiaModels is the catalog bound to the NVIDIA client ONLY. It must
 	// never include other providers' models: a model owned by two clients makes
-	// routing pick between them at random (intermittent 400s).
+	// routing pick between them at random (intermittent 400s). It reads the live
+	// registry so an admin rescan takes effect without a restart.
 	getNvidiaModels := func() []*cliproxy.ModelInfo {
-		out := make([]*cliproxy.ModelInfo, 0, len(nvidiaModels))
-		for _, m := range nvidiaModels {
+		catalog := nvidia.RegistryModels()
+		out := make([]*cliproxy.ModelInfo, 0, len(catalog))
+		for _, m := range catalog {
 			if prefs.isHidden(m.ID) {
 				continue
 			}
@@ -495,7 +497,7 @@ func runServer() (err error) {
 					engine.POST("/admin/providers", adminHandler)
 					engine.POST("/admin/delete", adminHandler)
 					engine.POST("/admin/retry-failed", adminHandler)
-					registerAdminAPIRoutes(engine, prefs, nvidiaModels, chromes, adminAuth)
+					registerAdminAPIRoutes(engine, prefs, nil, chromes, adminAuth)
 				}
 				engine.POST("/mcp", searchMCP)
 				engine.GET("/mcp", searchMCP)

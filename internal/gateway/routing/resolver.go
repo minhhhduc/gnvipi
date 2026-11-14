@@ -490,12 +490,12 @@ func WithWarningFunc(fn func(string)) ResolverOption {
 }
 
 func defaultIsProtected(model string) bool {
-	_, ok := models.Models[model]
+	_, ok := models.Get(model)
 	return ok
 }
 
 func shadowsProtectedNvidiaModel(prefix string, isProtected func(string) bool) (string, bool) {
-	for m := range models.Models {
+	for m := range models.Snapshot() {
 		if strings.HasPrefix(m, prefix) {
 			if isProtected == nil || isProtected(m) {
 				return m, true

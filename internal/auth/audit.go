@@ -82,6 +82,7 @@ var allowedAuditKeys = map[string]struct{}{
 	"must_change": {}, "active": {},
 	"auth_scheme": {}, "has_secret": {}, "has_key_env": {}, "has_key_ref": {},
 	"count": {}, "total": {}, "revoked_sessions": {}, "revoked_tokens": {},
+	"added": {}, "updated": {}, "removed": {},
 }
 
 // SanitizeDetails returns only allowlisted scalar metadata. Unknown keys and

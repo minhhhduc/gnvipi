@@ -73,6 +73,7 @@ func currentAdminRouteMatrix() map[string]uint8 {
 		"POST /admin/api/models":                          operator,
 		"DELETE /admin/api/models/*id":                    operator,
 		"POST /admin/api/models/*id":                      operator,
+		"POST /admin/api/nvidia/models/rescan":            operator,
 		"GET /admin/api/config/automode":                  operator,
 		"POST /admin/api/config/automode":                 operator,
 		"GET /admin/api/config/cycle":                     operator,

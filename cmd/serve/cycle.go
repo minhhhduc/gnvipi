@@ -45,7 +45,7 @@ func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 			return fmt.Errorf("invalid or duplicate cycle model %q", id)
 		}
 		seen[id] = true
-		if _, ok := models.Models[id]; ok {
+		if _, ok := models.Get(id); ok {
 			continue
 		}
 		found := false
