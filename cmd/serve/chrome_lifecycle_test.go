@@ -584,3 +584,28 @@ func TestChromeLifecycleOverlappingStopsRetireRestartedGeneration(t *testing.T) 
 		t.Fatalf("restart sent token=%q, want generation-3", token)
 	}
 }
+
+func TestChromePoolTarget(t *testing.T) {
+	size, workers := 3, 1
+	lifecycle := newChromeLifecycleWithTarget(t.Context(), nil, &size, &workers, nil)
+
+	if err := lifecycle.SetTarget(8, 2); err != nil {
+		t.Fatalf("SetTarget(8,2): %v", err)
+	}
+	if size != 8 || workers != 2 {
+		t.Fatalf("stored target = %d/%d, want 8/2", size, workers)
+	}
+	status := lifecycle.Status()
+	if status.PoolSize != 8 || status.PoolWorkers != 2 {
+		t.Fatalf("status target = %d/%d, want 8/2", status.PoolSize, status.PoolWorkers)
+	}
+	if err := lifecycle.SetTarget(0, 2); err == nil {
+		t.Fatal("zero ready tokens must be rejected")
+	}
+	if err := lifecycle.SetTarget(4, maxPoolWorkers+1); err == nil {
+		t.Fatal("too many workers must be rejected")
+	}
+	if size != 8 || workers != 2 {
+		t.Fatalf("rejected targets changed state to %d/%d", size, workers)
+	}
+}

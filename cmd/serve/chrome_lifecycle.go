@@ -23,17 +23,31 @@ type chromeBrowser interface {
 }
 
 type chromeStatus struct {
-	Enabled bool                 `json:"enabled"`
-	State   string               `json:"state"`
-	Chromes []captcha.ChromeInfo `json:"chromes"`
-	Ready   int                  `json:"ready"`
-	Error   string               `json:"error,omitempty"`
+	Enabled     bool                 `json:"enabled"`
+	State       string               `json:"state"`
+	Chromes     []captcha.ChromeInfo `json:"chromes"`
+	Ready       int                  `json:"ready"`
+	PoolSize    int                  `json:"pool_size"`
+	PoolWorkers int                  `json:"pool_workers"`
+	Error       string               `json:"error,omitempty"`
 }
 
+// Bounds for the admin-controlled pool target.
+const (
+	minPoolSize    = 1
+	maxPoolSize    = 64
+	minPoolWorkers = 1
+	maxPoolWorkers = 16
+)
+
 type chromeLifecycle struct {
-	ctx     context.Context
-	exec    *nvidia.Executor
-	factory func(context.Context) (chromeBrowser, *captcha.Pool, error)
+	ctx  context.Context
+	exec *nvidia.Executor
+	// Points at the -pool-size / -pool-workers values. Start reads them through
+	// the factory closure, so an admin change applies on the next Start All.
+	poolSize    *int
+	poolWorkers *int
+	factory     func(context.Context) (chromeBrowser, *captcha.Pool, error)
 
 	// Operations serialize allocation/slot changes/cleanup. Stop cancels under
 	// mu before waiting for opMu, so a slow Chrome launch cannot block Kill All.
@@ -51,9 +65,55 @@ func newChromeLifecycle(ctx context.Context, exec *nvidia.Executor, factory func
 	return &chromeLifecycle{ctx: ctx, exec: exec, factory: factory, state: "idle"}
 }
 
+// newChromeLifecycleWithTarget also exposes the admin-editable pool target.
+func newChromeLifecycleWithTarget(ctx context.Context, exec *nvidia.Executor, poolSize, poolWorkers *int, factory func(context.Context) (chromeBrowser, *captcha.Pool, error)) *chromeLifecycle {
+	lifecycle := newChromeLifecycle(ctx, exec, factory)
+	lifecycle.poolSize, lifecycle.poolWorkers = poolSize, poolWorkers
+	return lifecycle
+}
+
+// SetTarget stores how many captcha tokens to keep ready and how many extractor
+// workers to run. It takes effect on the next Start All while Chrome is running.
+func (l *chromeLifecycle) SetTarget(size, workers int) error {
+	if size < minPoolSize || size > maxPoolSize {
+		return fmt.Errorf("ready tokens must be %d-%d", minPoolSize, maxPoolSize)
+	}
+	if workers < minPoolWorkers || workers > maxPoolWorkers {
+		return fmt.Errorf("workers must be %d-%d", minPoolWorkers, maxPoolWorkers)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.poolSize != nil {
+		*l.poolSize = size
+	}
+	if l.poolWorkers != nil {
+		*l.poolWorkers = workers
+	}
+	return nil
+}
+
+// target returns the configured pool size and worker count.
+func (l *chromeLifecycle) target() (size, workers int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.poolSize != nil {
+		size = *l.poolSize
+	}
+	if l.poolWorkers != nil {
+		workers = *l.poolWorkers
+	}
+	return size, workers
+}
+
 func (l *chromeLifecycle) Status() chromeStatus {
 	l.mu.Lock()
 	status := chromeStatus{State: l.state, Chromes: []captcha.ChromeInfo{}, Error: l.lastErr}
+	if l.poolSize != nil {
+		status.PoolSize = *l.poolSize
+	}
+	if l.poolWorkers != nil {
+		status.PoolWorkers = *l.poolWorkers
+	}
 	browser, pool := l.browser, l.pool
 	l.mu.Unlock()
 	if browser != nil && status.State == "enabled" {
@@ -204,9 +264,11 @@ func chromeRoutes(c *gin.Context, lifecycle *chromeLifecycle) {
 		c.JSON(http.StatusOK, lifecycle.Status())
 	case http.MethodPost:
 		var payload struct {
-			Index int    `json:"index"`
-			Mode  string `json:"mode"`
-			All   bool   `json:"all"`
+			Index       int    `json:"index"`
+			Mode        string `json:"mode"`
+			All         bool   `json:"all"`
+			PoolSize    *int   `json:"pool_size"`
+			PoolWorkers *int   `json:"pool_workers"`
 		}
 		if c.ContentType() == "application/x-www-form-urlencoded" {
 			payload.Mode = c.Request.FormValue("mode")
@@ -226,11 +288,40 @@ func chromeRoutes(c *gin.Context, lifecycle *chromeLifecycle) {
 		var err error
 		switch payload.Mode {
 		case "start", "resume":
+			if payload.PoolSize != nil || payload.PoolWorkers != nil {
+				size, workers := lifecycle.target()
+				if payload.PoolSize != nil {
+					size = *payload.PoolSize
+				}
+				if payload.PoolWorkers != nil {
+					workers = *payload.PoolWorkers
+				}
+				if targetErr := lifecycle.SetTarget(size, workers); targetErr != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": targetErr.Error()})
+					return
+				}
+			}
 			err = lifecycle.Start(c.Request.Context(), payload.All, payload.Index)
 		case "kill", "stop", "pause":
 			err = lifecycle.Kill(payload.All, payload.Index)
+		case "config":
+			if payload.PoolSize == nil && payload.PoolWorkers == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "pool_size or pool_workers is required"})
+				return
+			}
+			size, workers := lifecycle.target()
+			if payload.PoolSize != nil {
+				size = *payload.PoolSize
+			}
+			if payload.PoolWorkers != nil {
+				workers = *payload.PoolWorkers
+			}
+			if err = lifecycle.SetTarget(size, workers); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be kill, stop or start"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be kill, stop, start or config"})
 			return
 		}
 		status := lifecycle.Status()

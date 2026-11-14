@@ -182,6 +182,8 @@ export interface ChromeStatus {
   state: string;
   chromes: ChromeInfo[];
   ready: number;
+  pool_size?: number;
+  pool_workers?: number;
   error?: string;
 }
 
