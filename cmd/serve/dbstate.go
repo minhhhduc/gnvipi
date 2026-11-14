@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/db"
+	"github.com/minhhhduc/gnvipi/internal/providerstore"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
 
@@ -169,7 +170,16 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 		pool.Close()
 		return nil, databaseSchemaError(err)
 	}
+	// Provider key secrets are encrypted at rest, so database mode must have a
+	// master key. Serving with encrypted rows and no key would fail every
+	// credential check at request time; fail at startup instead.
+	keyring, err := providerstore.LoadKeyringFromEnv()
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("provider key encryption: %w (set GVIPI_MASTER_KEY to the base64 32-byte key)", err)
+	}
 	state := newAuthState(pool, &password)
+	state.keyring = keyring
 	retention, err := loadRetentionConfig(state.sessions)
 	if err != nil {
 		pool.Close()
