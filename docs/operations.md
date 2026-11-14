@@ -65,19 +65,23 @@ the environment, including empty values; non-loopback access then stays closed.
 ## Virtual models
 
 `automode` is a Claude-side alias: requests to it are forwarded, unchanged, to the
-model selected on the config page.
+model selected for your account. With a database-backed gateway each account has
+its own target, resolved through that account's keys plus shared `none` keys; an
+owner may edit another account's settings from the config page. Without a
+database the setting stays process-wide.
 
 The **config** tab (`/admin?page=config`) always exposes the virtual model
 `cycle`. Check the models to include and use the arrow controls to define their
-order. Changes save automatically to `-models-file`. `cycle` remains visible even
-when empty, returning HTTP 503 until at least one model is selected.
+order. Changes save automatically to `-models-file` in file mode, or to the
+account's row in database mode. `cycle` remains visible even when empty, returning
+HTTP 503 until at least one model is selected.
 
 When client requests target `cycle`:
 
 - The gateway routes to the first configured model in the sequence.
 - If that model returns **429, 404, 408, 410, or a 5xx status code**, the gateway automatically retries on the next enabled model in the sequence and keeps that model active.
 - A successful stream is forwarded immediately; once streaming bytes have been committed to the client, downstream errors cannot be retried safely.
-- The active cycle position resets to the first model when the gateway restarts or when the cycle configuration changes.
+- The active cycle position resets to the first model when the gateway restarts or when the cycle configuration changes. In database mode each account advances its own position.
 
 ## Web Search (MCP)
 

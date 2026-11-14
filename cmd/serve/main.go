@@ -261,6 +261,9 @@ func runServer() (err error) {
 		return err
 	}
 	defer snapshotRuntime.Close()
+	if appState != nil && snapshotRuntime != nil {
+		prefs.userRouting = newUserRoutingPrefs(appState.pool, snapshotRuntime.router, prefs)
+	}
 
 	exec := nvidia.NewExecutor(&nvidia.Options{
 		FlagCaptcha:  *captchaFlag,

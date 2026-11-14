@@ -31,6 +31,21 @@ func (p *modelPrefs) cycleSnapshot() (cfg cycleConfig, index int) {
 	return cycleConfig{Name: "cycle", Models: append([]string(nil), p.cycle.Models...)}, p.cycleIndex
 }
 
+// cycleChain picks the rotation list and starting position for a request. A
+// database-authenticated account uses its own list and cursor; file mode and
+// anonymous requests keep the process-wide pair.
+func (p *modelPrefs) cycleChain(c *gin.Context, userID string) (cfg cycleConfig, start int, perAccount bool) {
+	if p.userRouting == nil || userID == "" {
+		cfg, start = p.cycleSnapshot()
+		return cfg, start, false
+	}
+	chain, err := p.userRouting.cycleTargets(c.Request.Context(), userID)
+	if err != nil {
+		return cycleConfig{Name: "cycle"}, 0, true
+	}
+	return cycleConfig{Name: "cycle", Models: chain}, p.userRouting.cycleStart(userID), true
+}
+
 func (p *modelPrefs) setCycle(cfg cycleConfig) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
@@ -119,7 +134,11 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		cfg, start := p.cycleSnapshot()
+		rc := core.RequestContextFrom(c.Request.Context())
+		if rc == nil {
+			rc = core.NewRequestContext(c.Request.Header.Get(core.RequestIDHeader))
+			c.Request = c.Request.WithContext(core.WithRequestContext(c.Request.Context(), rc))
+		}
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
@@ -129,16 +148,17 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 		var payload struct {
 			Model string `json:"model"`
 		}
-		if json.Unmarshal(body, &payload) != nil || payload.Model != cfg.Name {
+		if json.Unmarshal(body, &payload) != nil || payload.Model != routing.VirtualCycle {
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
 			c.Request.ContentLength = int64(len(body))
 			c.Next()
 			return
 		}
-		rc := core.RequestContextFrom(c.Request.Context())
-		if rc == nil {
-			rc = core.NewRequestContext(c.Request.Header.Get(core.RequestIDHeader))
-			c.Request = c.Request.WithContext(core.WithRequestContext(c.Request.Context(), rc))
+		cfg, start, perAccount := p.cycleChain(c, rc.UserID)
+		if perAccount && cfg.Models == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": (&routingNotConfigured{Setting: "cycle"}).Error(), "code": "not_configured"})
+			c.Abort()
+			return
 		}
 		if rc.ClientModel == "" {
 			rc.ClientModel = cfg.Name
@@ -149,7 +169,9 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 				break
 			}
 			id := cfg.Models[(start+offset)%len(cfg.Models)]
-			if p.isModelUnavailable(id) {
+			// A database account resolves each alias through its own keys, so
+			// the file-mode availability check must not veto it.
+			if !perAccount && p.isModelUnavailable(id) {
 				continue
 			}
 			rewritten, _ := rewriteJSONModel(body, cfg.Name, id)
@@ -172,7 +194,11 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			p.advanceCycle(cfg.Name, id)
+			if perAccount {
+				p.userRouting.advanceCycle(rc.UserID, cfg.Models, id)
+			} else {
+				p.advanceCycle(cfg.Name, id)
+			}
 			last = writer
 		}
 		if last != nil {

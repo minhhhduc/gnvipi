@@ -104,8 +104,12 @@ func adminTestDDL(schema string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	routing, err := migrations.FS.ReadFile("0004_user_routing_prefs.up.sql")
+	if err != nil {
+		return "", err
+	}
 	ddl := strings.ReplaceAll(string(raw), "SET search_path = public, pg_temp", "SET search_path = "+schema+", pg_temp")
-	return ddl + "\n" + string(catalog), nil
+	return ddl + "\n" + string(catalog) + "\n" + string(routing), nil
 }
 
 // newAdminTestPool installs the production schema into a throwaway schema, so

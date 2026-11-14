@@ -254,7 +254,7 @@ export function App() {
         </Card>
       </>
     ) :
-    effectivePage === "config" ? <ConfigView /> :
+    effectivePage === "config" ? <ConfigView user={user} /> :
     effectivePage === "chromes" ? <ChromesView /> :
     <StatsView />;
 
