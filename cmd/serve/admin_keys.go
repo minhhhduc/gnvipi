@@ -376,7 +376,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			"has_key_env": record.KeyEnv != "",
 			"has_key_ref": record.KeyRef != "",
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "key.create", "provider_key", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.create", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -470,7 +470,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			"has_key_env": updated.KeyEnv != "",
 			"has_key_ref": updated.KeyRef != "",
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "key.update", "provider_key", updated.ID, updated.OwnerID, updated.ID, updated.ProviderID, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.update", updated.ID, updated.OwnerID, updated.ID, updated.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -504,7 +504,7 @@ func handleAdminKeyDelete(state *authState) gin.HandlerFunc {
 			"name":        record.Name,
 			"auth_scheme": record.AuthScheme,
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "key.delete", "provider_key", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.delete", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}

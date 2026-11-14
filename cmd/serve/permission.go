@@ -572,10 +572,20 @@ func adminAuditActor(identity *adminIdentity) auth.AuditEntry {
 	return entry
 }
 
-func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID, userID, keyID, providerID, ip string, details map[string]any) error {
+func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID, userID string, details map[string]any) error {
 	entry := adminAuditActor(identity)
 	entry.Action, entry.TargetType, entry.TargetID = action, targetType, targetID
-	entry.UserID, entry.KeyID, entry.ProviderID = userID, keyID, providerID
+	entry.UserID, entry.Details = userID, details
+	return auth.WriteAudit(ctx, q, entry)
+}
+
+// writeKeyAudit records a provider-key change with its key and provider IDs.
+// It stays local to the key CRUD surface so the shared admin audit helper keeps
+// its existing signature.
+func writeKeyAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetID, ownerID, keyID, providerID, ip string, details map[string]any) error {
+	entry := adminAuditActor(identity)
+	entry.Action, entry.TargetType, entry.TargetID = action, "provider_key", targetID
+	entry.UserID, entry.KeyID, entry.ProviderID = ownerID, keyID, providerID
 	entry.IP, entry.Details = ip, details
 	return auth.WriteAudit(ctx, q, entry)
 }

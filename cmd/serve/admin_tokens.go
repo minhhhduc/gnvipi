@@ -185,7 +185,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the token")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "token.create", "token", token.ID, token.UserID, "", "", "", map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "token.create", "token", token.ID, token.UserID, map[string]any{
 			"user_id": token.UserID,
 			"kind":    string(token.Kind),
 			"scope":   string(token.Scope),
@@ -236,7 +236,7 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke the token")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "token.revoke", "token", token.ID, token.UserID, "", "", "", map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "token.revoke", "token", token.ID, token.UserID, map[string]any{
 			"user_id": token.UserID,
 			"kind":    string(token.Kind),
 			"name":    token.Name,
