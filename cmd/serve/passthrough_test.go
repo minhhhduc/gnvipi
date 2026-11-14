@@ -58,18 +58,18 @@ func TestClaudeAutoModelAliasTracksSelectedModel(t *testing.T) {
 		}
 		return w.Body.String()
 	}
-	if got := request("automode"); got != `{"model":"nvidia/nemotron-3.5-lightning-30b-a3b"}` {
-		t.Fatalf("default automode=%s", got)
+	if got := request("automode"); got != `{"model":""}` {
+		t.Fatalf("unconfigured automode=%s", got)
 	}
-	if err := p.setAutoModel("z-ai/glm-5.2"); err != nil {
+	if err := p.setAutoModel("fixture/auto-model"); err != nil {
 		t.Fatal(err)
 	}
 	for _, model := range []string{"automode"} {
-		if got := request(model); got != `{"model":"z-ai/glm-5.2"}` {
+		if got := request(model); got != `{"model":"fixture/auto-model"}` {
 			t.Fatalf("%s routed to %s", model, got)
 		}
 	}
-	if got := request("moonshotai/kimi-k3"); got != `{"model":"moonshotai/kimi-k3"}` {
+	if got := request("fixture/passthrough-model"); got != `{"model":"fixture/passthrough-model"}` {
 		t.Fatalf("ordinary model changed: %s", got)
 	}
 	if got := request("claude-sonnet-5"); got != `{"model":"claude-sonnet-5"}` {

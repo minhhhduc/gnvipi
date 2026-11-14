@@ -5,40 +5,48 @@ import (
 	"testing"
 )
 
-func TestLookupDefault(t *testing.T) {
-	info, err := Lookup("")
-	if err != nil {
-		t.Fatalf("Lookup(\"\"): %v", err)
+const (
+	testModel = "acme/synthetic-model"
+	testSlug  = "synthetic-model"
+)
+
+func seedRegistry(t *testing.T, entries map[string]ModelInfo) {
+	t.Helper()
+	saved := Snapshot()
+	t.Cleanup(func() { Replace(saved) })
+	Replace(entries)
+}
+
+func TestRegistryStartsEmpty(t *testing.T) {
+	seedRegistry(t, map[string]ModelInfo{})
+	if got := len(Snapshot()); got != 0 {
+		t.Fatalf("registry entries = %d, want 0", got)
 	}
-	if info.Slug != "nemotron-3.5-lightning-30b-a3b" {
-		t.Fatalf("default slug = %q want nemotron-3.5-lightning-30b-a3b", info.Slug)
-	}
-	if info.FunctionID != "0a213807-640b-43fb-bfbf-2919f9b666ad" {
-		t.Fatalf("default function id = %q want 281478d0-…", info.FunctionID)
+	_, err := Lookup("")
+	var unknown *ErrUnknownModel
+	if !errors.As(err, &unknown) {
+		t.Fatalf("Lookup(\"\") error = %v, want *ErrUnknownModel", err)
 	}
 }
 
 func TestLookupKnown(t *testing.T) {
-	cases := map[string]string{
-		"z-ai/glm-5-3-flash":                    "glm-5-3-flash",
-		"nvidia/nemotron-3.5-lightning-30b-a3b": "nemotron-3.5-lightning-30b-a3b",
+	seedRegistry(t, map[string]ModelInfo{
+		testModel: {Slug: testSlug, Namespace: Namespace, FunctionID: testFunctionID},
+	})
+	info, err := Lookup(testModel)
+	if err != nil {
+		t.Fatalf("Lookup(%q): %v", testModel, err)
 	}
-	for model, wantSlug := range cases {
-		info, err := Lookup(model)
-		if err != nil {
-			t.Errorf("Lookup(%q): %v", model, err)
-			continue
-		}
-		if info.Slug != wantSlug {
-			t.Errorf("Lookup(%q) slug = %q want %q", model, info.Slug, wantSlug)
-		}
-		if info.Namespace != Namespace {
-			t.Errorf("Lookup(%q) namespace = %q want %q", model, info.Namespace, Namespace)
-		}
+	if info.Slug != testSlug {
+		t.Errorf("Lookup(%q) slug = %q want %q", testModel, info.Slug, testSlug)
+	}
+	if info.Namespace != Namespace {
+		t.Errorf("Lookup(%q) namespace = %q want %q", testModel, info.Namespace, Namespace)
 	}
 }
 
 func TestLookupUnknown(t *testing.T) {
+	seedRegistry(t, map[string]ModelInfo{})
 	_, err := Lookup("no-such-org/no-such-model")
 	if err == nil {
 		t.Fatal("expected error for unknown model")
@@ -53,12 +61,26 @@ func TestLookupUnknown(t *testing.T) {
 }
 
 func TestPredictEndpoint(t *testing.T) {
-	info, err := Lookup("nvidia/nemotron-3.5-lightning-30b-a3b")
+	seedRegistry(t, map[string]ModelInfo{
+		testModel: {Slug: testSlug, Namespace: Namespace, FunctionID: testFunctionID},
+	})
+	info, err := Lookup(testModel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "https://buildapi.ngc.nvidia.com/v2/predict/models/" + Namespace + "/nemotron-3.5-lightning-30b-a3b"
+	want := "https://buildapi.ngc.nvidia.com/v2/predict/models/" + Namespace + "/" + testSlug
 	if got := info.PredictEndpoint(); got != want {
 		t.Fatalf("PredictEndpoint() = %q want %q", got, want)
+	}
+}
+
+func TestReplaceIsolatesSnapshots(t *testing.T) {
+	seedRegistry(t, map[string]ModelInfo{
+		testModel: {Slug: testSlug, Namespace: Namespace, FunctionID: testFunctionID},
+	})
+	snapshot := Snapshot()
+	snapshot["acme/added-later"] = ModelInfo{Slug: "added-later", Namespace: Namespace, FunctionID: testFunctionID}
+	if _, ok := Get("acme/added-later"); ok {
+		t.Fatal("mutating a snapshot changed the registry")
 	}
 }

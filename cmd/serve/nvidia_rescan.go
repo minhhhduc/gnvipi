@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
 // discoverNvidiaCatalog is a seam for tests; production reads the live
@@ -23,9 +25,33 @@ type nvidiaRescanResult struct {
 	ScannedAt time.Time `json:"scanned_at"`
 }
 
+// loadStoredNvidiaCatalog publishes the catalog the last rescan committed to
+// PostgreSQL. An empty table is an empty catalog: the admin console then
+// offers a rescan. File mode keeps the catalog prefs.load read from the saved
+// models file.
+func (p *modelPrefs) loadStoredNvidiaCatalog(ctx context.Context) error {
+	if p.catalogRead == nil {
+		return nil
+	}
+	rows, err := providerstore.LoadNvidiaCatalog(ctx, p.catalogRead)
+	if err != nil {
+		return fmt.Errorf("load nvidia catalog: %w", err)
+	}
+	next := make(map[string]models.ModelInfo, len(rows))
+	for _, row := range rows {
+		next[row.Model] = models.ModelInfo{
+			Slug:       row.Slug,
+			Namespace:  row.Namespace,
+			FunctionID: row.FunctionID,
+		}
+	}
+	models.Replace(next)
+	return nil
+}
+
 // rescanNvidiaCatalog reconciles the stored catalog with the live upstream
-// list. A discovery or validation failure leaves both the file and the
-// in-memory registry untouched.
+// list. A discovery or validation failure, or a failed transaction, leaves
+// both the stored catalog and the in-memory registry untouched.
 func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResult, error) {
 	groups, err := discoverNvidiaCatalog(ctx)
 	if err != nil {
@@ -41,7 +67,6 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 	result := nvidiaRescanResult{ScannedAt: time.Now().UTC()}
 	for id, info := range upstream {
 		if old, exists := current[id]; exists {
-			info.Capability = old.Capability
 			if old != info {
 				result.Updated++
 			}
@@ -56,6 +81,15 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 		}
 	}
 	if result.Added == 0 && result.Updated == 0 && result.Removed == 0 {
+		return result, nil
+	}
+
+	if p.catalogWrite != nil {
+		if err := p.storeNvidiaCatalog(ctx, upstream); err != nil {
+			return nvidiaRescanResult{}, err
+		}
+		models.Replace(next)
+		p.notifyCatalogChanged()
 		return result, nil
 	}
 
@@ -87,6 +121,35 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 	models.Replace(next)
 	p.notifyCatalogChanged()
 	return result, nil
+}
+
+// storeNvidiaCatalog replaces the table in one transaction. It returns only
+// after commit, so a failure leaves PostgreSQL unchanged.
+func (p *modelPrefs) storeNvidiaCatalog(ctx context.Context, upstream map[string]models.ModelInfo) error {
+	rows := make([]models.PlaygroundRow, 0, len(upstream))
+	for id, info := range upstream {
+		rows = append(rows, models.PlaygroundRow{
+			Model:      id,
+			Slug:       info.Slug,
+			Namespace:  info.Namespace,
+			FunctionID: info.FunctionID,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Model < rows[j].Model })
+
+	tx, err := p.catalogWrite.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("save nvidia catalog: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort cleanup after commit or failure
+
+	if err := providerstore.ReplaceNvidiaCatalog(ctx, tx, rows); err != nil {
+		return fmt.Errorf("save nvidia catalog: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("save nvidia catalog: %w", err)
+	}
+	return nil
 }
 
 func upstreamCatalog(groups []models.PlaygroundGroup) (map[string]models.ModelInfo, error) {

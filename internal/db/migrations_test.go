@@ -354,7 +354,7 @@ func TestMigrationsApply(t *testing.T) {
 	tables := []string{
 		"users", "sessions", "api_tokens", "login_attempts", "audit_log",
 		"providers", "provider_keys", "key_models", "model_state",
-		"settings", "system_state", "config_state",
+		"settings", "system_state", "config_state", "nvidia_models",
 	}
 	for _, table := range tables {
 		var exists bool
@@ -978,6 +978,13 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 	if _, err := conn.Exec(ctx, string(v2)); err != nil {
 		t.Fatalf("apply v2 migration: %v", err)
 	}
+	v3, err := migrations.FS.ReadFile("0003_nvidia_catalog.up.sql")
+	if err != nil {
+		t.Fatalf("read v3 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v3)); err != nil {
+		t.Fatalf("apply v3 migration: %v", err)
+	}
 
 	checks := []struct {
 		name  string
@@ -995,6 +1002,9 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 			AND has_table_privilege('gnvipi_app', 'audit_log', 'INSERT')`, true},
 		{"audit mutation denied", `SELECT NOT has_table_privilege('gnvipi_app', 'audit_log', 'UPDATE')
 			AND NOT has_table_privilege('gnvipi_app', 'audit_log', 'DELETE')`, true},
+		{"nvidia catalog read", `SELECT has_table_privilege('gnvipi_app', 'nvidia_models', 'SELECT')`, true},
+		{"nvidia catalog write denied", `SELECT NOT has_table_privilege('gnvipi_app', 'nvidia_models', 'INSERT')
+			AND NOT has_table_privilege('gnvipi_app', 'nvidia_models', 'DELETE')`, true},
 		{"runtime role does not own tables", `SELECT NOT EXISTS (
 			SELECT 1 FROM pg_class WHERE relkind = 'r' AND pg_get_userbyid(relowner) = 'gnvipi_app')`, true},
 	}

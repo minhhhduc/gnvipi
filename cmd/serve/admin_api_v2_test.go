@@ -11,6 +11,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
+// syntheticModel is a fixture id: the catalog is runtime state, so tests never
+// rely on a real NVIDIA model being present.
+const syntheticModel = "vendor/synthetic-model"
+
 func testAdminAPIEngine(t *testing.T, p *modelPrefs, catalog []*cliproxy.ModelInfo) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -33,7 +37,7 @@ func TestAdminAPIV2_ModelsCatalogAndMutations(t *testing.T) {
 	prefs = p
 	t.Cleanup(func() { prefs = oldPrefs })
 
-	catalog := []*cliproxy.ModelInfo{{ID: models.DefaultModel}, {ID: "openai/gpt-4o"}}
+	catalog := []*cliproxy.ModelInfo{{ID: syntheticModel}, {ID: "openai/gpt-4o"}}
 	engine := testAdminAPIEngine(t, p, catalog)
 
 	res := makeRequest(t, engine, http.MethodGet, "/admin/api/models", nil, nil)
@@ -88,7 +92,7 @@ func TestAdminAPIV2_ModelsCatalogAndMutations(t *testing.T) {
 	}
 
 	// Delete and restore a model whose id contains a slash.
-	res = makeRequest(t, engine, http.MethodDelete, "/admin/api/models/"+models.DefaultModel, nil, nil)
+	res = makeRequest(t, engine, http.MethodDelete, "/admin/api/models/"+syntheticModel, nil, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("DELETE model = %d: %s", res.Code, res.Body.String())
 	}
@@ -99,7 +103,7 @@ func TestAdminAPIV2_ModelsCatalogAndMutations(t *testing.T) {
 	}
 	found := false
 	for _, m := range list.Models {
-		if m.ID == models.DefaultModel {
+		if m.ID == syntheticModel {
 			found = true
 		}
 	}
@@ -107,7 +111,7 @@ func TestAdminAPIV2_ModelsCatalogAndMutations(t *testing.T) {
 		t.Fatalf("deleted model still listed: %s", res.Body.String())
 	}
 
-	res = makeRequest(t, engine, http.MethodPost, "/admin/api/models/"+models.DefaultModel+"/restore", nil, nil)
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/models/"+syntheticModel+"/restore", nil, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("POST restore = %d: %s", res.Code, res.Body.String())
 	}
@@ -118,7 +122,7 @@ func TestAdminAPIV2_ModelsCatalogAndMutations(t *testing.T) {
 	}
 	found = false
 	for _, m := range list.Models {
-		if m.ID == models.DefaultModel {
+		if m.ID == syntheticModel {
 			found = true
 		}
 	}
@@ -138,7 +142,13 @@ func TestAdminAPIV2_ConfigAndStats(t *testing.T) {
 	prefs = p
 	t.Cleanup(func() { prefs = oldPrefs })
 
-	catalog := []*cliproxy.ModelInfo{{ID: models.DefaultModel}, {ID: "openai/gpt-4o"}}
+	saved := models.Snapshot()
+	models.Replace(map[string]models.ModelInfo{
+		syntheticModel: {Slug: "synthetic-model", Namespace: models.Namespace, FunctionID: "00000000-0000-0000-0000-000000000001"},
+	})
+	t.Cleanup(func() { models.Replace(saved) })
+
+	catalog := []*cliproxy.ModelInfo{{ID: syntheticModel}, {ID: "openai/gpt-4o"}}
 	engine := testAdminAPIEngine(t, p, catalog)
 
 	// Stats: the dashboard payload.
@@ -163,7 +173,7 @@ func TestAdminAPIV2_ConfigAndStats(t *testing.T) {
 		t.Fatalf("GET automode = %d: %s", res.Code, res.Body.String())
 	}
 	assertJSON(t, res)
-	res = makeRequest(t, engine, http.MethodPost, "/admin/api/config/automode", map[string]any{"model": models.DefaultModel}, nil)
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/config/automode", map[string]any{"model": syntheticModel}, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("POST automode = %d: %s", res.Code, res.Body.String())
 	}
@@ -175,8 +185,8 @@ func TestAdminAPIV2_ConfigAndStats(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &auto); err != nil {
 		t.Fatalf("unmarshal automode: %v", err)
 	}
-	if auto.Model != models.DefaultModel {
-		t.Fatalf("automode model = %q, want %q", auto.Model, models.DefaultModel)
+	if auto.Model != syntheticModel {
+		t.Fatalf("automode model = %q, want %q", auto.Model, syntheticModel)
 	}
 	res = makeRequest(t, engine, http.MethodPost, "/admin/api/config/automode", map[string]any{"model": "not/a-real-model"}, nil)
 	if res.Code != http.StatusBadRequest {
@@ -200,7 +210,7 @@ func TestAdminAPIV2_ConfigAndStats(t *testing.T) {
 	if cycle.Name != "cycle" || cycle.Models == nil || cycle.Available == nil {
 		t.Fatalf("cycle payload = %s", res.Body.String())
 	}
-	res = makeRequest(t, engine, http.MethodPost, "/admin/api/config/cycle", map[string]any{"models": []string{models.DefaultModel}}, nil)
+	res = makeRequest(t, engine, http.MethodPost, "/admin/api/config/cycle", map[string]any{"models": []string{syntheticModel}}, nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("POST cycle = %d: %s", res.Code, res.Body.String())
 	}
@@ -209,7 +219,7 @@ func TestAdminAPIV2_ConfigAndStats(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &cycle); err != nil {
 		t.Fatalf("unmarshal cycle: %v", err)
 	}
-	if len(cycle.Models) != 1 || cycle.Models[0] != models.DefaultModel || cycle.Current != models.DefaultModel {
+	if len(cycle.Models) != 1 || cycle.Models[0] != syntheticModel || cycle.Current != syntheticModel {
 		t.Fatalf("cycle after set = %s", res.Body.String())
 	}
 

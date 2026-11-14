@@ -7,9 +7,25 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
+// seedModels publishes a synthetic catalog for the duration of one test.
+func seedModels(t *testing.T, entries map[string]models.ModelInfo) {
+	t.Helper()
+	saved := models.Snapshot()
+	t.Cleanup(func() { models.Replace(saved) })
+	models.Replace(entries)
+}
+
+func fixture(model, functionID string) models.ModelInfo {
+	_, slug, _ := strings.Cut(model, "/")
+	return models.ModelInfo{Slug: slug, Namespace: models.Namespace, FunctionID: functionID}
+}
+
 func TestBuildRequestUsesCaptchaAuthentication(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{DefaultModel: fixture(DefaultModel, NVFunctionID)})
 	client := New(WithCaptchaToken("test-captcha-token"))
 	chatRequest := &ChatRequest{
 		Model: DefaultModel,
@@ -127,6 +143,7 @@ func TestBuildRequestRoutesPerModel(t *testing.T) {
 		},
 	}
 	for model, want := range cases {
+		seedModels(t, map[string]models.ModelInfo{model: fixture(model, want.fnID)})
 		req, err := client.buildRequest(context.Background(), &ChatRequest{
 			Model: model, Messages: []Message{{Role: RoleUser, Content: "Hi"}},
 		})
@@ -144,6 +161,7 @@ func TestBuildRequestRoutesPerModel(t *testing.T) {
 }
 
 func TestBuildRequestUnknownModel(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{})
 	client := New(WithCaptchaToken("tok"))
 	_, err := client.buildRequest(context.Background(), &ChatRequest{
 		Model: "no-such-org/never", Messages: []Message{{Role: RoleUser, Content: "Hi"}},

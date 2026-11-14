@@ -238,6 +238,18 @@ func runServer() (err error) {
 		// GNVIPI_ADMIN_TOKEN (or -admin-token) is a one-time bootstrap
 		// credential in database mode: it works only while no owner exists.
 		adminAuth.setBootstrapToken(*adminToken)
+		// Database mode owns the NVIDIA catalog: the table holds exactly what
+		// the last rescan fetched, and an empty table means an empty catalog
+		// (the admin console then offers a rescan). The runtime role reads;
+		// catalog writes use the maintenance role when one is configured.
+		prefs.catalogRead = appState.pool
+		prefs.catalogWrite = appState.pool
+		if appState.maintenance != nil {
+			prefs.catalogWrite = appState.maintenance
+		}
+		if err := prefs.loadStoredNvidiaCatalog(ctx); err != nil {
+			return fmt.Errorf("nvidia catalog: %w", err)
+		}
 	}
 
 	// Database mode also owns routing configuration: one immutable snapshot per

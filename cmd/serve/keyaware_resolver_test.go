@@ -226,7 +226,12 @@ func TestKeyAwareResolverUnknownModelIs404(t *testing.T) {
 // Database users keep the shared NVIDIA captcha-pool route, and a database
 // alias cannot claim a protected model without allow_shadow.
 func TestKeyAwareResolverKeepsProtectedAndRegistryRoutes(t *testing.T) {
-	protected := models.DefaultModel
+	const protected = "vendor/protected-model"
+	saved := models.Snapshot()
+	models.Replace(map[string]models.ModelInfo{
+		protected: {Slug: "protected-model", Namespace: models.Namespace, FunctionID: "00000000-0000-0000-0000-000000000002"},
+	})
+	t.Cleanup(func() { models.Replace(saved) })
 	rows := providerstore.Rows{
 		Providers: []providerstore.ProviderRow{keyAwareTestProvider("https://p1.example.com/v1")},
 		Keys:      []providerstore.KeyRow{{ID: "k-shadow", ProviderID: "p1", OwnerID: "u1", Name: "shadow", Enabled: true, AuthScheme: providerstore.SchemeNone}},

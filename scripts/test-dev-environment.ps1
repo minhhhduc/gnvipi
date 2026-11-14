@@ -33,7 +33,6 @@ $readme = Get-Content -Raw -Path (Join-Path $root 'README.md')
 Assert-DevEnvironment ($readme -match 'docker compose up -d --wait db') 'the README bootstrap must wait for PostgreSQL health before migrating'
 
 $modelsFile = Join-Path $root 'internal\models\playground_models.json'
-$modelsDefault = Join-Path $root 'internal\models\playground_models.default.json'
 $binDir = Join-Path $root 'bin'
 $serveExe = Join-Path $binDir 'serve.exe'
 $toolDir = Join-Path ([System.IO.Path]::GetTempPath()) ("gnvipi-run-test-" + [guid]::NewGuid().ToString('N'))
@@ -169,7 +168,10 @@ public static class NativeToolStub {
   $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
   $env:GNVIPI_TEST_GO_LOG = $goLog
   $env:GNVIPI_TEST_TOOL_LOG = $toolLog
-  if ($createdModels) { Copy-Item $modelsDefault $modelsFile }
+  if ($createdModels) {
+    $emptyModels = '{"groups":[],"masks_id":[],"deleted_id":[],"schema_version":2,"providers_v2":[]}'
+    [System.IO.File]::WriteAllText($modelsFile, $emptyModels, (New-Object System.Text.UTF8Encoding($false)))
+  }
   if ($createdServe) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $serveExe) | Out-Null
     [System.IO.File]::WriteAllBytes($serveExe, [byte[]]@())

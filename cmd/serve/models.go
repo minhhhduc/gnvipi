@@ -11,7 +11,6 @@ import (
 	gatewayoutbound "github.com/minhhhduc/gnvipi/internal/gateway/outbound"
 	"github.com/minhhhduc/gnvipi/internal/gateway/policy"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
-	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
@@ -161,24 +160,6 @@ func hasStructuredOutputExtension(ext map[string]json.RawMessage) bool {
 	return false
 }
 
-// resolveNvidiaCapabilities derives capabilities for build.nvidia.com playground models.
-func resolveNvidiaCapabilities(modelID string) adapter.Capabilities {
-	caps := adapter.Capabilities{
-		Streaming: true,
-	}
-	if info, err := models.Lookup(modelID); err == nil && info.Capability != nil {
-		caps.Tools = info.Capability.ToolCalling
-		caps.StructuredOutput = info.Capability.StructuredOutput
-		if info.Capability.Vision {
-			caps.Images = adapter.ImageCapabilityBoth
-		} else {
-			caps.Images = adapter.ImageCapabilityNone
-		}
-		caps.Reasoning = info.Capability.Reasoning
-	}
-	return caps
-}
-
 // buildCatalog builds the discovery catalog from virtual models, NVIDIA models,
 // and visible v2 provider aliases, applying masking and collision precedence.
 func buildCatalog(prefs *modelPrefs, getNvidiaModels func() []*cliproxy.ModelInfo, opts ...CatalogOption) []gatewayModel {
@@ -222,7 +203,7 @@ func buildCatalog(prefs *modelPrefs, getNvidiaModels func() []*cliproxy.ModelInf
 			if _, exists := seen[m.ID]; exists {
 				continue
 			}
-			caps := resolveNvidiaCapabilities(m.ID)
+			caps := adapter.Capabilities{Streaming: true}
 			seen[m.ID] = len(out)
 			fromNvidia[m.ID] = true
 			out = append(out, gatewayModel{
