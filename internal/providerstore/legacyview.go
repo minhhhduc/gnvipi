@@ -108,6 +108,15 @@ func legacyAuth(key KeyRow, opts LegacyViewOptions) provider.Auth {
 func legacyModels(rows []KeyModelRow, visibleKeys map[string]bool) []provider.ModelMapping {
 	sorted := append([]KeyModelRow(nil), rows...)
 	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].LegacyPosition != sorted[j].LegacyPosition {
+			if sorted[i].LegacyPosition == 0 {
+				return false
+			}
+			if sorted[j].LegacyPosition == 0 {
+				return true
+			}
+			return sorted[i].LegacyPosition < sorted[j].LegacyPosition
+		}
 		if sorted[i].Alias != sorted[j].Alias {
 			return sorted[i].Alias < sorted[j].Alias
 		}
