@@ -15,6 +15,7 @@ import {
   tokenCreatePayload,
   tokenStatus,
   type ExpiryChoice,
+  type TokenStatus,
 } from "../lib/tokens";
 import { USER_LIST_MAX, parseUserList, userPickerNote } from "../lib/users";
 import {
@@ -24,7 +25,6 @@ import {
   dateLabel,
   message,
   pageWindow,
-  statusPill,
 } from "../lib/admin";
 
 type DialogState =
@@ -32,6 +32,11 @@ type DialogState =
   | { kind: "created"; token: string; name: string }
   | { kind: "revoke"; token: TokenRecord }
   | null;
+
+function statusPill(status: TokenStatus) {
+  if (status === "active") return "pill pill-ok";
+  return status === "expired" ? "pill pill-warn" : "pill pill-bad";
+}
 
 export function TokensView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
@@ -45,7 +50,6 @@ export function TokensView({ user }: { user: AdminUser }) {
   // Owners may read another account's tokens one account at a time; every other
   // role is pinned to its own tokens by the server.
   const [accounts, setAccounts] = useState<AdminUserRecord[]>([]);
-  const [accountsError, setAccountsError] = useState<string | null>(null);
   const [accountID, setAccountID] = useState("");
   const requestId = useRef(0);
 
@@ -82,22 +86,13 @@ export function TokensView({ user }: { user: AdminUser }) {
     void load();
   }, [limit, offset, accountID]);
 
-  const loadAccounts = () => {
+  useEffect(() => {
+    if (!owner) return;
     api<unknown>(`/admin/api/users?limit=${USER_LIST_MAX}`)
-      .then((body) => {
-        setAccounts(parseUserList(body).users);
-        setAccountsError(null);
-      })
+      .then((body) => setAccounts(parseUserList(body).users))
       // The token list still works for the caller's own account; the selector
       // just stays limited to "My tokens".
-      .catch((err) => {
-        setAccounts([]);
-        setAccountsError(message(err));
-      });
-  };
-
-  useEffect(() => {
-    if (owner) loadAccounts();
+      .catch(() => setAccounts([]));
   }, [owner]);
 
   const target = accountID ? accounts.find((account) => account.id === accountID) : undefined;
@@ -146,14 +141,6 @@ export function TokensView({ user }: { user: AdminUser }) {
                 </select>
               </label>
               {pickerNote && <span class="text-[11px] text-dim">{pickerNote}</span>}
-              {accountsError && (
-                <span class="text-[11px] text-bad">
-                  Accounts unavailable: {accountsError}{" "}
-                  <button type="button" class="font-semibold text-accent underline" onClick={loadAccounts}>
-                    Retry
-                  </button>
-                </span>
-              )}
             </>
           )}
           <label class="flex items-center gap-1.5 text-xs text-dim">
@@ -185,7 +172,6 @@ export function TokensView({ user }: { user: AdminUser }) {
             <tbody>
               {tokens.map((token) => {
                 const status = tokenStatus(token);
-                const tone = status === "active" ? "ok" : status === "expired" ? "warn" : "bad";
                 return (
                   <tr key={token.id}>
                     <td>
@@ -196,7 +182,7 @@ export function TokensView({ user }: { user: AdminUser }) {
                     <td class="mono muted">{token.token_prefix}…</td>
                     <td class="muted">{expiryLabel(token.expires_at)}</td>
                     <td class="muted">{lastUsedLabel(token.last_used_at)}</td>
-                    <td><span class={statusPill(tone)}>{status}</span></td>
+                    <td><span class={statusPill(status)}>{status}</span></td>
                     <td class="text-right whitespace-nowrap">
                       <button
                         class="btn btn-sm btn-danger"

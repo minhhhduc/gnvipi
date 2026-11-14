@@ -1,5 +1,5 @@
 import type { TokenList, TokenRecord } from "./types";
-import { DEFAULT_LIMIT, clampOffset, dateLabel, optionalString, requiredString } from "./admin";
+import { DEFAULT_LIMIT, clampOffset, dateLabel, optionalString } from "./admin";
 
 export type TokenStatus = "active" | "expired" | "revoked";
 
@@ -63,16 +63,21 @@ export function emptyPageOffset(limit: number, offset: number): number {
   return offset > 0 ? clampOffset({ total: offset, limit, offset }) : 0;
 }
 
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value) throw new Error(`Invalid tokens response: ${field}`);
+  return value;
+}
+
 /** Only the display fields cross into the UI; the plaintext and hash never do. */
 function tokenRecord(value: unknown): TokenRecord {
   if (!value || typeof value !== "object") throw new Error("Invalid tokens response: token");
   const raw = value as Record<string, unknown>;
   return {
-    id: requiredString(raw.id, "tokens", "id"),
-    user_id: requiredString(raw.user_id, "tokens", "user_id"),
-    kind: requiredString(raw.kind, "tokens", "kind"),
-    name: requiredString(raw.name, "tokens", "name"),
-    token_prefix: requiredString(raw.token_prefix, "tokens", "token_prefix"),
+    id: requiredString(raw.id, "id"),
+    user_id: requiredString(raw.user_id, "user_id"),
+    kind: requiredString(raw.kind, "kind"),
+    name: requiredString(raw.name, "name"),
+    token_prefix: requiredString(raw.token_prefix, "token_prefix"),
     scope: optionalString(raw.scope),
     expires_at: optionalString(raw.expires_at),
     last_used_at: optionalString(raw.last_used_at),

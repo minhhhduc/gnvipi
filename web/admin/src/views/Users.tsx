@@ -17,16 +17,7 @@ import {
   validateNewUser,
   type FieldError,
 } from "../lib/users";
-import {
-  DEFAULT_LIMIT,
-  PAGE_SIZES,
-  clampLimit,
-  clampOffset,
-  dateLabel,
-  message,
-  pageWindow,
-  statusPill,
-} from "../lib/admin";
+import { DEFAULT_LIMIT, PAGE_SIZES, clampLimit, clampOffset, dateLabel, message, pageWindow } from "../lib/admin";
 
 type DialogState =
   | { kind: "create" }
@@ -34,6 +25,10 @@ type DialogState =
   | { kind: "password"; user: AdminUserRecord }
   | { kind: "delete"; user: AdminUserRecord }
   | null;
+
+function statusPill(status: string) {
+  return status === "active" ? "pill pill-ok" : "pill pill-bad";
+}
 
 export function UsersView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
@@ -138,7 +133,7 @@ export function UsersView({ user }: { user: AdminUser }) {
                   </td>
                   <td><span class="chip capitalize">{record.role}</span></td>
                   <td>
-                    <span class={statusPill(record.status === "active" ? "ok" : "bad")}>{record.status}</span>
+                    <span class={statusPill(record.status)}>{record.status}</span>
                     {record.must_change_password && <span class="ml-1 pill pill-warn">password change due</span>}
                   </td>
                   <td class="muted">{dateLabel(record.last_login_at)}</td>

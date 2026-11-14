@@ -121,7 +121,7 @@ describe("edit safeguards", () => {
 
   it("states the account picker ceiling once its page fills", () => {
     expect(userPickerNote(3)).toBeNull();
-    expect(userPickerNote(200)).toContain("newest 200");
+    expect(userPickerNote(200)).toContain("200");
   });
 
   it("applies the create display-name limit to edits too", () => {

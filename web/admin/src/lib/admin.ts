@@ -62,17 +62,6 @@ export function optionalString(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
 
-/** A required string field in a response body; list parsers share it. */
-export function requiredString(value: unknown, response: string, field: string): string {
-  if (typeof value !== "string" || !value) throw new Error(`Invalid ${response} response: ${field}`);
-  return value;
-}
-
-/** The shared status pill classes; each view maps its status to a tone. */
-export function statusPill(tone: "ok" | "warn" | "bad"): string {
-  return `pill pill-${tone}`;
-}
-
 export function dateLabel(value?: string | null): string {
   if (!value) return "—";
   const t = Date.parse(value);
