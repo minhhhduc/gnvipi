@@ -2,7 +2,7 @@ import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import type { AdminUser } from "../lib/auth";
-import type { KeyModel, NvidiaRescanResult, Provider, ProviderKey, TestResult } from "../lib/types";
+import type { KeyModel, ModelInfo, ModelsResponse, NvidiaRescanResult, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
 import {
@@ -68,11 +68,15 @@ export function ModelsView({ user }: { user: AdminUser }) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedID, setSelectedID] = useState<string | null>(null);
+  const [nvidiaOpen, setNvidiaOpen] = useState(false);
+  const [nvidiaModels, setNvidiaModels] = useState<ModelInfo[]>([]);
+  const [nvidiaLoading, setNvidiaLoading] = useState(false);
 
   // Clicking Models in the nav returns to the provider list, even when the
   // view is already on screen with a provider open.
   useEffect(() => {
     setSelectedID(null);
+    setNvidiaOpen(false);
   }, [navSeq]);
   const [menu, setMenu] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ open: boolean; provider: Provider | null } | null>(null);
@@ -164,6 +168,64 @@ export function ModelsView({ user }: { user: AdminUser }) {
     }
   };
 
+  const openNvidia = async () => {
+    setNvidiaOpen(true);
+    setNvidiaLoading(true);
+    try {
+      const body = await api<ModelsResponse>("/admin/api/models");
+      setNvidiaModels((body.models ?? []).filter((model) => !model.custom));
+    } catch (err) {
+      toast(`NVIDIA models unavailable: ${message(err)}`, "bad");
+    } finally {
+      setNvidiaLoading(false);
+    }
+  };
+
+  if (nvidiaOpen) {
+    return (
+      <>
+        <PageHeader title="NVIDIA Playground" sub="Shared Chrome captcha pool · no per-user key">
+          <HealthPill />
+          <NvidiaRescanButton role={user.role} busy={rescanBusy} onClick={() => void runRescan()} />
+          <button class="btn" onClick={() => setNvidiaOpen(false)}>All providers</button>
+        </PageHeader>
+        {operator && (rescanResult || rescanError) && (
+          <div
+            class={`mb-3 rounded-lg border px-3 py-2 text-xs ${rescanError ? "border-bad bg-bad-soft text-bad" : "border-line text-dim"}`}
+            role={rescanError ? "alert" : "status"}
+          >
+            {rescanError
+              ? `Rescan failed: ${rescanError}`
+              : `Rescan complete: ${rescanSummary(rescanResult!)} · ${new Date(rescanResult!.scanned_at).toLocaleString()}`}
+          </div>
+        )}
+        <Card>
+          <CardHead title="Models" sub={`${nvidiaModels.length} available`} />
+          {nvidiaLoading ? (
+            <Empty title="Loading…" body="Reading the NVIDIA catalog." />
+          ) : nvidiaModels.length === 0 ? (
+            <Empty title="No NVIDIA models" body={operator ? "Run a rescan to load the Playground catalog." : "No Playground models are available right now."} />
+          ) : (
+            <table class="table">
+              <thead>
+                <tr><th>Model</th><th>Publisher</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {nvidiaModels.map((model) => (
+                  <tr key={model.id}>
+                    <td class="mono text-[12px]">{model.id}</td>
+                    <td class="muted">{model.publisher || "—"}</td>
+                    <td class="muted">{model.hidden ? "hidden" : "available"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </>
+    );
+  }
+
   if (selected) {
     return (
       <ProviderKeys
@@ -201,10 +263,24 @@ export function ModelsView({ user }: { user: AdminUser }) {
       </div>
       {loading ? (
         <Card><Empty title="Loading…" body="Reading providers." /></Card>
-      ) : providers.length === 0 ? (
-        <Card><Empty title="No upstream providers" body={operator ? "Add one to route gateway models to an upstream API." : "No enabled providers are available to your account."} /></Card>
       ) : (
         <div class="grid gap-2.5">
+          <div class="card relative px-3 py-2.5">
+            <div class="flex items-center gap-2">
+              <span class="pill pill-ok">● shared</span>
+              <b class="text-[13px]">NVIDIA Playground</b>
+              <span class="chip">captcha</span>
+            </div>
+            <div class="mt-1.5 text-[11px] text-dim">
+              Built-in models served through the shared Chrome captcha pool; no per-user key.
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-1.5">
+              <button class="btn btn-sm" onClick={() => void openNvidia()}>View models</button>
+            </div>
+          </div>
+          {providers.length === 0 && (
+            <Card><Empty title="No upstream providers" body={operator ? "Add one to route gateway models to an upstream API." : "No additional providers are available to your account."} /></Card>
+          )}
           {providers.map((provider) => (
             <div key={provider.id} class="card relative px-3 py-2.5">
               <div class="flex items-center gap-2">
