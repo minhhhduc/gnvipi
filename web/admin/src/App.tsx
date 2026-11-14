@@ -14,6 +14,7 @@ import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
 import { TokensView } from "./views/Tokens";
 import { UsersView } from "./views/Users";
+import { AuditView } from "./views/Audit";
 
 /** Stats refresh cadence, and the point at which a request counts as stalled. */
 const STATS_POLL_INTERVAL_MS = 2000;
@@ -239,6 +240,7 @@ export function App() {
     effectivePage === "users" && operator ? <UsersView user={user} /> :
     // Models is open to every role: users manage only their own keys there.
     effectivePage === "models" ? <ModelsView user={user} /> :
+    effectivePage === "audit" ? <AuditView user={user} /> :
     !operator ? (
       <>
         <PageHeader title="Stats" sub="Usage for this gateway account" />
