@@ -47,6 +47,10 @@ jobs:
         run: go test -race -vet=all ./...
         env:
           SKIP_INTEGRATION_TESTS: "1"
+      - name: Dev environment contracts
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-dev-environment.ps1
 
   test-postgres:
     name: Test (postgres)

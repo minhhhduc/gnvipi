@@ -86,15 +86,38 @@ To serve free models from the NVIDIA Playground (e.g.
    .\scripts\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
    ```
 
+For the DB-backed local flow, start PostgreSQL, migrate, create the first owner,
+and give `run.ps1 -Claude` the one-time gateway token:
+
+```powershell
+# Local-development credentials only; do not reuse them in production.
+docker compose up -d --wait db
+$env:GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+$env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
+New-Item -ItemType Directory -Force .\bin | Out-Null
+go build -o .\bin\serve.exe ./cmd/serve
+.\bin\serve.exe migrate
+.\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+$env:GNVIPI_GATEWAY_TOKEN='gw_...'
+.\scripts\run.ps1 -Claude
+```
+
+The bootstrap command prints the gateway token once. `run.ps1` forwards it to
+Claude Code as `ANTHROPIC_AUTH_TOKEN` without printing the token.
+
 ---
 
 ## Client Configuration
+
+DB-backed clients use the generated `gw_...` token. The `local-gateway`
+values in the remaining rows are legacy/manual `-gateway-key` placeholders;
+`run.ps1 -Claude` rejects that literal.
 
 Point your client at the gateway root or `/v1`, depending on the SDK:
 
 | Client Application / SDK | Base URL | Auth Token / Key |
 |---|---|---|
-| **Claude Code** | `http://localhost:8080` (no `/v1` suffix) | `local-gateway` (or configured `-gateway-key`) |
+| **Claude Code** | `http://localhost:8080` (no `/v1` suffix) | generated `gw_...` token (DB-backed) or configured `-gateway-key` (legacy) |
 | **OpenAI Python SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
 | **OpenAI Node / TypeScript SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
 | **Codex / OpenAI Responses** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
@@ -103,13 +126,14 @@ Point your client at the gateway root or `/v1`, depending on the SDK:
 
 ### Claude Code
 
-Set the environment variables, or place this in `.claude/settings.json`:
+For the DB-backed flow, set the generated token in the environment or in
+`.claude/settings.json`:
 
 ```json
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:8080",
-    "ANTHROPIC_AUTH_TOKEN": "local-gateway",
+    "ANTHROPIC_AUTH_TOKEN": "gw_...",
     "ANTHROPIC_API_KEY": "",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
   }

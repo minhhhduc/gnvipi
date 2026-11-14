@@ -46,13 +46,6 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
   throw "go is not in PATH"
 }
 
-# Check if port is already in use
-$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if ($busy) {
-  $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
-  throw "Port $Port is in use by $owner (PID $($busy[0].OwningProcess)) - terminate it or specify another -Port"
-}
-
 # -Claude authenticates with a real gateway token; the old hardcoded literal is
 # rejected. Never print the token.
 $gatewayToken = $env:GNVIPI_GATEWAY_TOKEN
@@ -64,8 +57,40 @@ if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
   throw "GNVIPI_GATEWAY_TOKEN is not set"
 }
 
+# Terminate a Windows process tree without an unbounded wait. taskkill handles
+# descendants (for example Docker plugins); Process.Kill is the fallback.
+function Stop-ProcessTreeBounded {
+  param($Process, [int]$TimeoutMs = 2000)
+  if (-not $Process) { return }
+  $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+  try {
+    if (Test-Path $taskkill) {
+      $killInfo = New-Object System.Diagnostics.ProcessStartInfo
+      $killInfo.FileName = $taskkill
+      $killInfo.Arguments = "/PID $($Process.Id) /T /F"
+      $killInfo.UseShellExecute = $false
+      $killInfo.CreateNoWindow = $true
+      $killInfo.RedirectStandardOutput = $true
+      $killInfo.RedirectStandardError = $true
+      $killer = [System.Diagnostics.Process]::Start($killInfo)
+      try {
+        if (-not $killer.WaitForExit($TimeoutMs)) { try { $killer.Kill() } catch {} }
+      } finally {
+        $killer.Dispose()
+      }
+    }
+  } catch {}
+  try { if (-not $Process.HasExited) { $Process.Kill() } } catch {}
+  $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+  while ((Get-Date) -lt $deadline) {
+    try { if ($Process.HasExited) { break } } catch { break }
+    Start-Sleep -Milliseconds 50
+  }
+}
+
 # Run a command with a bounded timeout and suppressed output. Returns $true on
-# exit code 0. Output is never echoed (it may contain DSN details).
+# exit code 0. Output is drained to prevent verbose children from blocking, but
+# never echoed because it may contain connection details.
 function Invoke-Bounded {
   param([string]$FilePath, [string[]]$ArgumentList, [int]$TimeoutMs = 5000)
   $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -77,75 +102,158 @@ function Invoke-Bounded {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.CreateNoWindow = $true
-  try { $proc = [System.Diagnostics.Process]::Start($psi) } catch { return $false }
-  if (-not $proc.WaitForExit($TimeoutMs)) {
-    try { $proc.Kill() } catch {}
+  $proc = $null
+  $needsStop = $true
+  try {
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit($TimeoutMs)) { return $false }
+    if (-not $stdout.Wait(1000) -or -not $stderr.Wait(1000)) { return $false }
+    $needsStop = $false
+    return $proc.ExitCode -eq 0
+  } catch {
     return $false
+  } finally {
+    if ($proc) {
+      if ($needsStop) { Stop-ProcessTreeBounded $proc }
+      $proc.Dispose()
+    }
   }
-  return $proc.ExitCode -eq 0
 }
 
 # PostgreSQL readiness. DB mode is expected when a DSN or master key is set;
-# file-backed mode skips the check. Prefer the compose service, then a real
-# `select 1` via psql, and only fall back to a bare TCP probe with a warning.
+# file-backed mode skips the check. psql validates the configured target. When
+# psql is absent, Docker is safe only for the matching local Compose database;
+# a bare TCP listener is never treated as PostgreSQL readiness.
 $dbUrl = $env:GNVIPI_DATABASE_URL
 $expectDb = [bool]$dbUrl -or [bool]$env:GNVIPI_MASTER_KEY
 if ($expectDb) {
   if (-not $dbUrl) {
     $dbUrl = 'postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
   }
-  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword = 'localhost', 5432, 'gnvipi_dev', 'gnvipi', ''
+  $dbHost, $dbPort, $dbUser, $dbName, $dbPassword, $dbSslMode = 'localhost', 5432, $null, $null, '', ''
+  $dbConfigValid = $true
   try {
+    $dsnMatch = [regex]::Match($dbUrl, '^(?i:postgres(?:ql)?)://(?:[^@/?#]*@)?(?:\[[^\]]+\]|[^:/?#]+)(?::(?<port>[0-9]+))?(?:[/?#]|$)')
+    if (-not $dsnMatch.Success) { throw 'invalid PostgreSQL URL' }
     $dbUri = [Uri]$dbUrl
-    if ($dbUri.Host) { $dbHost = $dbUri.Host }
-    if ($dbUri.Port -gt 0) { $dbPort = $dbUri.Port }
+    if (-not $dbUri.IsAbsoluteUri -or $dbUri.Scheme -notin @('postgres', 'postgresql') -or -not $dbUri.DnsSafeHost) {
+      throw 'invalid PostgreSQL URL'
+    }
+    $dbHost = $dbUri.DnsSafeHost
+    if ($dsnMatch.Groups['port'].Success) {
+      $parsedDbPort = 0
+      if (-not [int]::TryParse($dsnMatch.Groups['port'].Value, [ref]$parsedDbPort)) {
+        throw 'invalid PostgreSQL port'
+      }
+      $dbPort = $parsedDbPort
+    } else {
+      $dbPort = 5432
+    }
     if ($dbUri.UserInfo) {
       $parts = $dbUri.UserInfo -split ':', 2
       if ($parts[0]) { $dbUser = [Uri]::UnescapeDataString($parts[0]) }
       if ($parts.Count -gt 1) { $dbPassword = [Uri]::UnescapeDataString($parts[1]) }
     }
     $name = $dbUri.AbsolutePath.Trim('/')
-    if ($name) { $dbName = $name }
+    if ($name) { $dbName = [Uri]::UnescapeDataString($name) }
+    if ($dbUri.Query -match '(?:^\?|&)sslmode=([^&]+)') {
+      $dbSslMode = [Uri]::UnescapeDataString($Matches[1])
+    }
   } catch {
-    Write-Host "could not parse GNVIPI_DATABASE_URL; using dev defaults" -ForegroundColor Yellow
+    $dbConfigValid = $false
+    Write-Host "could not parse GNVIPI_DATABASE_URL" -ForegroundColor Yellow
   }
-  # Keep values safe as bare command arguments.
-  if ($dbUser -notmatch '^[A-Za-z0-9_.-]+$') { $dbUser = 'gnvipi_dev' }
-  if ($dbName -notmatch '^[A-Za-z0-9_.-]+$') { $dbName = 'gnvipi' }
-  if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbPort = 5432 }
+  if ($dbPort -lt 1 -or $dbPort -gt 65535) { $dbConfigValid = $false }
 
   $dbReady = $false
-  if (Get-Command docker -ErrorAction SilentlyContinue) {
-    $dbReady = Invoke-Bounded 'docker' @('compose', 'exec', '-T', 'db', 'pg_isready', '-U', $dbUser, '-d', $dbName)
-  } elseif (Get-Command psql -ErrorAction SilentlyContinue) {
-    # select 1 proves the DSN works, not just that the port accepts a socket.
-    # The password travels in the child environment, never in the arguments.
-    $oldPgPassword = $env:PGPASSWORD
-    if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
-    try {
-      $dbReady = Invoke-Bounded 'psql' @('-h', $dbHost, '-p', "$dbPort", '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
-    } finally {
-      if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
-      else { $env:PGPASSWORD = $oldPgPassword }
+  $psql = Get-Command psql -ErrorAction SilentlyContinue
+  if ($dbConfigValid -and $psql) {
+    # Connection values travel in the child environment, never in process
+    # arguments. --no-password prevents an interactive prompt.
+    $probeNames = @('PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PGSSLMODE')
+    $oldProbeEnv = @{}
+    foreach ($name in $probeNames) {
+      $oldProbeEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
     }
-  } else {
-    Write-Host "neither docker nor psql found; falling back to a TCP readiness check" -ForegroundColor Yellow
-    $client = New-Object System.Net.Sockets.TcpClient
     try {
-      $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
-      if ($async.AsyncWaitHandle.WaitOne(2000)) {
-        $client.EndConnect($async)
-        $dbReady = $true
-      }
+      $env:PGHOST = $dbHost
+      $env:PGPORT = "$dbPort"
+      # Values the DSN omits keep their libpq environment defaults (for example
+      # PGPASSWORD or PGSSLMODE) instead of being scrubbed.
+      if ($null -ne $dbUser) { $env:PGUSER = $dbUser }
+      if ($null -ne $dbName) { $env:PGDATABASE = $dbName }
+      if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
+      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
+      $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-tAc', 'select 1')
     } catch {
       $dbReady = $false
     } finally {
-      $client.Close()
+      foreach ($name in $probeNames) {
+        if ($null -eq $oldProbeEnv[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+        else { [Environment]::SetEnvironmentVariable($name, $oldProbeEnv[$name], 'Process') }
+      }
+    }
+  } elseif ($dbConfigValid) {
+    $composePort = 5432
+    if ($env:GNVIPI_DB_PORT) {
+      $parsedComposePort = 0
+      if ([int]::TryParse($env:GNVIPI_DB_PORT, [ref]$parsedComposePort)) { $composePort = $parsedComposePort }
+      else { $composePort = 0 }
+    }
+    $composeUser = if ($env:GNVIPI_DB_USER) { $env:GNVIPI_DB_USER } else { 'gnvipi_dev' }
+    $composePassword = if ($env:GNVIPI_DB_PASSWORD) { $env:GNVIPI_DB_PASSWORD } else { 'gnvipi_dev_only' }
+    $composeName = if ($env:GNVIPI_DB_NAME) { $env:GNVIPI_DB_NAME } else { 'gnvipi' }
+    $localHost = $dbHost -in @('localhost', '127.0.0.1', '::1')
+    $matchesCompose = $localHost -and $dbPort -eq $composePort -and
+      $dbUser -ceq $composeUser -and $dbPassword -ceq $composePassword -and $dbName -ceq $composeName
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($matchesCompose -and $docker) {
+      $oldPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD', 'Process')
+      $oldPgSslMode = [Environment]::GetEnvironmentVariable('PGSSLMODE', 'Process')
+      try {
+        $env:PGPASSWORD = $dbPassword
+        if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
+        else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+        $dockerArgs = @('compose', 'exec', '-T', '-e', 'PGPASSWORD')
+        if ($dbSslMode) { $dockerArgs += @('-e', 'PGSSLMODE') }
+        $dockerArgs += @('db', 'psql', '--no-password', '-h', '127.0.0.1', '-p', '5432', '-U', $dbUser, '-d', $dbName, '-tAc', 'select 1')
+        $dbReady = Invoke-Bounded $docker.Source $dockerArgs
+      } catch {
+        $dbReady = $false
+      } finally {
+        if ($null -eq $oldPgPassword) { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
+        else { $env:PGPASSWORD = $oldPgPassword }
+        if ($null -eq $oldPgSslMode) { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+        else { $env:PGSSLMODE = $oldPgSslMode }
+      }
+      if ($dbReady) {
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+          $async = $client.BeginConnect($dbHost, $dbPort, $null, $null)
+          $dbReady = $async.AsyncWaitHandle.WaitOne(2000)
+          if ($dbReady) { $client.EndConnect($async) }
+        } catch {
+          $dbReady = $false
+        } finally {
+          $client.Close()
+        }
+      }
+    } else {
+      Write-Host "psql is required to check the configured PostgreSQL target" -ForegroundColor Yellow
     }
   }
   if (-not $dbReady) {
     throw "PostgreSQL is not ready. Start it with: docker compose up -d db"
   }
+}
+
+# Check if port is already in use
+$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+if ($busy) {
+  $owner = (Get-Process -Id $busy[0].OwningProcess -ErrorAction SilentlyContinue).ProcessName
+  throw "Port $Port is in use by $owner (PID $($busy[0].OwningProcess)) - terminate it or specify another -Port"
 }
 
 # Configure model environment overrides
@@ -200,30 +308,48 @@ if (-not $Claude) {
   return
 }
 
-# Run in background for Claude mode
-try {
-  $proc = Start-Process -FilePath $exe `
-    -ArgumentList $serveArgs `
-    -NoNewWindow -PassThru -ErrorAction Stop
-} catch {
-  Write-Host "serve.exe error: $_ - skipping" -ForegroundColor Yellow
+# Run in background for Claude mode and restore the caller's environment even
+# when Claude or the gateway exits abnormally.
+$proc = $null
+$claudeEnvNames = @('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY')
+$oldClaudeEnv = @{}
+foreach ($name in $claudeEnvNames) {
+  $oldClaudeEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
-
-# Wait for gateway to become healthy, then launch Claude Code pointing to it
-$deadline = (Get-Date).AddSeconds(30)
-while ((Get-Date) -lt $deadline) {
+try {
   try {
-    Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
-    break
-  } catch { Start-Sleep -Milliseconds 500 }
+    $proc = Start-Process -FilePath $exe `
+      -ArgumentList $serveArgs `
+      -NoNewWindow -PassThru -ErrorAction Stop
+  } catch {
+    Write-Host "serve.exe error: $_ - skipping" -ForegroundColor Yellow
+    return
+  }
+
+  # Wait for gateway to become healthy, then launch Claude Code pointing to it.
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
+      break
+    } catch { Start-Sleep -Milliseconds 500 }
+  }
+  $env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
+  $env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
+  $env:ANTHROPIC_API_KEY = ""
+  Write-Host "  claude  : base=$env:ANTHROPIC_BASE_URL (skip login)" -ForegroundColor Green
+  try {
+    claude
+  } catch {
+    Write-Host "claude error: $_ - skipping" -ForegroundColor Yellow
+  }
+} finally {
+  foreach ($name in $claudeEnvNames) {
+    if ($null -eq $oldClaudeEnv[$name]) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable($name, $oldClaudeEnv[$name], 'Process') }
+  }
+  if ($proc) {
+    try { if (-not $proc.HasExited) { Stop-ProcessTreeBounded $proc } } catch {}
+    if ($proc -is [System.Diagnostics.Process]) { $proc.Dispose() }
+  }
 }
-$env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
-$env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
-$env:ANTHROPIC_API_KEY = ""
-Write-Host "  claude  : base=$env:ANTHROPIC_BASE_URL (skip login)" -ForegroundColor Green
-try {
-  claude
-} catch {
-  Write-Host "claude error: $_ - skipping" -ForegroundColor Yellow
-}
-try { if ($proc -and -not $proc.HasExited) { $proc.Kill() } } catch {}
