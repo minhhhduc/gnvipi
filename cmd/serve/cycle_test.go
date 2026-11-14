@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/gateway/core"
+	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
@@ -157,5 +159,45 @@ func TestCycleDoesNotRetryAfterCancellation(t *testing.T) {
 	}
 	if _, index := p.cycleSnapshot(); index != 0 {
 		t.Fatalf("cancellation advanced cycle to %d", index)
+	}
+}
+
+// Cycle attempts must keep the authenticated identity so key-aware routing and
+// stats attribution survive the engine re-entry.
+func TestCycleCarriesUserAndKeyAttribution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	p := &modelPrefs{cycle: &cycleConfig{Name: "cycle", Models: []string{"first"}}}
+	engine := gin.New()
+	engine.Use(cycleRouter(p, engine))
+	var attemptUser string
+	engine.POST("/v1/messages", func(c *gin.Context) {
+		rc := core.RequestContextFrom(c.Request.Context())
+		attemptUser = rc.UserID
+		rc.KeyID, rc.ResolvedProvider = "key-cycled", "p1"
+		rc.BeginRecording(c.Request.Context(), nil)
+		rc.Complete(ir.Usage{}, nil)
+		c.Status(http.StatusOK)
+	})
+
+	outer := core.NewRequestContext("cycle-attribution")
+	outer.UserID = "u1"
+	recorder := &requestContextRecorder{done: make(chan *core.Completion, 1)}
+	ctx := core.WithRecorder(core.WithRequestContext(t.Context(), outer), recorder)
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"cycle","messages":[]}`))
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if attemptUser != "u1" {
+		t.Fatalf("attempt user = %q, want u1", attemptUser)
+	}
+	select {
+	case completion := <-recorder.done:
+		if completion.Request.UserID != "u1" || completion.Request.KeyID != "key-cycled" {
+			t.Fatalf("completion attribution = user %q key %q, want u1 key-cycled", completion.Request.UserID, completion.Request.KeyID)
+		}
+	default:
+		t.Fatal("cycle completion was not recorded")
 	}
 }

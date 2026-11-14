@@ -156,6 +156,7 @@ func cycleRouter(p *modelPrefs, engine http.Handler) gin.HandlerFunc {
 			writer := &cycleAttemptWriter{dest: c.Writer, header: make(http.Header), recorded: make(chan struct{})}
 			attempt := core.NewRequestContext(rc.ID)
 			attempt.ClientModel = rc.ClientModel
+			attempt.UserID = rc.UserID
 			writer.request = attempt
 			attemptContext := core.WithRequestContext(core.WithRecorder(c.Request.Context(), writer), attempt)
 			req := c.Request.Clone(attemptContext)
@@ -211,6 +212,12 @@ func (w *cycleAttemptWriter) complete(request *core.RequestContext, ctx context.
 	finished := completion.Request
 	request.InboundProtocol, request.UpstreamProtocol = finished.InboundProtocol, finished.UpstreamProtocol
 	request.ResolvedProvider, request.UpstreamModel, request.Stream = finished.ResolvedProvider, finished.UpstreamModel, finished.Stream
+	if finished.UserID != "" {
+		request.UserID = finished.UserID
+	}
+	if finished.KeyID != "" {
+		request.KeyID = finished.KeyID
+	}
 	if request.FirstByte.IsZero() {
 		request.FirstByte = finished.FirstByte
 	}

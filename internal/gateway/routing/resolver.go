@@ -39,6 +39,9 @@ type Route struct {
 	Fallbacks        []Route
 	FallbackStatuses []int
 	Alias            string
+	// KeyID is additive attribution for database-backed key-aware routes.
+	// Empty for file-backed routes.
+	KeyID string
 }
 
 type Resolver interface {

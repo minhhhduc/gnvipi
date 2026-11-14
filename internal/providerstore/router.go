@@ -201,7 +201,18 @@ func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) (
 		}
 	}
 	if snapshot.aliasKnown(model) {
-		return nil, ErrKeyRequired
+		providerID, hidden := snapshot.knownProvider(model)
+		switch {
+		case providerID != "":
+			return nil, fmt.Errorf("%w: provider %q requires a key for alias %q; add an enabled provider key",
+				ErrKeyRequired, providerID, model)
+		case hidden:
+			return nil, ErrModelHidden
+		default:
+			// Known but not usable: for example a protected model that may not
+			// be shadowed. Never advise adding a key that cannot fix it.
+			return nil, ErrModelNotFound
+		}
 	}
 	return nil, ErrModelNotFound
 }
@@ -285,6 +296,98 @@ func (s *Snapshot) aliasKnown(model string) bool {
 		}
 	}
 	return false
+}
+
+// knownProvider names the provider behind a known alias so the missing-key
+// error can tell the user what to configure. It follows resolution tier order,
+// skips hidden mappings and aliases that cannot shadow a protected model, and
+// returns only an identifier, never credential material. hidden reports that a
+// hidden mapping matched, so an alias known only through hidden rows is a 404.
+func (s *Snapshot) knownProvider(model string) (providerID string, hidden bool) {
+	var personalExact *candidate
+	for _, byAlias := range s.personalEx {
+		list, hadHidden := s.eligibleCandidates(byAlias[model], model)
+		hidden = hidden || hadHidden
+		if c := minCandidate(list); c != nil && (personalExact == nil || candidateLess(c, personalExact)) {
+			personalExact = c
+		}
+	}
+	if personalExact != nil {
+		return personalExact.providerID, false
+	}
+	var lists [][]*candidate
+	for _, list := range s.personalWc {
+		eligible, hadHidden := s.eligibleCandidates(list, model)
+		hidden = hidden || hadHidden
+		if len(eligible) > 0 {
+			lists = append(lists, eligible)
+		}
+	}
+	if c := longestWildcard(lists, model); c != nil {
+		return c.providerID, false
+	}
+	list, hadHidden := s.eligibleCandidates(s.sharedEx[model], model)
+	hidden = hidden || hadHidden
+	if c := minCandidate(list); c != nil {
+		return c.providerID, false
+	}
+	sharedWildcards, hadHidden := s.eligibleCandidates(s.sharedWc, model)
+	hidden = hidden || hadHidden
+	if c := longestWildcard([][]*candidate{sharedWildcards}, model); c != nil {
+		return c.providerID, false
+	}
+	return "", hidden
+}
+
+// eligibleCandidates drops hidden mappings and aliases that may not shadow a
+// protected model from the missing-key decision. The protected rule wins over
+// hidden, matching pickExact, so a knowingly blocked shadow is not reported as
+// hidden either.
+func (s *Snapshot) eligibleCandidates(list []*candidate, model string) ([]*candidate, bool) {
+	var out []*candidate
+	hidden := false
+	blocked := s.isProtected != nil && s.isProtected(model)
+	for _, c := range list {
+		if blocked && !c.allowShadow {
+			continue
+		}
+		if c.hidden {
+			hidden = true
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, hidden
+}
+
+func minCandidate(list []*candidate) *candidate {
+	var best *candidate
+	for _, c := range list {
+		if best == nil || candidateLess(c, best) {
+			best = c
+		}
+	}
+	return best
+}
+
+// longestWildcard returns the candidate with the longest matching prefix,
+// breaking ties with the normal candidate order.
+func longestWildcard(lists [][]*candidate, model string) *candidate {
+	bestLen := -1
+	var best *candidate
+	for _, list := range lists {
+		for _, c := range list {
+			prefix := strings.TrimSuffix(c.alias, "*")
+			if !strings.HasPrefix(model, prefix) || len(model) <= len(prefix) {
+				continue
+			}
+			if len(prefix) > bestLen || (len(prefix) == bestLen && (best == nil || candidateLess(c, best))) {
+				bestLen = len(prefix)
+				best = c
+			}
+		}
+	}
+	return best
 }
 
 func (r *Router) materialize(ctx context.Context, selection selected) (Route, error) {

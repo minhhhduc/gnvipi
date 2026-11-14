@@ -236,6 +236,28 @@ func TestRouterHiddenModelAndMapping(t *testing.T) {
 	}
 }
 
+func TestRouterHiddenMappingNeverNamesProvider(t *testing.T) {
+	// A hidden mapping must stay a 404 even when it belongs to another user:
+	// the missing-key path must not answer 403 naming the provider.
+	for _, owner := range []string{"u2", ""} {
+		t.Run("owner="+owner, func(t *testing.T) {
+			rows := Rows{
+				Providers: []ProviderRow{validProviderRow("p1", true)},
+				Keys:      []KeyRow{testKey("k-hidden", "p1", owner, SchemeNone)},
+				KeyModels: []KeyModelRow{exactModel("k-hidden", "p1", owner, "private", "up")},
+			}
+			rows.KeyModels[0].Hidden = true
+			_, err := routerFor(t, rows, StoreOptions{}).Resolve(context.Background(), "u1", "private", "openai-chat")
+			if !errors.Is(err, ErrModelHidden) {
+				t.Fatalf("error = %v, want ErrModelHidden", err)
+			}
+			if strings.Contains(err.Error(), "p1") || strings.Contains(err.Error(), "add an enabled provider key") {
+				t.Fatalf("hidden mapping leaked provider guidance: %v", err)
+			}
+		})
+	}
+}
+
 func TestRouterProtectedModelShadow(t *testing.T) {
 	rows := Rows{
 		Providers: []ProviderRow{validProviderRow("p1", true)},
@@ -243,8 +265,12 @@ func TestRouterProtectedModelShadow(t *testing.T) {
 		KeyModels: []KeyModelRow{exactModel("k", "p1", "u1", "protected/model", "up")},
 	}
 	protected := func(model string) bool { return model == "protected/model" }
-	if _, err := routerFor(t, rows, StoreOptions{IsProtected: protected}).Resolve(context.Background(), "u1", "protected/model", "openai-chat"); !errors.Is(err, ErrKeyRequired) {
-		t.Fatalf("shadow error = %v", err)
+	_, err := routerFor(t, rows, StoreOptions{IsProtected: protected}).Resolve(context.Background(), "u1", "protected/model", "openai-chat")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("shadow error = %v, want ErrModelNotFound", err)
+	}
+	if strings.Contains(err.Error(), "p1") || strings.Contains(err.Error(), "add an enabled provider key") {
+		t.Fatalf("blocked shadow gave unusable guidance: %v", err)
 	}
 
 	rows.KeyModels[0].AllowShadow = true
@@ -530,5 +556,54 @@ func TestStatusForErrorAndFallbackTriggered(t *testing.T) {
 	}
 	if !FallbackTriggered(http.StatusBadRequest, []int{400}) || FallbackTriggered(500, []int{400}) {
 		t.Fatal("explicit fallback statuses must override the default")
+	}
+}
+
+func TestRouterKeyRequiredNamesProviderAndAction(t *testing.T) {
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys:      []KeyRow{testKey("k-other", "p1", "u2", SchemeNone)},
+		KeyModels: []KeyModelRow{exactModel("k-other", "p1", "u2", "private", "up")},
+	}
+	_, err := routerFor(t, rows, StoreOptions{}).Resolve(context.Background(), "u1", "private", "openai-chat")
+	if !errors.Is(err, ErrKeyRequired) {
+		t.Fatalf("error = %v, want ErrKeyRequired", err)
+	}
+	for _, want := range []string{"p1", "private", "add an enabled provider key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "up") {
+		t.Fatalf("error leaks the other user's mapping: %v", err)
+	}
+}
+
+func TestRouterCredentialSourceMatrix(t *testing.T) {
+	ring := testKeyring(t)
+	stored := sealKey(t, ring, testKey("k-secret", "p1", "u1", SchemeBearer), []byte("stored-secret"))
+	t.Setenv("GNVIPI_KEY_ROUTER_REF_ENV", "env-secret")
+	env := testKey("k-env", "p1", "u1", SchemeBearer)
+	env.KeyEnv = "GNVIPI_KEY_ROUTER_REF_ENV"
+	ref := testKey("k-ref", "p1", "u1", SchemeBearer)
+	ref.KeyRef = "import:router"
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys:      []KeyRow{stored, env, ref},
+		KeyModels: []KeyModelRow{
+			exactModel("k-secret", "p1", "u1", "secret", "up-secret"),
+			exactModel("k-env", "p1", "u1", "env", "up-env"),
+			exactModel("k-ref", "p1", "u1", "ref", "up-ref"),
+		},
+	}
+	router := routerFor(t, rows, StoreOptions{Keyring: ring, Refs: MapRefResolver{"import:router": "ref-secret"}})
+	for alias, want := range map[string]string{"secret": "stored-secret", "env": "env-secret", "ref": "ref-secret"} {
+		route, err := router.Resolve(context.Background(), "u1", alias, "openai-chat")
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", alias, err)
+		}
+		if route.Provider.Auth.Key != want {
+			t.Fatalf("%s: auth key = %q, want %q", alias, route.Provider.Auth.Key, want)
+		}
 	}
 }

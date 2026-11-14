@@ -360,6 +360,26 @@ func TestGatewayAuthTrustIsScopedToMiddleware(t *testing.T) {
 	}
 }
 
+// With database auth configured and no static key, an anonymous or invalid
+// credential must not fall open to the legacy providers.
+func TestGatewayAuthDBConfiguredFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(gatewayAuth("", &authState{}))
+	engine.POST("/v1/chat/completions", gatewayAuthConsumer)
+	for _, credential := range []string{"", "Bearer stray-credential"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"nvidia/test","messages":[]}`))
+		if credential != "" {
+			req.Header.Set("Authorization", credential)
+		}
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("credential=%q: status=%d, want 401: %s", credential, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestGatewayAuthMCPPing(t *testing.T) {
 	for _, header := range []string{"Authorization", "x-api-key"} {
 		t.Run(header, func(t *testing.T) {

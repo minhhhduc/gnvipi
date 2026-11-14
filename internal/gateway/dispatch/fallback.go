@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -192,7 +193,7 @@ func (r *attemptRecorder) Record(c *core.Completion) {
 	close(r.done)
 }
 
-func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestContext, fallbackAlias string, isFallback bool) {
+func (d *Dispatcher) finishAttempt(ctx context.Context, recorder *attemptRecorder, rc *core.RequestContext, fallbackAlias string, isFallback bool) {
 	if recorder == nil {
 		return
 	}
@@ -208,11 +209,22 @@ func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestCo
 			rc.UpstreamModel = finished.UpstreamModel
 			rc.UpstreamProtocol = finished.UpstreamProtocol
 			rc.Stream = finished.Stream
+			if finished.UserID != "" {
+				rc.UserID = finished.UserID
+			}
+			if finished.KeyID != "" {
+				rc.KeyID = finished.KeyID
+			}
 			if rc.FirstByte.IsZero() {
 				rc.FirstByte = finished.FirstByte
 			}
 			if d.options.Recorder != nil {
 				d.options.Recorder.Record(recorder.completion)
+			} else if rc.BeginRecording(ctx, nil) {
+				// Production leaves Recorder nil and relies on the request
+				// context. Publish the winning attempt so multi-candidate
+				// requests still reach stats with their attribution.
+				rc.Complete(recorder.completion.Usage, recorder.completion.Err)
 			}
 		}
 	default:
@@ -314,6 +326,9 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 			attemptRC.ClientModel = rc.ClientModel
 		}
 		attemptRC.InboundProtocol = protocol
+		attemptRC.UserID = rc.UserID
+		attemptRC.KeyID = cand.KeyID
+		rc.KeyID = cand.KeyID
 		attemptCtx := core.WithRequestContext(core.WithRecorder(c.Request.Context(), attemptRecorder), attemptRC)
 
 		attemptReq := c.Request.Clone(attemptCtx)
@@ -341,12 +356,12 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 
 		if c.Request.Context().Err() != nil {
 			attemptWriter.commit()
-			d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
+			d.finishAttempt(origRequest.Context(), attemptRecorder, rc, fallbackAlias, isFallback)
 			return
 		}
 
 		if attemptWriter.committed || attemptWriter.firstByte {
-			d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
+			d.finishAttempt(origRequest.Context(), attemptRecorder, rc, fallbackAlias, isFallback)
 			return
 		}
 
@@ -359,7 +374,7 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 		}
 
 		attemptWriter.commit()
-		d.finishAttempt(attemptRecorder, rc, fallbackAlias, isFallback)
+		d.finishAttempt(origRequest.Context(), attemptRecorder, rc, fallbackAlias, isFallback)
 		return
 	}
 }
