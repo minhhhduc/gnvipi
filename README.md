@@ -105,7 +105,9 @@ $env:GNVIPI_GATEWAY_TOKEN='gw_...'
 
 `serve admin create-owner` and `serve admin reset-password <user>` refuse a
 terminal stdin so the password is never echoed; pipe the password in on stdin
-instead of typing it interactively.
+instead of typing it interactively. In MSYS2/Git Bash (mintty) a pty is a named
+pipe that cannot be told apart from a real pipeline, so piping is refused there
+as well; run the command from cmd.exe or PowerShell, where piping works.
 
 The bootstrap command prints the gateway token once. `run.ps1` forwards it to
 Claude Code as `ANTHROPIC_AUTH_TOKEN` without printing the token.

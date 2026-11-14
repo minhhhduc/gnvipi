@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -48,8 +49,38 @@ type authState struct {
 	loopbackBind bool
 	// bootstrapToken is GNVIPI_ADMIN_TOKEN. It authenticates only while users
 	// is empty, and only to create the first owner; afterwards it is ignored.
-	bootstrapToken  string
+	bootstrapToken string
+	// bootstrapHash is sha256(bootstrapToken), precomputed at startup.
+	bootstrapHash [32]byte
+	// bootstrapWarned is a pointer so authState stays copyable.
 	bootstrapWarned *sync.Once
+	// usersExist caches the empty-install check: users only grows, so once it
+	// is true the count query is skipped for the rest of the process. The
+	// pointer keeps authState copyable, like bootstrapWarned.
+	usersExist *atomic.Bool
+}
+
+// setBootstrapToken records the one-time GNVIPI_ADMIN_TOKEN and precomputes its
+// hash so bootstrap checks do not re-hash a constant on every request.
+func (s *authState) setBootstrapToken(token string) {
+	s.bootstrapToken = token
+	s.bootstrapHash = sha256.Sum256([]byte(token))
+}
+
+// ownerExists reports whether any account exists. The answer is cached because
+// users only ever grows from zero; the first committed owner pins it true.
+func (s *authState) ownerExists(ctx context.Context) (bool, error) {
+	if s.usersExist != nil && s.usersExist.Load() {
+		return true, nil
+	}
+	users, err := auth.CountUsers(ctx, s.pool)
+	if err != nil {
+		return false, err
+	}
+	if users > 0 && s.usersExist != nil {
+		s.usersExist.Store(true)
+	}
+	return users > 0, nil
 }
 
 func loadPasswordHashConfig(lookup func(string) (string, bool)) (auth.BootstrapConfig, error) {
@@ -118,6 +149,7 @@ func newAuthState(pool *pgxpool.Pool, password *auth.BootstrapConfig) *authState
 		password: *password,
 		// A pointer keeps authState copyable for per-request policy variants.
 		bootstrapWarned: &sync.Once{},
+		usersExist:      &atomic.Bool{},
 	}
 }
 
@@ -437,14 +469,14 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 // Once the first owner is committed the token is ignored and a single warning
 // explains why, so an operator does not keep retrying it.
 func (s *authState) bootstrapIdentity(ctx context.Context, raw string) (*adminIdentity, error) {
-	if s.bootstrapToken == "" || !adminTokenMatches(raw, sha256.Sum256([]byte(s.bootstrapToken))) {
+	if s.bootstrapToken == "" || !adminTokenMatches(raw, s.bootstrapHash) {
 		return nil, nil
 	}
-	users, err := auth.CountUsers(ctx, s.pool)
+	usersExist, err := s.ownerExists(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if users == 0 {
+	if !usersExist {
 		return &adminIdentity{ViaToken: true, Bootstrap: true}, nil
 	}
 	if s.bootstrapWarned != nil {

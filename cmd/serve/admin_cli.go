@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -86,11 +87,26 @@ func readAdminPassword(r io.Reader) (string, error) {
 // adminPasswordInput refuses a terminal stdin: without an external dependency
 // there is no portable way to disable terminal echo, so an interactive password
 // would be visible on screen.
+//
+// MSYS2/mintty (Git Bash) exposes its pseudo-terminal as a named pipe rather
+// than a character device, so the terminal check never fires there. A pty pipe
+// cannot be told apart from a real pipeline without a terminal API, so on
+// Windows any non-console stdin from an MSYS2 shell is refused: typing is safe
+// but piping must go through cmd.exe or PowerShell, where MSYSTEM is unset.
 func adminPasswordInput(stdin io.Reader) (io.Reader, error) {
-	if file, ok := stdin.(*os.File); ok {
-		if info, err := file.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-			return nil, errors.New("refusing to read the password from a terminal (it would be echoed); pipe it on stdin instead")
-		}
+	file, ok := stdin.(*os.File)
+	if !ok {
+		return stdin, nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect password input: %w", err)
+	}
+	if info.Mode()&os.ModeCharDevice != 0 {
+		return nil, errors.New("refusing to read the password from a terminal (it would be echoed); pipe it on stdin instead")
+	}
+	if runtime.GOOS == "windows" && info.Mode()&os.ModeNamedPipe != 0 && os.Getenv("MSYSTEM") != "" {
+		return nil, errors.New("refusing to read the password from an MSYS2/mintty pipe (pty input is indistinguishable from a pipeline there and would be echoed); run the command from cmd.exe or PowerShell and pipe the password in")
 	}
 	return stdin, nil
 }
@@ -202,14 +218,26 @@ func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOption
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "owner %q created (id %s)\n", owner.Username, owner.ID); err != nil {
-		return fmt.Errorf("write output: %w", err)
+		return stdoutWriteError(owner, opts.WithGatewayToken, err)
 	}
 	if opts.WithGatewayToken {
 		if _, err := fmt.Fprintf(stdout, "gateway token (shown once): %s\n", raw); err != nil {
-			return fmt.Errorf("write output: %w", err)
+			return stdoutWriteError(owner, true, err)
 		}
 	}
 	return nil
+}
+
+// stdoutWriteError reports a post-commit output failure. The owner and any
+// gateway token are already committed, and the plaintext token exists nowhere
+// else, so the operator must be told exactly what survived and how to recover
+// instead of seeing a generic write error.
+func stdoutWriteError(owner *auth.User, withGatewayToken bool, err error) error {
+	recovery := fmt.Sprintf("recover access with `serve admin reset-password %s`", owner.Username)
+	if withGatewayToken {
+		return fmt.Errorf("owner %q was created (id %s) but the one-time gateway token could not be written to stdout and is unrecoverable; %s or sign in to the admin console and mint a new token: %w", owner.Username, owner.ID, recovery, err)
+	}
+	return fmt.Errorf("owner %q was created (id %s) but the confirmation could not be written to stdout; %s: %w", owner.Username, owner.ID, recovery, err)
 }
 
 // createGatewayToken writes the token row and its audit entry in the caller's

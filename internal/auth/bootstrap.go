@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // BootstrapConfig controls hashing during owner creation and recovery.
@@ -56,8 +58,10 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 // CreateFirstOwnerTx performs the bootstrap inside a caller-owned transaction
 // and leaves the commit to the caller, so related rows (for example a gateway
 // token) can be written atomically with the owner. The advisory lock is
-// transaction-scoped.
-func CreateFirstOwnerTx(ctx context.Context, tx Querier, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
+// transaction-scoped, so tx must be a real transaction: a connection pool also
+// satisfies Querier but would release the lock as soon as the statement ends,
+// letting two concurrent bootstraps create two owners.
+func CreateFirstOwnerTx(ctx context.Context, tx pgx.Tx, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
 	cfg = cfg.normalized()
 	username := strings.TrimSpace(in.Username)
 	if n := utf8.RuneCountInString(username); n < 3 || n > 64 {

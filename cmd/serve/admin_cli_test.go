@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,52 @@ func TestReadAdminPassword(t *testing.T) {
 	}
 }
 
+// MSYS2/mintty reports its pty as a named pipe, not a character device. The
+// guard must refuse that input; on other platforms a pipe stays the documented
+// safe path.
+func TestAdminPasswordInputMSYS2Pipe(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()  //nolint:errcheck // test cleanup
+	defer write.Close() //nolint:errcheck // test cleanup
+
+	if runtime.GOOS != "windows" {
+		t.Setenv("MSYSTEM", "MINGW64")
+		if _, err := adminPasswordInput(read); err != nil {
+			t.Fatalf("pipe input refused on %s: %v", runtime.GOOS, err)
+		}
+		return
+	}
+	t.Setenv("MSYSTEM", "MINGW64")
+	if _, err := adminPasswordInput(read); err == nil {
+		t.Fatal("MSYS2 pty-like pipe was accepted; an interactive password would be echoed")
+	}
+	// cmd.exe/PowerShell piping has no MSYSTEM and remains supported.
+	t.Setenv("MSYSTEM", "")
+	if _, err := adminPasswordInput(read); err != nil {
+		t.Fatalf("console-shell pipe input refused: %v", err)
+	}
+}
+
+// A mistyped admin subcommand must fail with usage instead of falling through
+// to runServer and silently starting the gateway.
+func TestRunCLICommandRejectsUnknownAdminSubcommand(t *testing.T) {
+	for _, args := range [][]string{{"admin"}, {"admin", "create-ownr"}, {"admin", "--help"}} {
+		handled, err := runCLICommand(args, os.LookupEnv, nil, nil)
+		if !handled {
+			t.Fatalf("runCLICommand(%v) was not handled", args)
+		}
+		if err == nil || !strings.Contains(err.Error(), "unknown or missing subcommand") {
+			t.Fatalf("runCLICommand(%v) error = %v, want unknown subcommand usage", args, err)
+		}
+	}
+	if handled, err := runCLICommand([]string{"--addr", ":8080"}, os.LookupEnv, nil, nil); handled || err != nil {
+		t.Fatalf("server flags = handled %v err %v, want unhandled nil", handled, err)
+	}
+}
+
 func TestCreateOwnerDB(t *testing.T) {
 	pool := requireCLITestPool(t)
 	ctx := t.Context()
@@ -181,6 +228,82 @@ func TestCreateOwnerDB(t *testing.T) {
 	}
 	if bootstraps != 1 || tokens != 1 {
 		t.Fatalf("audit rows = bootstrap %d token %d, want 1/1", bootstraps, tokens)
+	}
+}
+
+// A stdout failure after commit must say the owner and token already exist and
+// where to recover, rather than looking like a failed bootstrap.
+func TestCreateOwnerStdoutFailureDB(t *testing.T) {
+	pool := requireCLITestPool(t)
+	ctx := t.Context()
+	cfg := cliTestPasswordConfig()
+
+	err := createOwner(ctx, pool, createOwnerOptions{
+		Username:         "owner",
+		Email:            "owner@example.com",
+		WithGatewayToken: true,
+	}, dbOwnerPassword, &cfg, errorWriter{})
+	if err == nil {
+		t.Fatal("createOwner succeeded with a failing stdout")
+	}
+	for _, want := range []string{`owner "owner" was created`, "unrecoverable", "reset-password", "broken pipe"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("stdout failure error = %q, want %q", err, want)
+		}
+	}
+	if n, countErr := auth.CountUsers(ctx, pool); countErr != nil || n != 1 {
+		t.Fatalf("user count after committed bootstrap = %d, %v; want 1", n, countErr)
+	}
+	var tokens int
+	if queryErr := pool.QueryRow(ctx, `SELECT count(*) FROM api_tokens`).Scan(&tokens); queryErr != nil || tokens != 1 {
+		t.Fatalf("token count after committed bootstrap = %d, %v; want 1", tokens, queryErr)
+	}
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// The bootstrap token must stop working on the legacy surface too, not just on
+// /admin/api, once an owner exists.
+func TestAdminBootstrapTokenLegacySurfaceDB(t *testing.T) {
+	pool := requireCLITestPool(t)
+	ctx := t.Context()
+	cfg := cliTestPasswordConfig()
+	state := newAuthState(pool, &cfg)
+	state.setBootstrapToken(dbBootstrapToken)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(adminAccess(":8080", dbBootstrapToken, state))
+	engine.GET("/admin/providers", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	// While users is empty the one-time token still opens the legacy surface.
+	res := makeRequest(t, engine, http.MethodGet, "/admin/providers", nil, bearer(dbBootstrapToken))
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("bootstrap token on empty install = %d, want 204 (body %s)", res.Code, res.Body.String())
+	}
+
+	if _, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
+		Username: "owner", Email: "owner@example.com", Password: dbOwnerPassword,
+	}, cfg); err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+
+	res = makeRequest(t, engine, http.MethodGet, "/admin/providers", nil, bearer(dbBootstrapToken))
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("bootstrap token after owner = %d, want 403 (body %s)", res.Code, res.Body.String())
+	}
+
+	// The legacy shared-token login is disabled with it: loopback would otherwise
+	// redirect to the SPA. No cookie may be issued.
+	loopback := gin.New()
+	loopback.Use(adminAccess("127.0.0.1:8080", dbBootstrapToken, state))
+	res = makeRequest(t, loopback, http.MethodPost, "/admin/login", "token="+dbBootstrapToken, map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+	})
+	if res.Code != http.StatusSeeOther || res.Header().Get("Location") != "/admin" || len(res.Result().Cookies()) != 0 {
+		t.Fatalf("legacy token login after owner = %d %q cookies=%d, want a redirect without a session", res.Code, res.Header().Get("Location"), len(res.Result().Cookies()))
 	}
 }
 
@@ -245,7 +368,7 @@ func TestAdminBootstrapTokenDB(t *testing.T) {
 	cfg := cliTestPasswordConfig()
 	state := newAuthState(pool, &cfg)
 	state.loopbackBind = true
-	state.bootstrapToken = dbBootstrapToken
+	state.setBootstrapToken(dbBootstrapToken)
 
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
