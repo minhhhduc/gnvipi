@@ -9,6 +9,7 @@ import {
 } from "./admin";
 import {
   defaultExpiryLabel,
+  emptyPageOffset,
   expiryLabel,
   lastUsedLabel,
   parseCreatedToken,
@@ -142,6 +143,22 @@ describe("token create payload", () => {
     expect(() => tokenCreatePayload({ name: "   ", kind: "gateway", expiry: "default" })).toThrow(
       "Token name is required",
     );
+  });
+
+  it("rejects a name over the server's 100-rune cap", () => {
+    expect(() =>
+      tokenCreatePayload({ name: "😀".repeat(101), kind: "gateway", expiry: "default" }),
+    ).toThrow("Token name must be at most 100 characters");
+    expect(tokenCreatePayload({ name: "😀".repeat(100), kind: "gateway", expiry: "default" }).name).toBe("😀".repeat(100));
+  });
+});
+
+describe("empty page recovery", () => {
+  it("steps back a page when an offset page comes back empty", () => {
+    expect(emptyPageOffset(50, 0)).toBe(0);
+    expect(emptyPageOffset(50, 50)).toBe(0);
+    expect(emptyPageOffset(50, 100)).toBe(50);
+    expect(emptyPageOffset(200, 200)).toBe(0);
   });
 });
 

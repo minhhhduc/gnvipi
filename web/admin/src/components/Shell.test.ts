@@ -19,7 +19,7 @@ function textContent(value: ComponentChildren): string {
     .join(" ");
 }
 
-function renderShell(role: TestRole): string {
+function renderShell(role: TestRole, legacy = false): string {
   const user = {
     id: `${role}-id`,
     username: `${role}-name`,
@@ -33,7 +33,8 @@ function renderShell(role: TestRole): string {
     page: "stats" as const,
     children: null,
     user,
-    onLogout: vi.fn(),
+    legacy,
+    onLogout: legacy ? undefined : vi.fn(),
   } as Parameters<typeof Shell>[0] & { user: typeof user; onLogout: () => void };
   return textContent(Shell(props));
 }
@@ -60,5 +61,13 @@ describe("Shell role navigation", () => {
     expect(text).toContain("admin-name");
     expect(text).toContain("admin");
     expect(text).toContain("Sign out");
+  });
+
+  it("hides the database-backed screens in legacy mode", () => {
+    const text = renderShell("owner", true);
+    expect(text).toContain("Stats");
+    expect(text).toContain("Models");
+    expect(text).not.toContain("Tokens");
+    expect(text).not.toContain("Users");
   });
 });

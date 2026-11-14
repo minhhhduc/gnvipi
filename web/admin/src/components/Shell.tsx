@@ -38,11 +38,14 @@ export function HealthPill() {
 export function Shell({
   page,
   user,
+  legacy,
   onLogout,
   children,
 }: {
   page: Page;
   user: AdminUser;
+  /** File-backed mode: the users/tokens API routes are not registered. */
+  legacy?: boolean;
   onLogout?: () => void;
   children: ComponentChildren;
 }) {
@@ -58,7 +61,11 @@ export function Shell({
           <b class="text-[15px] tracking-[-0.02em]">Gateway</b>
         </div>
         <nav class="flex flex-col gap-[3px]">
-          {NAV.filter((item) => pageAllowed(item.page, user.role)).map((item) => (
+          {NAV.filter(
+            (item) =>
+              pageAllowed(item.page, user.role) &&
+              !(legacy && (item.page === "tokens" || item.page === "users")),
+          ).map((item) => (
             <a
               key={item.page}
               href={`?page=${item.page}`}

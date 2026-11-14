@@ -258,6 +258,7 @@ export function App() {
           <Shell
             page={effectivePage}
             user={user}
+            legacy={legacyAuth}
             onLogout={legacyAuth ? undefined : () => void logout().catch((err) => toast(`Sign out failed: ${err instanceof Error ? err.message : "unknown"}`, "bad"))}
           >
             {banner && (

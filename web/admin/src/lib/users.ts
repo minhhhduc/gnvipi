@@ -1,6 +1,6 @@
 import type { AdminRole } from "./auth";
 import type { AdminUserRecord, UserList } from "./types";
-import { optionalString } from "./admin";
+import { optionalString, requiredString } from "./admin";
 
 /**
  * Account administration is owner-only. The router gates the page as well; this
@@ -30,6 +30,14 @@ export function roleError(role: string): FieldError | null {
   return { field: "role", message: "Role must be owner, admin or user" };
 }
 
+/** The server's display-name CHECK, shared by create and edit. */
+export function displayNameError(displayName: string): FieldError | null {
+  if (runeLength(displayName.trim()) > 200) {
+    return { field: "display_name", message: "Display name must be at most 200 characters" };
+  }
+  return null;
+}
+
 /** Mirrors the server's create-user checks so the operator sees them inline. */
 export function validateNewUser(input: {
   username: string;
@@ -43,9 +51,8 @@ export function validateNewUser(input: {
   if (runeLength(username) < 3 || runeLength(username) > 64) {
     return { field: "username", message: "Username must be 3–64 characters" };
   }
-  if (runeLength(input.display_name.trim()) > 200) {
-    return { field: "display_name", message: "Display name must be at most 200 characters" };
-  }
+  const invalidName = displayNameError(input.display_name);
+  if (invalidName) return invalidName;
   const invalidRole = roleError(input.role);
   if (invalidRole) return invalidRole;
   if (runeLength(input.password) < 12 || runeLength(input.password) > 128) {
@@ -79,12 +86,9 @@ export function canChangeRole(targetID: string, viewerID: string): boolean {
 
 /** The picker cannot page; say so when its single page is full. */
 export function userPickerNote(count: number): string | null {
-  return count >= USER_LIST_MAX ? `Only the first ${USER_LIST_MAX} accounts are listed.` : null;
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value) throw new Error(`Invalid users response: ${field}`);
-  return value;
+  return count >= USER_LIST_MAX
+    ? `Only the newest ${USER_LIST_MAX} accounts are listed; older accounts cannot be selected here.`
+    : null;
 }
 
 /**
@@ -95,13 +99,13 @@ function userRecord(value: unknown): AdminUserRecord {
   if (!value || typeof value !== "object") throw new Error("Invalid users response: user");
   const raw = value as Record<string, unknown>;
   return {
-    id: requiredString(raw.id, "id"),
-    username: requiredString(raw.username, "username"),
+    id: requiredString(raw.id, "users", "id"),
+    username: requiredString(raw.username, "users", "username"),
     email: optionalString(raw.email),
     display_name: optionalString(raw.display_name),
     // Unknown roles and statuses are preserved so an edit cannot silently
     // rewrite them; the view blocks a save until the role is known.
-    role: requiredString(raw.role, "role"),
+    role: requiredString(raw.role, "users", "role"),
     status: typeof raw.status === "string" && raw.status ? raw.status : "active",
     must_change_password: raw.must_change_password === true,
     failed_attempts: typeof raw.failed_attempts === "number" ? raw.failed_attempts : 0,

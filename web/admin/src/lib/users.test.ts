@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canChangeRole,
   canManageUsers,
+  displayNameError,
   parseUserList,
   passwordResetBody,
   roleError,
@@ -120,7 +121,15 @@ describe("edit safeguards", () => {
 
   it("states the account picker ceiling once its page fills", () => {
     expect(userPickerNote(3)).toBeNull();
-    expect(userPickerNote(200)).toContain("200");
+    expect(userPickerNote(200)).toContain("newest 200");
+  });
+
+  it("applies the create display-name limit to edits too", () => {
+    expect(displayNameError("😀".repeat(200))).toBeNull();
+    expect(displayNameError("x".repeat(201))).toEqual({
+      field: "display_name",
+      message: "Display name must be at most 200 characters",
+    });
   });
 });
 

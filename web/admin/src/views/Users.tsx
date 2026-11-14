@@ -9,6 +9,7 @@ import {
   ROLES,
   canChangeRole,
   canManageUsers,
+  displayNameError,
   parseUserList,
   passwordResetBody,
   roleError,
@@ -16,7 +17,16 @@ import {
   validateNewUser,
   type FieldError,
 } from "../lib/users";
-import { PAGE_SIZES, clampLimit, clampOffset, dateLabel, message, pageWindow } from "../lib/admin";
+import {
+  DEFAULT_LIMIT,
+  PAGE_SIZES,
+  clampLimit,
+  clampOffset,
+  dateLabel,
+  message,
+  pageWindow,
+  statusPill,
+} from "../lib/admin";
 
 type DialogState =
   | { kind: "create" }
@@ -25,15 +35,11 @@ type DialogState =
   | { kind: "delete"; user: AdminUserRecord }
   | null;
 
-function statusPill(status: string) {
-  return status === "active" ? "pill pill-ok" : "pill pill-bad";
-}
-
 export function UsersView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
   const [users, setUsers] = useState<AdminUserRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -132,7 +138,7 @@ export function UsersView({ user }: { user: AdminUser }) {
                   </td>
                   <td><span class="chip capitalize">{record.role}</span></td>
                   <td>
-                    <span class={statusPill(record.status)}>{record.status}</span>
+                    <span class={statusPill(record.status === "active" ? "ok" : "bad")}>{record.status}</span>
                     {record.must_change_password && <span class="ml-1 pill pill-warn">password change due</span>}
                   </td>
                   <td class="muted">{dateLabel(record.last_login_at)}</td>
@@ -255,9 +261,9 @@ function UserFormDialog({
         return;
       }
     } else {
-      // An unknown server role is preserved on load; require resolving it
-      // before saving so the PUT cannot rewrite it.
-      const field = roleError(role);
+      // The edit PUT skips the username/password checks but still hits the same
+      // display-name CHECK; an unknown server role must also be resolved first.
+      const field = displayNameError(displayName) ?? roleError(role);
       if (field) {
         setError(field.message);
         return;

@@ -1,5 +1,5 @@
 import type { TokenList, TokenRecord } from "./types";
-import { DEFAULT_LIMIT, dateLabel, optionalString } from "./admin";
+import { DEFAULT_LIMIT, clampOffset, dateLabel, optionalString, requiredString } from "./admin";
 
 export type TokenStatus = "active" | "expired" | "revoked";
 
@@ -43,6 +43,8 @@ export function tokenCreatePayload(input: {
 }): Record<string, unknown> {
   const name = input.name.trim();
   if (!name) throw new Error("Token name is required");
+  // The server counts runes and caps the name at 100.
+  if ([...name].length > 100) throw new Error("Token name must be at most 100 characters");
   if (!expiryChoiceAllowed(input.kind, input.expiry)) {
     throw new Error("Admin tokens require an expiry");
   }
@@ -55,9 +57,10 @@ export function tokenCreatePayload(input: {
   return body;
 }
 
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value) throw new Error(`Invalid tokens response: ${field}`);
-  return value;
+/** The token endpoint has no total, so an empty page past the first means the
+ *  result set shrank; step back one page. */
+export function emptyPageOffset(limit: number, offset: number): number {
+  return offset > 0 ? clampOffset({ total: offset, limit, offset }) : 0;
 }
 
 /** Only the display fields cross into the UI; the plaintext and hash never do. */
@@ -65,11 +68,11 @@ function tokenRecord(value: unknown): TokenRecord {
   if (!value || typeof value !== "object") throw new Error("Invalid tokens response: token");
   const raw = value as Record<string, unknown>;
   return {
-    id: requiredString(raw.id, "id"),
-    user_id: requiredString(raw.user_id, "user_id"),
-    kind: requiredString(raw.kind, "kind"),
-    name: requiredString(raw.name, "name"),
-    token_prefix: requiredString(raw.token_prefix, "token_prefix"),
+    id: requiredString(raw.id, "tokens", "id"),
+    user_id: requiredString(raw.user_id, "tokens", "user_id"),
+    kind: requiredString(raw.kind, "tokens", "kind"),
+    name: requiredString(raw.name, "tokens", "name"),
+    token_prefix: requiredString(raw.token_prefix, "tokens", "token_prefix"),
     scope: optionalString(raw.scope),
     expires_at: optionalString(raw.expires_at),
     last_used_at: optionalString(raw.last_used_at),
