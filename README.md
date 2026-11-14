@@ -23,6 +23,8 @@ Client API-key authentication is optional: set `-gateway-key` or
 | Guide | What it covers |
 |---|---|
 | [Operations](docs/operations.md) | Run flags, stats storage, Admin Console access, `cycle` failover, web search MCP, data locations, troubleshooting, Docker notes. |
+| [PostgreSQL Operations](docs/postgres-operations.md) | Database provisioning, roles and grants, migrations, logical backup, WAL/PITR, restore integrity checks, retention limits, monitoring, development workflow. |
+| [Auth & Roles](docs/auth.md) | Ownership model, owner/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `run.ps1 -Claude`. |
 | [Provider Configuration](docs/providers.md) | Schema v2 reference, model mappings, wildcard routing, fallback chains, SSRF policy, migration. |
 | [Client Setup](docs/clients.md) | Step-by-step setup for Claude Code, OpenAI SDKs, Codex, OpenCode, cURL, and the cross-protocol compatibility matrix. |
 | [Architecture Overview](docs/architecture/overview.md) | Hub-and-spoke pattern, normalized IR, execution paths, architectural invariants. |
