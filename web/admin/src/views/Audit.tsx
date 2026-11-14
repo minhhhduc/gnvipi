@@ -64,8 +64,9 @@ export function AuditView({ user }: { user: AdminUser }) {
   };
 
   useEffect(() => {
+    if (!isOwnerRole(user.role)) return;
     void load(request);
-  }, [request]);
+  }, [request, user.role]);
 
   // The router already refuses an unauthorised ?page=, so this is the render
   // half of the same owner-only gate.
@@ -86,7 +87,7 @@ export function AuditView({ user }: { user: AdminUser }) {
   const next = page ? nextAuditRequest(request, page) : null;
   const entries = (page?.entries ?? []).filter((entry) => auditMatches(entry, filter));
   const filtering = filter.trim().length > 0;
-  const loaded = page?.entries.length ?? 0;
+  const loaded = entries.length;
   const from = loaded ? (request.depth - 1) * request.limit + 1 : 0;
   const to = from ? from + loaded - 1 : 0;
 
@@ -161,10 +162,10 @@ export function AuditView({ user }: { user: AdminUser }) {
         <Pager
           from={from}
           to={to}
-          hasPrev={!!previous}
-          hasNext={!!next}
-          onPrev={() => previous && setRequest(previous)}
-          onNext={() => next && setRequest(next)}
+          hasPrev={!!previous && !loading}
+          hasNext={!!next && !loading}
+          onPrev={() => { if (!loading && previous) setRequest(previous); }}
+          onNext={() => { if (!loading && next) setRequest(next); }}
         />
       </Card>
     </>
