@@ -9,6 +9,8 @@ export interface GatewayContextValue {
   statsUpdated: number | null;
   refreshStats: () => void;
   navigate: (page: Page) => void;
+  /** Increments on every nav click so a page can reset its own drill-down. */
+  navSeq: number;
 }
 
 export const GatewayContext = createContext<GatewayContextValue>({
@@ -16,6 +18,7 @@ export const GatewayContext = createContext<GatewayContextValue>({
   statsUpdated: null,
   refreshStats: () => {},
   navigate: () => {},
+  navSeq: 0,
 });
 
 export function useGateway(): GatewayContextValue {

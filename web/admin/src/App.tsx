@@ -31,6 +31,7 @@ const LEGACY_ADMIN_USER: AdminUser = {
 
 export function App() {
   const [page, setPage] = useState<Page>(() => pageFromUrl(location.search));
+  const [navSeq, setNavSeq] = useState(0);
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
   );
@@ -98,6 +99,7 @@ export function App() {
     url.searchParams.set("page", next);
     history.pushState({ page: next }, "", url);
     setPage(next);
+    setNavSeq((n) => n + 1);
     window.scrollTo(0, 0);
   }, [user]);
 
@@ -254,7 +256,7 @@ export function App() {
 
   return (
     <UiContext.Provider value={ui}>
-      <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate }}>
+      <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate, navSeq }}>
         <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
           <Shell
             page={effectivePage}

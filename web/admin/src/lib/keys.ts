@@ -80,10 +80,8 @@ export function parseKeyModels(value: unknown): KeyModel[] {
 
 /** What the UI may say about a key's credential: presence and last four only. */
 export function keyCredentialLabel(key: ProviderKey): string {
-  if (key.has_secret) return key.secret_last4 ? `•••• ${key.secret_last4}` : "Secret set";
-  if (key.has_key_env) return key.key_env ? `env ${key.key_env}` : "Env variable";
-  if (key.has_key_ref) return key.key_ref ? `ref ${key.key_ref}` : "Key reference";
-  return "No credential";
+  if (key.has_secret) return key.secret_last4 ? `•••• ${key.secret_last4}` : "Key set";
+  return "No key";
 }
 
 export function keyOwnerLabel(user: AdminUser, key: ProviderKey): string {

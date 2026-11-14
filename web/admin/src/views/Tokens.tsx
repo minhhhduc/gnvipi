@@ -109,14 +109,14 @@ export function TokensView({ user }: { user: AdminUser }) {
   return (
     <>
       <PageHeader
-        title="Tokens"
-        sub={owner ? "Gateway and admin tokens for every account" : "Your gateway tokens"}
+        title="API Keys"
+        sub={owner ? "Gateway and admin keys for every account" : "Your gateway API keys"}
       >
-        <button class="btn btn-primary" onClick={() => setDialog({ kind: "create" })}>New token</button>
+        <button class="btn btn-primary" onClick={() => setDialog({ kind: "create" })}>New API key</button>
       </PageHeader>
 
       <Card>
-        <CardHead title={owner ? "All tokens" : "My tokens"}>
+        <CardHead title={owner ? "All API keys" : "My API keys"}>
           {owner && (
             <>
               <label class="flex items-center gap-1.5 text-xs text-dim">

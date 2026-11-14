@@ -2,7 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useMemo, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { nsToSeconds, secondsToNs } from "../lib/format";
-import { buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
+import { STANDARD_PROTOCOLS, buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
 import type { Provider, TestResult } from "../lib/types";
 import { Dialog, IconPlus, IconX, Switch, useUi } from "./ui";
 
@@ -81,6 +81,7 @@ function init(provider: Provider | null) {
     enabled: provider?.enabled ?? true,
     tls: provider?.tls || "default",
     scheme: provider?.auth?.scheme === "api-key" ? "x-api-key" : provider?.auth?.scheme || "bearer",
+    source: provider?.auth?.key_env ? "env" : provider?.auth?.key_ref ? "ref" : "key",
     key: "",
     keyEnv: provider?.auth?.key_env || "",
     keyRef: provider?.auth?.key_ref || "",
@@ -110,6 +111,11 @@ function init(provider: Provider | null) {
   };
 }
 
+/** Derives the provider id from its name; stable enough for the console. */
+export function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
 export function ProviderEditor({
   provider,
   onClose,
@@ -128,6 +134,11 @@ export function ProviderEditor({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [protocolOther, setProtocolOther] = useState(() => {
+    const p = provider?.protocol;
+    return !!p && !(STANDARD_PROTOCOLS as readonly string[]).includes(p);
+  });
   const [formError, setFormError] = useState<string | null>(null);
 
   const patch = (next: Partial<typeof f>) => {
@@ -148,18 +159,21 @@ export function ProviderEditor({
     if (extra.error) errs.extraBody = extra.error;
     if (extensions.error) errs.extensions = extensions.error;
     if (endpointPath.error) errs.endpointPath = endpointPath.error;
-    if (!f.id.trim()) errs.id = "Provider ID is required";
+    const providerID = f.id.trim() || (isEdit ? "" : slugify(f.name));
+    if (!providerID) errs.id = "Name is required";
     if (!f.name.trim()) errs.name = "Name is required";
     if (!f.base_url.trim()) errs.base_url = "Base URL is required";
+    if (!f.protocol.trim()) errs.protocol = "Protocol is required";
     setErrors(errs);
     if (Object.keys(errs).length) return null;
 
-    const auth: Provider["auth"] = { scheme: f.scheme };
-    if (f.scheme !== "none") {
-      if (f.key.trim()) auth.key = f.key.trim();
-      if (f.keyEnv.trim()) auth.key_env = f.keyEnv.trim();
-      if (f.keyRef.trim()) auth.key_ref = f.keyRef.trim();
-      if (f.headerName.trim()) auth.header_name = f.headerName.trim();
+    // The web always sends the credential as a bearer token; the API key is the
+    // only auth input in this console.
+    const auth: Provider["auth"] = { scheme: provider?.auth?.scheme === "none" ? "none" : "bearer" };
+    if (auth.scheme !== "none") {
+      if (f.source === "key" && f.key.trim()) auth.key = f.key.trim();
+      if (f.source === "env" && f.keyEnv.trim()) auth.key_env = f.keyEnv.trim();
+      if (f.source === "ref" && f.keyRef.trim()) auth.key_ref = f.keyRef.trim();
     }
     const mapping = f.mappings
       .filter((m) => m.alias.trim())
@@ -200,7 +214,7 @@ export function ProviderEditor({
 
     const payload: Provider = {
       ...(provider || {}),
-      id: f.id.trim(),
+      id: providerID,
       name: f.name.trim(),
       base_url: f.base_url.trim(),
       protocol: f.protocol,
@@ -312,12 +326,7 @@ export function ProviderEditor({
         {formError && <div class="border-b border-bad bg-bad-soft px-[18px] py-2 text-xs text-bad">{formError}</div>}
 
         <div class="flex-1 overflow-auto px-[18px] py-4">
-          <Section title="Identity">
-            <Field label="Provider ID">
-              <input class="input mono" value={f.id} readOnly={isEdit} onInput={(e) => patch({ id: (e.target as HTMLInputElement).value })} />
-              {isEdit && <div class="mt-1 text-[11px] text-dim">Provider IDs are immutable.</div>}
-              {fieldError("id")}
-            </Field>
+          <Section title="Provider">
             <Field label="Name">
               <input class="input" value={f.name} onInput={(e) => patch({ name: (e.target as HTMLInputElement).value })} />
               {fieldError("name")}
@@ -326,49 +335,68 @@ export function ProviderEditor({
               <input class="input mono" value={f.base_url} onInput={(e) => patch({ base_url: (e.target as HTMLInputElement).value })} />
               {fieldError("base_url")}
             </Field>
-            <Field label="Proxy URL">
-              <input class="input mono" value={f.proxy_url} placeholder="(empty uses environment proxy)" onInput={(e) => patch({ proxy_url: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <div class="grid grid-cols-2 gap-3">
-              <Field label="Protocol">
-                <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
-                  {getProtocolOptions(f.protocol, provider?.protocol).map((p) => (
+            <Field label="Protocol">
+              <select
+                class="input"
+                value={protocolOther ? "__other__" : f.protocol}
+                onChange={(e) => {
+                  const value = (e.target as HTMLSelectElement).value;
+                  setProtocolOther(value === "__other__");
+                  patch({ protocol: value === "__other__" ? "" : value });
+                }}
+              >
+                {getProtocolOptions(f.protocol, provider?.protocol)
+                  .filter((p) => (STANDARD_PROTOCOLS as readonly string[]).includes(p))
+                  .map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
-                </select>
-              </Field>
-              <Field label="TLS profile">
-                <input class="input" value={f.tls} onInput={(e) => patch({ tls: (e.target as HTMLInputElement).value })} />
-              </Field>
-            </div>
-            <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
-              <Switch checked={f.enabled} onChange={(v) => patch({ enabled: v })} label="Provider enabled" />
-              Enabled
-            </label>
-          </Section>
-
-          <Section title="Authentication">
-            <Field label="Auth scheme">
-              <select class="input" value={f.scheme} onChange={(e) => patch({ scheme: (e.target as HTMLSelectElement).value })}>
-                <option value="bearer">Bearer</option>
-                <option value="x-api-key">x-api-key</option>
-                <option value="none">None</option>
+                <option value="__other__">Other…</option>
               </select>
             </Field>
-            <Field label="API key">
-              <input class="input" type="password" value={f.key} placeholder={isEdit ? "leave blank to keep existing key" : "write-only"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <Field label="API key env var">
-              <input class="input mono" value={f.keyEnv} onInput={(e) => patch({ keyEnv: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <Field label="Key ref">
-              <input class="input mono" value={f.keyRef} onInput={(e) => patch({ keyRef: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <Field label="Header name">
-              <input class="input mono" value={f.headerName} onInput={(e) => patch({ headerName: (e.target as HTMLInputElement).value })} />
-            </Field>
+            {protocolOther && (
+              <Field label="Custom protocol">
+                <input class="input mono" value={f.protocol} placeholder="e.g. gemini"
+                  onInput={(e) => patch({ protocol: (e.target as HTMLInputElement).value })} />
+                {fieldError("protocol")}
+              </Field>
+            )}
           </Section>
 
+          <Section title="API key">
+            <Field label="Credential source">
+              <select class="input" value={f.source} onChange={(e) => patch({ source: (e.target as HTMLSelectElement).value })}>
+                <option value="key">API key (paste it here)</option>
+                <option value="env">Other · environment variable</option>
+                <option value="ref">Other · key reference</option>
+              </select>
+            </Field>
+            {f.source === "key" && (
+              <Field label="API key">
+                <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "paste the provider API key"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
+            {f.source === "env" && (
+              <Field label="Environment variable">
+                <input class="input mono" value={f.keyEnv} placeholder="OPENAI_API_KEY" onInput={(e) => patch({ keyEnv: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
+            {f.source === "ref" && (
+              <Field label="Key reference">
+                <input class="input mono" value={f.keyRef} placeholder="vault/provider-key" onInput={(e) => patch({ keyRef: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
+            <span class="block text-[11px] text-dim">
+              {f.source === "key"
+                ? "Sent as Authorization: Bearer <key>. Write-only: only the last four characters are shown later."
+                : "The credential is read from the selected source; the value never enters this form."}
+            </span>
+          </Section>
+
+          <button class="btn btn-sm" onClick={() => setShowAdvanced(!showAdvanced)}>
+            {showAdvanced ? "Hide advanced settings" : "Advanced settings (models, headers, timeouts)"}
+          </button>
+
+          {showAdvanced && (<>
           <Section title="Model mappings">
             {f.mappings.map((m, i) => (
               <div key={i} class="mb-2 rounded-lg border border-line p-2.5">
@@ -470,6 +498,7 @@ export function ProviderEditor({
               {fieldError("extensions")}
             </Field>
           </Section>
+          </>)}
         </div>
 
         <div class="flex flex-wrap items-center gap-2 border-t border-line bg-panel2 px-[18px] py-3">

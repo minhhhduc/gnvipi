@@ -8,7 +8,7 @@ const NAV: { page: Page; label: string }[] = [
   { page: "models", label: "Models" },
   { page: "config", label: "Config" },
   { page: "chromes", label: "Chrome" },
-  { page: "tokens", label: "Tokens" },
+  { page: "tokens", label: "API Keys" },
   { page: "users", label: "Users" },
 ];
 

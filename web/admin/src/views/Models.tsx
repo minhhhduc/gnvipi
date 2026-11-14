@@ -6,7 +6,6 @@ import type { KeyModel, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
 import {
-  AUTH_SCHEMES,
   canDeleteKey,
   canEditKey,
   canEditKeyModels,
@@ -38,6 +37,7 @@ import {
   Switch,
   useUi,
 } from "../components/ui";
+import { useGateway } from "../lib/context";
 import { HealthPill } from "../components/Shell";
 import { formatProviderTestResult, ProviderEditor, ProviderTestResultBadge } from "../components/ProviderEditor";
 
@@ -49,10 +49,17 @@ type KeyDialogState =
 
 export function ModelsView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
+  const { navSeq } = useGateway();
   const operator = canManageProviders(user.role);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedID, setSelectedID] = useState<string | null>(null);
+
+  // Clicking Models in the nav returns to the provider list, even when the
+  // view is already on screen with a provider open.
+  useEffect(() => {
+    setSelectedID(null);
+  }, [navSeq]);
   const [menu, setMenu] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ open: boolean; provider: Provider | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Provider | null>(null);
@@ -367,12 +374,6 @@ function ProviderKeys({
                         </div>
                         {tests[key.id] && <ProviderTestResultBadge result={tests[key.id]} className="mt-1" />}
                       </td>
-                      <td>
-                        <span class="chip">{key.auth_scheme}</span>
-                        {key.auth_scheme === "header" && key.auth_header_name && (
-                          <div class="mono mt-1 text-[11px] text-dim">{key.auth_header_name}</div>
-                        )}
-                      </td>
                       <td class="mono muted">{keyCredentialLabel(key)}</td>
                       <td>
                         <Switch
@@ -474,49 +475,54 @@ function KeyEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const allowKeyRef = canManageProviders(user.role);
   const canShare = target === null && user.role === "owner";
   const [name, setName] = useState(target?.name ?? "");
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
-  const [scheme, setScheme] = useState(target?.auth_scheme ?? "bearer");
-  const [headerName, setHeaderName] = useState(target?.auth_header_name ?? "");
   const [secret, setSecret] = useState("");
-  const [keyEnv, setKeyEnv] = useState(target?.key_env ?? "");
-  const [keyRef, setKeyRef] = useState(target?.key_ref ?? "");
   const [shared, setShared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<KeyModel[] | null>(target ? null : []);
+  const [modelAlias, setModelAlias] = useState("");
 
-  const effectiveScheme = shared ? "none" : scheme;
+  const base = `/admin/api/providers/${encodeURIComponent(provider.id)}/keys`;
+
+  useEffect(() => {
+    if (!target) return;
+    let live = true;
+    void api<unknown>(`${base}/${encodeURIComponent(target.id)}/models`)
+      .then((body) => { if (live) setRows(parseKeyModels(body)); })
+      .catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [target, base]);
+
+  const addModel = () => {
+    if (!modelAlias.trim()) return;
+    setRows(toggleKeyModel(rows ?? [], { alias: modelAlias.trim(), upstream_model: buildUpstreamModel(modelAlias.trim(), "") }, true));
+    setModelAlias("");
+  };
+
+  const effectiveScheme = shared ? "none" : "bearer";
   const showCredential = effectiveScheme !== "none";
-  const mustReenter =
-    target != null &&
-    target.has_secret &&
-    effectiveScheme !== target.auth_scheme &&
-    effectiveScheme !== "none" &&
-    !secret &&
-    !keyEnv.trim() &&
-    !keyRef.trim();
 
   const submit = async () => {
     setError(null);
-    if (mustReenter) {
-      setError("Changing the auth scheme requires re-entering the secret.");
-      return;
-    }
     setBusy(true);
     try {
-      const input = { name, enabled, authScheme: effectiveScheme, authHeaderName: headerName, secret, keyEnv, keyRef, allowKeyRef };
+      const input = { name, enabled, authScheme: effectiveScheme, secret };
+      let keyID = target?.id;
       if (target) {
-        await api(`/admin/api/providers/${encodeURIComponent(provider.id)}/keys/${encodeURIComponent(target.id)}`, {
+        await api(`${base}/${encodeURIComponent(target.id)}`, {
           method: "PUT",
           body: keyUpdatePayload(input),
         });
       } else {
-        await api(`/admin/api/providers/${encodeURIComponent(provider.id)}/keys`, {
-          method: "POST",
-          body: keyCreatePayload(input, { shared }),
-        });
+        const created = await api<unknown>(base, { method: "POST", body: keyCreatePayload(input, { shared }) });
+        const id = (created as { id?: unknown } | null)?.id;
+        keyID = typeof id === "string" ? id : undefined;
+      }
+      if (keyID && rows) {
+        await api(`${base}/${encodeURIComponent(keyID)}/models`, { method: "PUT", body: keyModelsPayload(rows) });
       }
       onSaved();
     } catch (err) {
@@ -553,52 +559,49 @@ function KeyEditorDialog({
             </span>
           </label>
         )}
-        {!shared && (
+        {showCredential && (
           <label class="block text-xs font-semibold">
-            Auth scheme
-            <select class="input mt-1" value={scheme} disabled={busy}
-              onChange={(e) => setScheme((e.currentTarget as HTMLSelectElement).value)}>
-              {AUTH_SCHEMES.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            API key
+            <input class="input mt-1" type="password" autoComplete="off" value={secret} disabled={busy}
+              placeholder={target?.has_secret ? "leave blank to keep the stored key" : "paste the provider API key"}
+              onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)} />
+            <span class="mt-1 block text-[11px] font-normal text-dim">
+              Write-only. The key is encrypted at rest; only the last four characters are shown.
+            </span>
           </label>
         )}
-        {showCredential && (
-          <>
-            {effectiveScheme === "header" && (
-              <label class="block text-xs font-semibold">
-                Header name
-                <input class="input mono mt-1" value={headerName} disabled={busy}
-                  onInput={(e) => setHeaderName((e.currentTarget as HTMLInputElement).value)} />
-              </label>
-            )}
-            <label class="block text-xs font-semibold">
-              {target?.has_secret ? "Replace secret" : "Secret"}
-              {effectiveScheme === "basic" ? (
-                <textarea class="input mono mt-1" rows={2} value={secret} disabled={busy}
-                  placeholder={target?.has_secret ? "leave blank to keep the stored secret" : '{"username":"…","password":"…"}'}
-                  onInput={(e) => setSecret((e.currentTarget as HTMLTextAreaElement).value)} />
-              ) : (
-                <input class="input mt-1" type="password" autoComplete="off" value={secret} disabled={busy}
-                  placeholder={target?.has_secret ? "leave blank to keep the stored secret" : "write-only"}
-                  onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)} />
-              )}
-              <span class="mt-1 block text-[11px] font-normal text-dim">
-                Secrets are write-only; only presence and the last four are shown.
-              </span>
-            </label>
-            <label class="block text-xs font-semibold">
-              Key env var
-              <input class="input mono mt-1" value={keyEnv} disabled={busy}
-                onInput={(e) => setKeyEnv((e.currentTarget as HTMLInputElement).value)} />
-            </label>
-            {allowKeyRef && (
-              <label class="block text-xs font-semibold">
-                Key ref
-                <input class="input mono mt-1" value={keyRef} disabled={busy}
-                  onInput={(e) => setKeyRef((e.currentTarget as HTMLInputElement).value)} />
-              </label>
-            )}
-          </>
+        {rows !== null && (
+          <div class="space-y-2 border-t border-line pt-3">
+            <b class="text-xs">Models for this key</b>
+            {rows.map((item) => (
+              <div key={item.alias} class="flex flex-wrap items-center gap-2">
+                <code class="mono w-[150px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
+                <input
+                  class="input mono h-7 w-[190px]"
+                  aria-label={`Upstream model for ${item.alias}`}
+                  value={item.upstream_model}
+                  placeholder={item.alias.endsWith("/*") ? "(suffix)" : "upstream model"}
+                  onInput={(e) =>
+                    setRows(rows.map((row) =>
+                      row.alias === item.alias ? { ...row, upstream_model: (e.currentTarget as HTMLInputElement).value } : row,
+                    ))
+                  }
+                />
+                <button class="btn btn-sm" aria-label={`Remove ${item.alias}`}
+                  onClick={() => setRows(rows.filter((row) => row.alias !== item.alias))}>
+                  <IconX />
+                </button>
+              </div>
+            ))}
+            <div class="flex flex-wrap items-center gap-2">
+              <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={modelAlias}
+                onInput={(e) => setModelAlias((e.currentTarget as HTMLInputElement).value)} />
+              <button class="btn btn-sm" disabled={!modelAlias.trim()} onClick={addModel}>Add model</button>
+            </div>
+            <span class="block text-[11px] font-normal text-dim">
+              Aliases chosen here belong to this key only.
+            </span>
+          </div>
         )}
         {error && <div role="alert" class="rounded-lg border border-bad bg-bad-soft px-3 py-2 text-xs text-bad">{error}</div>}
       </div>
@@ -619,7 +622,6 @@ function KeyModelsPanel({
 }) {
   const [rows, setRows] = useState<KeyModel[]>(initial);
   const [alias, setAlias] = useState("");
-  const [upstream, setUpstream] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choices = modelChoices(provider.models, rows);
@@ -628,7 +630,6 @@ function KeyModelsPanel({
     if (!value.trim()) return;
     setRows(toggleKeyModel(rows, { alias: value, upstream_model: buildUpstreamModel(value, upstreamModel) }, true));
     setAlias("");
-    setUpstream("");
   };
 
   const update = (target: string, next: Partial<KeyModel>) => {
@@ -679,11 +680,9 @@ function KeyModelsPanel({
       ))}
       {rows.length === 0 && <div class="text-[11px] text-dim">No models selected for this key.</div>}
       <div class="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-        <input class="input mono h-7 w-[180px]" aria-label="New model alias" placeholder="alias or vendor/*" value={alias}
+        <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={alias}
           onInput={(e) => setAlias((e.currentTarget as HTMLInputElement).value)} />
-        <input class="input mono h-7 w-[220px]" aria-label="New upstream model" placeholder="upstream model (defaults to alias)" value={upstream}
-          onInput={(e) => setUpstream((e.currentTarget as HTMLInputElement).value)} />
-        <button class="btn btn-sm" disabled={!alias.trim()} onClick={() => add(alias, upstream)}>Add model</button>
+        <button class="btn btn-sm" disabled={!alias.trim()} onClick={() => add(alias, "")}>Add model</button>
       </div>
       {choices.length > 0 && (
         <div class="flex flex-wrap items-center gap-1.5">
