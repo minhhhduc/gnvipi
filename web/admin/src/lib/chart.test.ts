@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RequestEvent } from "./types";
-import { axisMax, modelSetKey, niceTicks, segments, sortRequestEvents, topModelNames, ttfbValues } from "./chart";
+import { axisMax, modelSetKey, niceTicks, segments, smoothPath, sortRequestEvents, topModelNames, ttfbValues } from "./chart";
 import { modelPath } from "./api";
 
 describe("niceTicks", () => {
@@ -122,5 +122,29 @@ describe("modelPath", () => {
   it("keeps slashes literal and encodes each segment", () => {
     expect(modelPath("anthropic/claude opus")).toBe("anthropic/claude%20opus");
     expect(modelPath("a/b/c")).toBe("a/b/c");
+  });
+});
+
+describe("smoothPath", () => {
+  it("uses cubic segments and ends on the last point", () => {
+    const path = smoothPath([
+      { x: 0, y: 10 },
+      { x: 10, y: 4 },
+      { x: 20, y: 8 },
+    ]);
+    expect(path.startsWith("M0.0,10.0")).toBe(true);
+    expect(path).toContain("C");
+    expect(path.endsWith("20.0,8.0")).toBe(true);
+  });
+
+  it("keeps a flat series flat, never dipping below the data", () => {
+    const path = smoothPath([
+      { x: 0, y: 5 },
+      { x: 10, y: 5 },
+      { x: 20, y: 5 },
+    ]);
+    const pairs = path.match(/-?\d+\.\d+,-?\d+\.\d+/g) ?? [];
+    expect(pairs.length).toBeGreaterThan(2);
+    expect(pairs.every((pair) => pair.endsWith(",5.0"))).toBe(true);
   });
 });

@@ -122,3 +122,62 @@ export function sortRequestEvents(
     return comparison * factor;
   });
 }
+
+export interface XY {
+  x: number;
+  y: number;
+}
+
+/**
+ * Monotone cubic (Fritsch–Carlson) path between points. Smooth, but it never
+ * overshoots the data: a flat stretch stays flat and a curve cannot dip below
+ * a value the series never reached.
+ */
+export function smoothPath(points: XY[]): string {
+  if (points.length === 0) return "";
+  const first = points[0];
+  if (points.length === 1) return `M${first.x.toFixed(1)},${first.y.toFixed(1)}`;
+  if (points.length === 2) {
+    return `M${first.x.toFixed(1)},${first.y.toFixed(1)} L${points[1].x.toFixed(1)},${points[1].y.toFixed(1)}`;
+  }
+
+  const n = points.length;
+  const dx: number[] = [];
+  const slope: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = points[i + 1].x - points[i].x;
+    slope[i] = dx[i] === 0 ? 0 : (points[i + 1].y - points[i].y) / dx[i];
+  }
+  const tangent: number[] = new Array(n);
+  tangent[0] = slope[0];
+  tangent[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    tangent[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) {
+      tangent[i] = 0;
+      tangent[i + 1] = 0;
+      continue;
+    }
+    const a = tangent[i] / slope[i];
+    const b = tangent[i + 1] / slope[i];
+    const s = a * a + b * b;
+    if (s > 9) {
+      const scale = 3 / Math.sqrt(s);
+      tangent[i] = scale * a * slope[i];
+      tangent[i + 1] = scale * b * slope[i];
+    }
+  }
+
+  let path = `M${first.x.toFixed(1)},${first.y.toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    const c1x = points[i].x + h;
+    const c1y = points[i].y + tangent[i] * h;
+    const c2x = points[i + 1].x - h;
+    const c2y = points[i + 1].y - tangent[i + 1] * h;
+    path += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${points[i + 1].x.toFixed(1)},${points[i + 1].y.toFixed(1)}`;
+  }
+  return path;
+}
