@@ -94,6 +94,12 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 		if valid && key != "" && consistent && db != nil && db.pool != nil {
 			identity, err := auth.ValidateAPIToken(c.Request.Context(), db.pool, key, auth.TokenKindGateway, time.Now())
 			if err == nil {
+				if identity.MustChangePassword {
+					// Same code and envelope as the admin API: a minted token
+					// must not route traffic before the password changes.
+					adminAPIError(c, http.StatusForbidden, "password_change_required", "change the password before using the gateway")
+					return
+				}
 				c.Request.Header.Del("Authorization")
 				c.Request.Header.Del("x-api-key")
 				if rc := core.RequestContextFrom(c.Request.Context()); rc != nil {
@@ -106,8 +112,10 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 		}
 
 		// File mode without static keys stays anonymous even when a stray
-		// credential is present, exactly as before.
-		if len(keys) == 0 {
+		// credential is present, exactly as before. Database auth must fail
+		// closed: falling through would let a caller reach the gateway's own
+		// providers while authenticated users are confined to database keys.
+		if len(keys) == 0 && db == nil {
 			c.Next()
 			return
 		}

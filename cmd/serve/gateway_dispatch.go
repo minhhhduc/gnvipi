@@ -28,7 +28,7 @@ func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string, runti
 	}
 	var resolver routing.Resolver = registry
 	if len(runtimes) > 0 && runtimes[0] != nil {
-		resolver = &keyAwareResolver{runtime: runtimes[0], legacy: registry}
+		resolver = routing.NewKeyAwareResolver(runtimes[0].router, registry)
 	}
 	registryAdapters := adapter.NewRegistry()
 	registryAdapters.RegisterInbound(inboundanthropic.New())

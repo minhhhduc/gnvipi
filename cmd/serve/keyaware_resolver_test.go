@@ -15,7 +15,9 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/dispatch"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
+	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
@@ -60,7 +62,7 @@ func TestKeyAwareResolverRoutesByUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	resolver := &keyAwareResolver{runtime: runtime, legacy: legacy}
+	resolver := routing.NewKeyAwareResolver(runtime.router, legacy)
 
 	route, err := resolver.Resolve(keyAwareTestContext("u1"), "shared-alias", ir.ProtocolOpenAIChat)
 	if err != nil {
@@ -96,7 +98,7 @@ func TestKeyAwareResolverFallsBackWithoutUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	resolver := &keyAwareResolver{runtime: runtime, legacy: legacy}
+	resolver := routing.NewKeyAwareResolver(runtime.router, legacy)
 	route, err := resolver.Resolve(context.Background(), "nvidia/model", ir.ProtocolOpenAIChat)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -139,7 +141,7 @@ func TestKeyAwareResolverCredentialSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	resolver := &keyAwareResolver{runtime: runtime, legacy: legacy}
+	resolver := routing.NewKeyAwareResolver(runtime.router, legacy)
 	for alias, want := range map[string]string{"secret-model": "stored-secret", "env-model": "env-secret", "ref-model": "ref-secret"} {
 		route, err := resolver.Resolve(keyAwareTestContext("u1"), alias, ir.ProtocolOpenAIChat)
 		if err != nil {
@@ -170,7 +172,7 @@ func TestKeyAwareDispatchAttributesUserAndKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	dispatcher := dispatch.New(&keyAwareResolver{runtime: runtime, legacy: legacy}, nil)
+	dispatcher := dispatch.New(routing.NewKeyAwareResolver(runtime.router, legacy), nil)
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use(gatewayRequestContext())
@@ -214,9 +216,65 @@ func TestKeyAwareResolverUnknownModelIs404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	_, err = (&keyAwareResolver{runtime: runtime, legacy: legacy}).Resolve(keyAwareTestContext("u1"), "unknown", ir.ProtocolOpenAIChat)
+	_, err = (routing.NewKeyAwareResolver(runtime.router, legacy)).Resolve(keyAwareTestContext("u1"), "unknown", ir.ProtocolOpenAIChat)
 	var normalized *gwerr.Error
 	if !errors.As(err, &normalized) || normalized.Status != http.StatusNotFound {
 		t.Fatalf("unknown model error = %v, want 404", err)
+	}
+}
+
+// Database users keep the shared NVIDIA captcha-pool route, and a database
+// alias cannot claim a protected model without allow_shadow.
+func TestKeyAwareResolverKeepsProtectedAndRegistryRoutes(t *testing.T) {
+	protected := models.DefaultModel
+	rows := providerstore.Rows{
+		Providers: []providerstore.ProviderRow{keyAwareTestProvider("https://p1.example.com/v1")},
+		Keys:      []providerstore.KeyRow{{ID: "k-shadow", ProviderID: "p1", OwnerID: "u1", Name: "shadow", Enabled: true, AuthScheme: providerstore.SchemeNone}},
+		KeyModels: []providerstore.KeyModelRow{{KeyID: "k-shadow", ProviderID: "p1", OwnerID: "u1", Alias: protected, UpstreamModel: "up-shadow"}},
+	}
+	fileProvider := gatewayprovider.Provider{
+		ID: "file", Name: "file", BaseURL: "https://file.example.com/v1", Protocol: ir.ProtocolOpenAIChat,
+		Auth: gatewayprovider.Auth{Scheme: gatewayprovider.AuthNone}, Enabled: true,
+		Models: []gatewayprovider.ModelMapping{{Alias: "file-model", UpstreamModel: "up-file"}},
+	}
+	legacy, err := routing.NewRegistryResolver([]gatewayprovider.Provider{fileProvider}, nil, routing.WithProtectedModelFunc(protectedModel))
+	if err != nil {
+		t.Fatalf("legacy resolver: %v", err)
+	}
+	runtime := keyAwareTestRuntime(t, &rows, providerRuntimeOptions{IsProtected: protectedModel})
+	resolver := routing.NewKeyAwareResolver(runtime.router, legacy)
+
+	route, err := resolver.Resolve(keyAwareTestContext("u1"), protected, ir.ProtocolOpenAIChat)
+	if err != nil {
+		t.Fatalf("protected model: %v", err)
+	}
+	if route.Kind != routing.Fallthrough || route.KeyID != "" {
+		t.Fatalf("protected model route = %+v, want the legacy fallthrough", route)
+	}
+	if _, err := runtime.router.Resolve(t.Context(), "u1", protected, ir.ProtocolOpenAIChat); !errors.Is(err, providerstore.ErrModelNotFound) {
+		t.Fatalf("unshadowed alias error = %v, want ErrModelNotFound", err)
+	}
+
+	// A registry-known file provider absent from the database is also delegated.
+	route, err = resolver.Resolve(keyAwareTestContext("u1"), "file-model", ir.ProtocolOpenAIChat)
+	if err != nil || route.Kind != routing.Custom || route.Provider == nil || route.Provider.ID != "file" {
+		t.Fatalf("file-model route = %+v, %v; want the registry provider", route, err)
+	}
+
+	// allow_shadow lets the database alias claim the protected model.
+	rows.KeyModels[0].AllowShadow = true
+	shadowed := keyAwareTestRuntime(t, &rows, providerRuntimeOptions{IsProtected: protectedModel})
+	route, err = routing.NewKeyAwareResolver(shadowed.router, legacy).Resolve(keyAwareTestContext("u1"), protected, ir.ProtocolOpenAIChat)
+	if err != nil || route.Kind != routing.Custom || route.KeyID != "k-shadow" || route.UpstreamModel != "up-shadow" {
+		t.Fatalf("allowed shadow route = %+v, %v", route, err)
+	}
+
+	// A hidden alias stays hidden instead of being resurrected by delegation.
+	rows.KeyModels[0].Alias, rows.KeyModels[0].AllowShadow, rows.KeyModels[0].Hidden = "hidden-alias", false, true
+	hidden := keyAwareTestRuntime(t, &rows, providerRuntimeOptions{IsProtected: protectedModel})
+	_, err = routing.NewKeyAwareResolver(hidden.router, legacy).Resolve(keyAwareTestContext("u1"), "hidden-alias", ir.ProtocolOpenAIChat)
+	var normalized *gwerr.Error
+	if !errors.As(err, &normalized) || normalized.Status != http.StatusNotFound {
+		t.Fatalf("hidden alias error = %v, want 404", err)
 	}
 }

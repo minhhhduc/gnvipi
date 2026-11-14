@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -1180,5 +1181,78 @@ func TestFallbackMultiHopDispatch(t *testing.T) {
 	}
 	if c.Request.ResolvedProvider != "prov-c" {
 		t.Errorf("ResolvedProvider = %q, want %q", c.Request.ResolvedProvider, "prov-c")
+	}
+}
+
+// fixedResolver returns a fixed candidate list, including key attribution.
+type fixedResolver []routing.Route
+
+func (f fixedResolver) Resolve(_ context.Context, _ string, _ ir.Protocol) (routing.Route, error) {
+	route := f[0]
+	route.Fallbacks = f[1:]
+	return route, nil
+}
+
+func (f fixedResolver) ResolveCandidates(_ context.Context, _ string, _ ir.Protocol) ([]routing.Route, error) {
+	return f, nil
+}
+
+func (f fixedResolver) AdvanceCycle(string) {}
+
+// Production leaves relay.Options.Recorder nil and relies on the request
+// context; fallback attempts must still reach stats with their attribution.
+func TestFallbackRecordsAttributionWithoutExplicitRecorder(t *testing.T) {
+	primaryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		mustWriteString(t, w, `{"error":{"message":"internal error"}}`)
+	}))
+	defer primaryServer.Close()
+	fallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		mustWriteString(t, w, `{"choices":[{"message":{"content":"recovered"}}]}`)
+	}))
+	defer fallbackServer.Close()
+
+	p1 := provider.Provider{
+		ID: "prov-p1", Name: "prov-p1", BaseURL: primaryServer.URL + "/v1",
+		Protocol: ir.ProtocolOpenAIChat, Auth: provider.Auth{Scheme: provider.AuthNone}, Enabled: true,
+	}
+	p2 := provider.Provider{
+		ID: "prov-backup", Name: "prov-backup", BaseURL: fallbackServer.URL + "/v1",
+		Protocol: ir.ProtocolOpenAIChat, Auth: provider.Auth{Scheme: provider.AuthNone}, Enabled: true,
+	}
+	resolver := fixedResolver{
+		{Provider: &p1, UpstreamModel: "m1", UpstreamProtocol: ir.ProtocolOpenAIChat, Kind: routing.Custom, Alias: "chat-primary", KeyID: "key-primary"},
+		{Provider: &p2, UpstreamModel: "m2", UpstreamProtocol: ir.ProtocolOpenAIChat, Kind: routing.Custom, Alias: "chat-backup", KeyID: "key-backup"},
+	}
+	d := New(resolver, nil)
+	engine := gin.New()
+	engine.POST("/v1/chat/completions", d.Handle)
+
+	recorder := &testCompletionRecorder{}
+	rc := core.NewRequestContext("fallback-attribution")
+	rc.UserID = "u1"
+	ctx := core.WithRecorder(core.WithRequestContext(t.Context(), rc), recorder)
+	body := `{"model":"chat-primary","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	completions := recorder.getCompletions()
+	if len(completions) != 1 {
+		t.Fatalf("expected 1 completion recorded, got %d", len(completions))
+	}
+	c := completions[0].Request
+	if c.UserID != "u1" || c.KeyID != "key-backup" {
+		t.Errorf("attribution = user %q key %q, want u1 key-backup", c.UserID, c.KeyID)
+	}
+	if c.ClientModel != "chat-backup" || c.ResolvedProvider != "prov-backup" {
+		t.Errorf("routing = %q %q, want chat-backup prov-backup", c.ClientModel, c.ResolvedProvider)
 	}
 }

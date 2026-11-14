@@ -236,6 +236,28 @@ func TestRouterHiddenModelAndMapping(t *testing.T) {
 	}
 }
 
+func TestRouterHiddenMappingNeverNamesProvider(t *testing.T) {
+	// A hidden mapping must stay a 404 even when it belongs to another user:
+	// the missing-key path must not answer 403 naming the provider.
+	for _, owner := range []string{"u2", ""} {
+		t.Run("owner="+owner, func(t *testing.T) {
+			rows := Rows{
+				Providers: []ProviderRow{validProviderRow("p1", true)},
+				Keys:      []KeyRow{testKey("k-hidden", "p1", owner, SchemeNone)},
+				KeyModels: []KeyModelRow{exactModel("k-hidden", "p1", owner, "private", "up")},
+			}
+			rows.KeyModels[0].Hidden = true
+			_, err := routerFor(t, rows, StoreOptions{}).Resolve(context.Background(), "u1", "private", "openai-chat")
+			if !errors.Is(err, ErrModelHidden) {
+				t.Fatalf("error = %v, want ErrModelHidden", err)
+			}
+			if strings.Contains(err.Error(), "p1") || strings.Contains(err.Error(), "add an enabled provider key") {
+				t.Fatalf("hidden mapping leaked provider guidance: %v", err)
+			}
+		})
+	}
+}
+
 func TestRouterProtectedModelShadow(t *testing.T) {
 	rows := Rows{
 		Providers: []ProviderRow{validProviderRow("p1", true)},
@@ -243,8 +265,12 @@ func TestRouterProtectedModelShadow(t *testing.T) {
 		KeyModels: []KeyModelRow{exactModel("k", "p1", "u1", "protected/model", "up")},
 	}
 	protected := func(model string) bool { return model == "protected/model" }
-	if _, err := routerFor(t, rows, StoreOptions{IsProtected: protected}).Resolve(context.Background(), "u1", "protected/model", "openai-chat"); !errors.Is(err, ErrKeyRequired) {
-		t.Fatalf("shadow error = %v", err)
+	_, err := routerFor(t, rows, StoreOptions{IsProtected: protected}).Resolve(context.Background(), "u1", "protected/model", "openai-chat")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("shadow error = %v, want ErrModelNotFound", err)
+	}
+	if strings.Contains(err.Error(), "p1") || strings.Contains(err.Error(), "add an enabled provider key") {
+		t.Fatalf("blocked shadow gave unusable guidance: %v", err)
 	}
 
 	rows.KeyModels[0].AllowShadow = true

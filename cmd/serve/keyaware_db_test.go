@@ -150,7 +150,7 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy resolver: %v", err)
 	}
-	dispatcher := dispatch.New(&keyAwareResolver{runtime: runtime, legacy: legacy}, nil)
+	dispatcher := dispatch.New(routing.NewKeyAwareResolver(runtime.router, legacy), nil)
 	state := &authState{pool: pool}
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -300,5 +300,55 @@ func TestGatewayAuthDBAcceptsGatewayToken(t *testing.T) {
 	}
 	if strings.Contains(out.Body.String(), token) || strings.Contains(out.Body.String(), "not-a-token") {
 		t.Fatalf("auth error leaked key material: %s", out.Body.String())
+	}
+}
+
+// The gateway surface must enforce must_change_password like the admin API:
+// a freshly minted gateway token cannot route traffic before the change.
+func TestGatewayAuthDBRejectsPasswordChangePending(t *testing.T) {
+	dsn := os.Getenv("GNVIPI_TEST_DATABASE_URL")
+	if dsn == "" {
+		if os.Getenv("GNVIPI_REQUIRE_DB_TESTS") == "true" {
+			t.Fatal("GNVIPI_TEST_DATABASE_URL is required when GNVIPI_REQUIRE_DB_TESTS=true")
+		}
+		t.Skip("GNVIPI_TEST_DATABASE_URL is not set; skipping DB-backed gateway auth tests")
+	}
+	ctx := t.Context()
+	pool := newAdminTestPool(t, dsn)
+	password, err := loadPasswordHashConfig(os.LookupEnv)
+	if err != nil {
+		t.Fatalf("load password hash configuration: %v", err)
+	}
+	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
+		Username: "pending202", Email: "pending202@example.test", DisplayName: "Pending 202", Password: dbOwnerPassword,
+	}, password)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	user, err := auth.CreateUser(ctx, pool, auth.CreateUserInput{
+		Username: "pendinguser202", Email: "pendinguser202@example.test", DisplayName: "Pending User 202",
+		Role: auth.RoleUser, PasswordHash: owner.PasswordHash, MustChangePassword: true,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	token, _, err := auth.CreateAPIToken(ctx, pool, auth.CreateAPITokenInput{
+		UserID: user.ID, Kind: auth.TokenKindGateway, Name: "pending",
+		Expiry: auth.TokenExpiry{NoExpiry: true}, Now: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create gateway token: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(gatewayRequestContext(), gatewayAuth("", &authState{pool: pool}))
+	engine.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusTeapot) })
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	out := httptest.NewRecorder()
+	engine.ServeHTTP(out, req)
+	if out.Code != http.StatusForbidden || !strings.Contains(out.Body.String(), `"code":"password_change_required"`) {
+		t.Fatalf("status = %d body = %s, want 403 password_change_required", out.Code, out.Body.String())
 	}
 }
