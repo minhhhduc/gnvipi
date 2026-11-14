@@ -198,9 +198,9 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 		engine.GET("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIGetProvider(c, p) })
 		engine.PUT("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIUpdateProvider(c, p) })
 		engine.DELETE("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIDeleteProvider(c, p) })
+		engine.POST("/admin/api/providers/:id/test", func(c *gin.Context) { handleAdminAPITestProvider(c, p) })
 	}
 	engine.POST("/admin/api/providers/test", func(c *gin.Context) { handleAdminAPITestProviderDirect(c, p) })
-	engine.POST("/admin/api/providers/:id/test", func(c *gin.Context) { handleAdminAPITestProvider(c, p) })
 
 	engine.GET("/admin/api/stats", handleAdminStats)
 

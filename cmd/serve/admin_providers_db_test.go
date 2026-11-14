@@ -90,6 +90,25 @@ func configVersion(t *testing.T, h *dbAdminHarness) int64 {
 	return version
 }
 
+func providerKeyAuth(t *testing.T, h *dbAdminHarness, providerID string) (ownerID, scheme, keyEnv string, hasSecret bool) {
+	t.Helper()
+	if err := h.pool.QueryRow(t.Context(), `
+		SELECT COALESCE(owner_id::text, ''), auth_scheme, COALESCE(key_env, ''), secret_enc IS NOT NULL
+		FROM provider_keys WHERE provider_id = $1`, providerID).Scan(&ownerID, &scheme, &keyEnv, &hasSecret); err != nil {
+		t.Fatalf("read provider key for %s: %v", providerID, err)
+	}
+	return ownerID, scheme, keyEnv, hasSecret
+}
+
+func keyModelCount(t *testing.T, h *dbAdminHarness, keyID string) int {
+	t.Helper()
+	var count int
+	if err := h.pool.QueryRow(t.Context(), `SELECT count(*) FROM key_models WHERE key_id = $1::uuid`, keyID).Scan(&count); err != nil {
+		t.Fatalf("count key models: %v", err)
+	}
+	return count
+}
+
 func providerNameEnabled(t *testing.T, h *dbAdminHarness, providerID string) (string, bool) {
 	t.Helper()
 	var name string

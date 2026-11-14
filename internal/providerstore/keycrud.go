@@ -127,16 +127,29 @@ func getProviderRow(ctx context.Context, q Querier, providerID string, forUpdate
 // non-empty ownerID limits the read to that user's keys, so a caller never
 // loads another owner's ciphertext.
 func ListProviderKeys(ctx context.Context, q Querier, providerID, ownerID string) ([]KeyRecord, error) {
-	return listProviderKeys(ctx, q, providerID, ownerID, false)
+	return listProviderKeys(ctx, q, providerID, ownerID, false, false)
 }
 
-func listProviderKeys(ctx context.Context, q Querier, providerID, ownerID string, forUpdate bool) ([]KeyRecord, error) {
+// ListProviderKeysVisibleTo reads the shared keys plus the named owner's keys.
+// A caller with ownerID == "" sees shared keys only, never another owner's
+// ciphertext.
+func ListProviderKeysVisibleTo(ctx context.Context, q Querier, providerID, ownerID string) ([]KeyRecord, error) {
+	return listProviderKeys(ctx, q, providerID, ownerID, false, true)
+}
+
+func listProviderKeys(ctx context.Context, q Querier, providerID, ownerID string, forUpdate, includeShared bool) ([]KeyRecord, error) {
 	query := `SELECT ` + keyRecordColumns + `
 		FROM provider_keys WHERE provider_id = $1`
 	args := []any{providerID}
-	if ownerID != "" {
+	switch {
+	case ownerID != "" && includeShared:
+		query += ` AND (owner_id = $2::uuid OR owner_id IS NULL)`
+		args = append(args, ownerID)
+	case ownerID != "":
 		query += ` AND owner_id = $2::uuid`
 		args = append(args, ownerID)
+	case includeShared:
+		query += ` AND owner_id IS NULL`
 	}
 	query += ` ORDER BY owner_id NULLS FIRST, name, id`
 	if forUpdate {

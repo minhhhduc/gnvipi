@@ -22,6 +22,17 @@ func ProviderRowFromV2(p provider.Provider) (ProviderRow, error) {
 			Problem:  "bearer header overrides cannot be represented by database keys",
 		}
 	}
+	// PostgreSQL rejects these values through CHECK constraints. Name the field
+	// here so the admin API answers 400 instead of surfacing the constraint 500.
+	if len(p.Name) > 200 {
+		return ProviderRow{}, &provider.FieldError{Provider: p.ID, Field: "name", Problem: "must be at most 200 characters"}
+	}
+	if len(p.BaseURL) > 2048 {
+		return ProviderRow{}, &provider.FieldError{Provider: p.ID, Field: "base_url", Problem: "must be at most 2048 characters"}
+	}
+	if bytes.Equal(bytes.TrimSpace(p.ExtraBody), []byte("null")) {
+		return ProviderRow{}, &provider.FieldError{Provider: p.ID, Field: "extra_body", Problem: "must be a JSON object, not null"}
+	}
 	endpointPaths, err := marshalImportJSON(p.EndpointPaths, `{}`)
 	if err != nil {
 		return ProviderRow{}, fmt.Errorf("providerstore: provider %q endpoint_paths: %w", p.ID, err)
@@ -162,7 +173,7 @@ func DeleteProvider(ctx context.Context, q Querier, providerID string) error {
 // ListProviderKeysForUpdate locks the provider's keys for the duration of the
 // transaction, so a models replacement and a concurrent key write serialize.
 func ListProviderKeysForUpdate(ctx context.Context, q Querier, providerID string) ([]KeyRecord, error) {
-	return listProviderKeys(ctx, q, providerID, "", true)
+	return listProviderKeys(ctx, q, providerID, "", true, false)
 }
 
 // ListProviderKeyModels reads every alias mapping of a provider with its JSONB
