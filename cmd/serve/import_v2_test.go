@@ -319,9 +319,14 @@ func TestImportV2RejectsBearerHeaderOverride(t *testing.T) {
 }
 
 func TestImportV2RejectsUnresolvedKeyRef(t *testing.T) {
-	pool := newAdminTestPool(t, requiredImportTestDSN(t))
-	createImportOwner(t, pool)
-	raw := []byte(`{
+	for name, refs := range map[string]providerstore.RefResolver{
+		"no resolver":   nil,
+		"missing entry": providerstore.MapRefResolver{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := newAdminTestPool(t, requiredImportTestDSN(t))
+			createImportOwner(t, pool)
+			raw := []byte(`{
 		"schema_version": 2,
 		"providers_v2": [{
 			"id":"referenced-key",
@@ -335,16 +340,18 @@ func TestImportV2RejectsUnresolvedKeyRef(t *testing.T) {
 		}]
 	}`)
 
-	_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t), nil)
-	if err == nil || !strings.Contains(err.Error(), "auth.key_ref") {
-		t.Fatalf("unresolved key_ref error = %v, want auth.key_ref rejection", err)
-	}
-	var providers int
-	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM providers`).Scan(&providers); err != nil {
-		t.Fatal(err)
-	}
-	if providers != 0 {
-		t.Fatalf("providers after unresolved key_ref = %d, want 0", providers)
+			_, err := providerstore.ImportV2(t.Context(), pool, raw, "legacy-owner", false, importTestKeyring(t), refs)
+			if err == nil || !strings.Contains(err.Error(), "auth.key_ref") {
+				t.Fatalf("unresolved key_ref error = %v, want auth.key_ref rejection", err)
+			}
+			var providers int
+			if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM providers`).Scan(&providers); err != nil {
+				t.Fatal(err)
+			}
+			if providers != 0 {
+				t.Fatalf("providers after unresolved key_ref = %d, want 0", providers)
+			}
+		})
 	}
 }
 
