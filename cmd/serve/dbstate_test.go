@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/db"
 )
 
@@ -178,5 +180,43 @@ func TestRunMigrateCommandDoesNotEchoUnexpectedArguments(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
 		t.Fatalf("migration argument error leaked the argument: %v", err)
+	}
+}
+
+func TestLoadRetentionConfig(t *testing.T) {
+	sessions := auth.DefaultSessionConfig()
+
+	cfg, err := loadRetentionConfigFrom(func(string) (string, bool) { return "", false }, sessions)
+	if err != nil {
+		t.Fatalf("default retention config: %v", err)
+	}
+	if cfg.Audit != 365*24*time.Hour {
+		t.Fatalf("default audit retention = %v, want 365 days", cfg.Audit)
+	}
+	if cfg.LoginAttempts != 30*24*time.Hour {
+		t.Fatalf("default login attempt retention = %v, want 30 days", cfg.LoginAttempts)
+	}
+	if cfg.Sessions != sessions {
+		t.Fatalf("session config not carried: %+v", cfg.Sessions)
+	}
+
+	env := map[string]string{"GNVIPI_AUDIT_RETENTION_DAYS": "30"}
+	cfg, err = loadRetentionConfigFrom(func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}, sessions)
+	if err != nil {
+		t.Fatalf("custom audit retention: %v", err)
+	}
+	if cfg.Audit != 30*24*time.Hour {
+		t.Fatalf("custom audit retention = %v, want 30 days", cfg.Audit)
+	}
+
+	for _, raw := range []string{"0", "-1", "abc", "1.5", "999999999"} {
+		value := raw
+		_, err := loadRetentionConfigFrom(func(string) (string, bool) { return value, true }, sessions)
+		if err == nil {
+			t.Fatalf("GNVIPI_AUDIT_RETENTION_DAYS=%q accepted", raw)
+		}
 	}
 }

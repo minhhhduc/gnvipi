@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,9 +22,36 @@ import (
 const databaseEnv = "GNVIPI_DATABASE_URL"
 
 const (
-	authCleanupInterval   = 6 * time.Hour
-	loginAttemptRetention = 30 * 24 * time.Hour
+	// authRetentionInterval is the daily phase-2 retention cadence.
+	authRetentionInterval = 24 * time.Hour
+	// auditRetentionDaysEnv overrides the audit retention window in days.
+	auditRetentionDaysEnv = "GNVIPI_AUDIT_RETENTION_DAYS"
+	// maxAuditRetentionDays bounds the configured window so the duration cannot
+	// overflow and an obvious typo fails at startup instead of later.
+	maxAuditRetentionDays = 36500
 )
+
+// loadRetentionConfig resolves the retention windows. Only the audit window is
+// operator-configurable; the session and lockout windows are design constants.
+func loadRetentionConfig(sessions auth.SessionConfig) (auth.RetentionConfig, error) {
+	return loadRetentionConfigFrom(os.LookupEnv, sessions)
+}
+
+func loadRetentionConfigFrom(lookup func(string) (string, bool), sessions auth.SessionConfig) (auth.RetentionConfig, error) {
+	cfg := auth.DefaultRetentionConfig()
+	cfg.Sessions = sessions
+	value, _ := lookup(auditRetentionDaysEnv)
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return cfg, nil
+	}
+	days, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil || days == 0 || days > maxAuditRetentionDays {
+		return cfg, fmt.Errorf("%s must be a whole number of days between 1 and %d", auditRetentionDaysEnv, maxAuditRetentionDays)
+	}
+	cfg.Audit = time.Duration(days) * 24 * time.Hour
+	return cfg, nil
+}
 
 func runMigrateCommand(
 	ctx context.Context,
@@ -51,27 +80,48 @@ func databaseSchemaError(err error) error {
 // appDB is the process-wide PostgreSQL handle. A nil *appDB means file-backed
 // mode; callers must treat it as "no database-backed admin surface".
 type appDB struct {
-	pool          *pgxpool.Pool
-	auth          *authState
-	cleanupCancel context.CancelFunc
-	cleanupDone   <-chan struct{}
+	pool        *pgxpool.Pool
+	maintenance *pgxpool.Pool
+	retention   auth.RetentionConfig
+	auth        *authState
+
+	retentionCancel context.CancelFunc
+	retentionDone   <-chan struct{}
 }
 
-// Close releases the pool. It is safe on the nil handle used by file-backed
-// mode so callers never need a nil check.
+// Close releases the pools and stops the retention loop. It is safe on the nil
+// handle used by file-backed mode so callers never need a nil check.
 func (d *appDB) Close() {
 	if d == nil {
 		return
 	}
-	if d.cleanupCancel != nil {
-		d.cleanupCancel()
+	if d.retentionCancel != nil {
+		d.retentionCancel()
 	}
-	if d.cleanupDone != nil {
-		<-d.cleanupDone
+	if d.retentionDone != nil {
+		<-d.retentionDone
 	}
 	if d.pool != nil {
 		d.pool.Close()
 	}
+	if d.maintenance != nil {
+		d.maintenance.Close()
+	}
+}
+
+// runRetention runs one retention pass. A pass owned by another gateway process
+// is not an error, and the caller only logs failures: retention is maintenance,
+// never a prerequisite for serving.
+func (d *appDB) runRetention(ctx context.Context) error {
+	var maintenance auth.DB
+	if d.maintenance != nil {
+		maintenance = d.maintenance
+	}
+	_, err := auth.RunRetention(ctx, d.pool, maintenance, time.Now(), d.retention)
+	if errors.Is(err, auth.ErrRetentionBusy) {
+		return nil
+	}
+	return err
 }
 
 // openAppDB connects when the operator configured a database. A configured but
@@ -120,39 +170,62 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 		return nil, databaseSchemaError(err)
 	}
 	state := newAuthState(pool, &password)
-	if err := cleanupAuthData(ctx, state); err != nil {
+	retention, err := loadRetentionConfig(state.sessions)
+	if err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("database auth cleanup: %w", err)
+		return nil, fmt.Errorf("retention configuration: %w", err)
 	}
-	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
-	cleanupDone := make(chan struct{})
-	go runAuthCleanup(cleanupCtx, state, cleanupDone)
+	maintenance := openMaintenancePool(ctx, cfg)
+	d := &appDB{pool: pool, maintenance: maintenance, retention: retention, auth: state}
+
+	if err := d.runRetention(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("database: auth retention failed: %v", err)
+	}
+	retentionCtx, cancelRetention := context.WithCancel(ctx)
+	retentionDone := make(chan struct{})
+	go runRetentionLoop(retentionCtx, d, retentionDone)
+	d.retentionCancel, d.retentionDone = cancelRetention, retentionDone
 	log.Printf("database: ready (schema v%d)", latest)
-	return &appDB{pool: pool, auth: state, cleanupCancel: cancelCleanup, cleanupDone: cleanupDone}, nil
+	return d, nil
 }
 
-func cleanupAuthData(ctx context.Context, state *authState) error {
-	now := time.Now()
-	if _, err := auth.CleanupSessions(ctx, state.pool, now, state.sessions); err != nil {
-		return fmt.Errorf("sessions: %w", err)
+// openMaintenancePool connects the optional phase-2 retention role. Audit rows
+// are append-only for the application role, so without this pool audit pruning
+// is skipped. A configured but unusable pool is logged and disabled rather than
+// failing startup: retention never gates serving admin requests.
+func openMaintenancePool(ctx context.Context, cfg db.Config) *pgxpool.Pool {
+	url, err := db.LoadMaintenanceURL()
+	if err != nil {
+		log.Printf("database: maintenance role disabled: %v", err)
+		return nil
 	}
-	if _, err := auth.CleanupLoginAttempts(ctx, state.pool, now.Add(-loginAttemptRetention)); err != nil {
-		return fmt.Errorf("login attempts: %w", err)
+	if url == "" {
+		log.Print("database: no maintenance role configured; audit retention is disabled")
+		return nil
 	}
-	return nil
+	maintenanceCfg := cfg
+	maintenanceCfg.DatabaseURL = url
+	maintenanceCfg.MaxConns = 1
+	maintenanceCfg.MinConns = 0
+	pool, err := db.Open(ctx, maintenanceCfg)
+	if err != nil {
+		log.Printf("database: maintenance role disabled: %v", err)
+		return nil
+	}
+	return pool
 }
 
-func runAuthCleanup(ctx context.Context, state *authState, done chan<- struct{}) {
+func runRetentionLoop(ctx context.Context, d *appDB, done chan<- struct{}) {
 	defer close(done)
-	ticker := time.NewTicker(authCleanupInterval)
+	ticker := time.NewTicker(authRetentionInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := cleanupAuthData(ctx, state); err != nil && ctx.Err() == nil {
-				log.Printf("database: auth cleanup failed: %v", err)
+			if err := d.runRetention(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("database: auth retention failed: %v", err)
 			}
 		}
 	}
