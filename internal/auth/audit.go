@@ -76,7 +76,7 @@ var allowedAuditKeys = map[string]struct{}{
 	"id": {}, "user_id": {}, "key_id": {}, "provider_id": {}, "request_id": {},
 	"target_id": {}, "actor_id": {},
 	"name": {}, "username": {}, "display_name": {}, "provider_name": {},
-	"key_name": {}, "target_name": {}, "model": {}, "alias": {},
+	"key_name": {}, "target_name": {}, "model": {}, "models": {}, "alias": {},
 	"action": {}, "status": {}, "role": {}, "kind": {}, "scope": {},
 	"enabled": {}, "disabled": {}, "success": {}, "hidden": {}, "deleted": {},
 	"must_change": {}, "active": {},

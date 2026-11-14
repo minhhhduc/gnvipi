@@ -329,7 +329,22 @@ func claudeAutoModelAlias(p *modelPrefs) gin.HandlerFunc {
 		}
 		if json.Unmarshal(body, &payload) == nil && payload.Model == "automode" {
 			target := p.autoModelID()
-			if p.isModelUnavailable(target) {
+			perAccount := false
+			if p.userRouting != nil {
+				if rc := core.RequestContextFrom(c.Request.Context()); rc != nil && rc.UserID != "" {
+					resolved, err := p.userRouting.automodeTarget(c.Request.Context(), rc.UserID)
+					if err != nil {
+						c.JSON(http.StatusNotFound, gin.H{"error": err.Error(), "code": "not_configured"})
+						c.Abort()
+						return
+					}
+					target = resolved
+					perAccount = true
+				}
+			}
+			// File mode keeps the hidden-target check; a database target is
+			// resolved through the caller's keys by the dispatcher instead.
+			if !perAccount && p.isModelUnavailable(target) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "automode target is hidden"})
 				c.Abort()
 				return

@@ -52,9 +52,12 @@ type modelPrefs struct {
 	searchURL              string
 	cycle                  *cycleConfig
 	cycleIndex             int
-	onChange               func([]customProvider) // rewrites config.yaml so cliproxy reloads
-	onMaskChange           func()                 // triggers re-registration of models in cliproxy
-	resolver               *routing.RegistryResolver
+	// userRouting is set only in database mode; file mode keeps the global
+	// automode/cycle behavior.
+	userRouting  *userRoutingPrefs
+	onChange     func([]customProvider) // rewrites config.yaml so cliproxy reloads
+	onMaskChange func()                 // triggers re-registration of models in cliproxy
+	resolver     *routing.RegistryResolver
 	// In database mode the NVIDIA catalog lives in PostgreSQL. catalogRead is
 	// the runtime role's read pool; catalogWrite is a write-capable
 	// maintenance/migration pool. Both are nil in file mode.

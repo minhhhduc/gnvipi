@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { computeAutoModeOptions, computeCycleAvailableOptions, computeCycleUnselected } from "../lib/helpers";
-import type { CycleConfig, ModelsResponse } from "../lib/types";
+import type { AdminUser } from "../lib/auth";
+import type { CycleConfig, ModelsResponse, UserList } from "../lib/types";
 import { Card, CardHead, Empty, IconChevronDown, IconChevronUp, IconX, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
 
@@ -78,7 +79,7 @@ function Saved({ state }: { state: SaveState }) {
   return <span class="pill pill-mute">Idle</span>;
 }
 
-export function ConfigView() {
+export function ConfigView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
   const [catalog, setCatalog] = useState<ModelsResponse>({});
   const [auto, setAuto] = useState<string>("");
@@ -92,12 +93,18 @@ export function ConfigView() {
   const confirmedCycleModels = useRef<string[]>([]);
   const confirmedSearch = useRef<SearchSelection>({ engine: "", url: "" });
   const [loading, setLoading] = useState(true);
+  const [accounts, setAccounts] = useState<UserList["users"]>([]);
+  const [targetUser, setTargetUser] = useState("");
+  const isOwner = user.role === "owner";
+  // Only an owner may address another account; everyone else edits their own.
+  const userQuery = targetUser ? `?user_id=${encodeURIComponent(targetUser)}` : "";
 
-  useEffect(() => {
+  const loadConfig = (account: string) => {
+    const query = account ? `?user_id=${encodeURIComponent(account)}` : "";
     Promise.all([
       api<ModelsResponse>("/admin/api/models"),
-      api<{ model: string }>("/admin/api/config/automode"),
-      api<CycleConfig>("/admin/api/config/cycle"),
+      api<{ model: string }>(`/admin/api/config/automode${query}`),
+      api<CycleConfig>(`/admin/api/config/cycle${query}`),
       api<{ url: string }>("/admin/api/config/search"),
     ])
       .then(([m, a, c, s]) => {
@@ -119,13 +126,29 @@ export function ConfigView() {
         setLoading(false);
         setBanner(`Config failed to load: ${err instanceof Error ? err.message : "unknown error"}`);
       });
+  };
+
+  useEffect(() => {
+    loadConfig("");
+    if (!isOwner) return;
+    api<UserList>("/admin/api/users?limit=200")
+      .then((list) => setAccounts(list.users || []))
+      .catch(() => setAccounts([]));
   }, []);
+
+  const chooseAccount = (id: string) => {
+    setTargetUser(id);
+    setLoading(true);
+    loadConfig(id);
+  };
+
+  const accountBody = (body: Record<string, unknown>) => (targetUser ? { ...body, user_id: targetUser } : body);
 
   const saveAuto = async (model: string) => {
     setAuto(model);
     setAutoState("saving");
     try {
-      await api("/admin/api/config/automode", { method: "POST", body: { model } });
+      await api(`/admin/api/config/automode${userQuery}`, { method: "POST", body: accountBody({ model }) });
       confirmedAuto.current = model;
       setAuto(model);
       setAutoState("saved");
@@ -164,7 +187,7 @@ export function ConfigView() {
     setCycle((prev) => ({ ...prev, models }));
     setCycleState("saving");
     try {
-      await api("/admin/api/config/cycle", { method: "POST", body: { models } });
+      await api(`/admin/api/config/cycle${userQuery}`, { method: "POST", body: accountBody({ models }) });
       confirmedCycleModels.current = models;
       setCycle((prev) => ({ ...prev, models }));
       setCycleState("saved");
@@ -204,11 +227,31 @@ export function ConfigView() {
         <HealthPill />
       </PageHeader>
 
+      {isOwner && (
+        <Card>
+          <div class="flex items-center gap-2 px-[15px] py-3">
+            <label class="text-xs font-semibold" for="config-account">Account</label>
+            <select
+              id="config-account"
+              class="input max-w-sm"
+              value={targetUser}
+              onChange={(e) => chooseAccount((e.target as HTMLSelectElement).value)}
+            >
+              <option value="">Your account</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.username} ({account.role})</option>
+              ))}
+            </select>
+            <p class="ml-auto text-[11px] text-dim">Owners may read and edit another account's settings.</p>
+          </div>
+        </Card>
+      )}
+
       <div class="mb-3 grid grid-cols-2 gap-3">
         <Card>
           <CardHead title="Auto model"><Saved state={autoState} /></CardHead>
           <div class="px-[15px] py-3.5">
-            <p class="mb-2.5 text-xs text-dim">Requests with <span class="mono">model: "automode"</span> forward unchanged to this model.</p>
+            <p class="mb-2.5 text-xs text-dim">Requests with <span class="mono">model: "automode"</span> forward unchanged to the model picked for {targetUser ? "this account" : "your account"}.</p>
             <label class="mb-1 block text-xs font-semibold">Target model</label>
             <select class="input" value={auto} onChange={(e) => void saveAuto((e.target as HTMLSelectElement).value)}>
               {autoOptions.map((id) => <option key={id} value={id}>{id}</option>)}
@@ -264,7 +307,7 @@ export function ConfigView() {
                 </span>
               </div>
             ))}
-            <p class="mt-1 text-[11px] text-dim">Current target: <span class="mono">{cycle.current || "—"}</span></p>
+            <p class="mt-1 text-[11px] text-dim">Current target: <span class="mono">{cycle.current || "—"}</span> · each account rotates its own cursor.</p>
           </div>
           <div>
             <h3 class="mb-2 text-xs font-semibold uppercase tracking-[0.05em] text-dim">Unselected</h3>

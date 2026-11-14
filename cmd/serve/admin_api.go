@@ -214,15 +214,25 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 	engine.DELETE("/admin/api/models/*id", func(c *gin.Context) { handleAdminAPIDeleteModel(c, p) })
 	engine.POST("/admin/api/models/*id", func(c *gin.Context) { handleAdminAPIModelAction(c, p) })
 
-	engine.GET("/admin/api/config/automode", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"model":          p.autoModelID(),
-			"chat_responses": p.autoModelChatResponsesEnabled(),
+	if state != nil && state.pool != nil {
+		// Database mode owns per-account routing settings (#240).
+		engine.GET("/admin/api/config/automode", handleAdminAPIGetAutomodeDB(p))
+		engine.POST("/admin/api/config/automode", handleAdminAPIPutAutomodeDB(p))
+		engine.PUT("/admin/api/config/automode", handleAdminAPIPutAutomodeDB(p))
+		engine.GET("/admin/api/config/cycle", handleAdminAPIGetCycleDB(p, catalog))
+		engine.POST("/admin/api/config/cycle", handleAdminAPIPutCycleDB(p))
+		engine.PUT("/admin/api/config/cycle", handleAdminAPIPutCycleDB(p))
+	} else {
+		engine.GET("/admin/api/config/automode", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"model":          p.autoModelID(),
+				"chat_responses": p.autoModelChatResponsesEnabled(),
+			})
 		})
-	})
-	engine.POST("/admin/api/config/automode", handleAdminAutomode)
-	engine.GET("/admin/api/config/cycle", func(c *gin.Context) { handleAdminAPIGetCycle(c, p, catalog) })
-	engine.POST("/admin/api/config/cycle", handleAdminCycle)
+		engine.POST("/admin/api/config/automode", handleAdminAutomode)
+		engine.GET("/admin/api/config/cycle", func(c *gin.Context) { handleAdminAPIGetCycle(c, p, catalog) })
+		engine.POST("/admin/api/config/cycle", handleAdminCycle)
+	}
 	engine.GET("/admin/api/config/search", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"url": p.searchTemplate()})
 	})
@@ -1096,10 +1106,14 @@ func handleAdminAPIModelAction(c *gin.Context, p *modelPrefs) {
 }
 
 func handleAdminAPIGetCycle(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo) {
+	cfg, index := p.cycleSnapshot()
+	writeAdminCycleResponse(c, p, catalog, cfg, index)
+}
+
+func writeAdminCycleResponse(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo, cfg cycleConfig, index int) {
 	if catalog == nil {
 		catalog = nvidia.RegistryModels()
 	}
-	cfg, index := p.cycleSnapshot()
 	available := make(map[string]bool, len(catalog))
 	for _, m := range catalog {
 		if m != nil && m.ID != "" && !p.isHidden(m.ID) {
