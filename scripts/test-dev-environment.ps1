@@ -27,6 +27,11 @@ Assert-DevEnvironment ($compose -match '(?ms)^volumes:\r?\n  gnvipi_db:\s*$') 'c
 Assert-DevEnvironment ($dbBlock -notmatch '8080') 'the db-only service must not publish or inspect port 8080'
 Assert-DevEnvironment ($compose -notmatch 'GNVIPI_MASTER_KEY:\s*["'']?\$\{GNVIPI_MASTER_KEY:\?') 'db-only compose startup must not require a serve-only master key'
 
+# `docker compose up -d` returns before PostgreSQL is healthy, so the documented
+# bootstrap must wait for the healthcheck before migrating.
+$readme = Get-Content -Raw -Path (Join-Path $root 'README.md')
+Assert-DevEnvironment ($readme -match 'docker compose up -d --wait db') 'the README bootstrap must wait for PostgreSQL health before migrating'
+
 $modelsFile = Join-Path $root 'internal\models\playground_models.json'
 $modelsDefault = Join-Path $root 'internal\models\playground_models.default.json'
 $binDir = Join-Path $root 'bin'
@@ -139,7 +144,8 @@ public static class NativeToolStub {
                 "|PGPORT=" + Environment.GetEnvironmentVariable("PGPORT") +
                 "|PGUSER=" + Environment.GetEnvironmentVariable("PGUSER") +
                 "|PGDATABASE=" + Environment.GetEnvironmentVariable("PGDATABASE") +
-                "|PGSSLMODE=" + Environment.GetEnvironmentVariable("PGSSLMODE");
+                "|PGSSLMODE=" + Environment.GetEnvironmentVariable("PGSSLMODE") +
+                "|PGPASSWORD_SET=" + (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PGPASSWORD")) ? "0" : "1");
             File.AppendAllText(log, name + "|" + String.Join("|", args) + probe + Environment.NewLine);
         }
         if (Environment.GetEnvironmentVariable("GNVIPI_TEST_" + name + "_HOLD") == "1") {
@@ -284,6 +290,18 @@ public static class NativeToolStub {
   Assert-DevEnvironment ($env:PGSSLMODE -eq 'require') 'PGSSLMODE must be restored after probe setup failure'
 
   Clear-RunEnvironment
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $env:PGPASSWORD = 'inherited-secret'
+  $env:PGSSLMODE = 'require'
+  $env:GNVIPI_DATABASE_URL = 'postgres://alice@db.example.test:6543/app'
+  $env:GNVIPI_TEST_PSQL_EXIT = '0'
+  $inherited = Invoke-RunScenario @{ Claude = $true; Port = 18083; NoCaptcha = $true }
+  $inheritedLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
+  Assert-DevEnvironment ($null -eq $inherited.Error) 'a DSN without a password or TLS mode must use the inherited client environment'
+  Assert-DevEnvironment ($inheritedLog -match 'PGPASSWORD_SET=1') 'a DSN without a password must keep the inherited PGPASSWORD'
+  Assert-DevEnvironment ($inheritedLog -match 'PGSSLMODE=require') 'a DSN without sslmode must keep the inherited PGSSLMODE'
+
+  Clear-RunEnvironment
   $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
   $env:GNVIPI_GATEWAY_TOKEN = $secret
   $composeListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -301,6 +319,18 @@ public static class NativeToolStub {
   $composeLog = if (Test-Path $toolLog) { Get-Content -Raw $toolLog } else { '' }
   Assert-DevEnvironment ($null -eq $composeReady.Error) 'an authenticated matching local Compose probe plus published TCP endpoint must pass'
   Assert-DevEnvironment ($composeLog -match 'DOCKER\|compose\|exec\|-T\|-e\|PGPASSWORD\|-e\|PGSSLMODE\|db\|psql\|--no-password\|') 'Docker fallback must run an authenticated psql query, not pg_isready'
+
+  Clear-RunEnvironment
+  $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"
+  $env:GNVIPI_GATEWAY_TOKEN = $secret
+  $closedPort = Get-ClosedLoopbackPort
+  $env:GNVIPI_DB_PORT = "$closedPort"
+  $env:GNVIPI_DATABASE_URL = "postgres://gnvipi_dev:gnvipi_dev_only@127.0.0.1:$closedPort/gnvipi?sslmode=disable"
+  $env:GNVIPI_TEST_DOCKER_EXIT = '0'
+  $unpublished = Invoke-RunScenario @{ Claude = $true; Port = 18087; NoCaptcha = $true }
+  $env:PATH = "$toolDir;$env:SystemRoot\System32;$env:SystemRoot"
+  Assert-DevEnvironment ($unpublished.Error -eq 'PostgreSQL is not ready. Start it with: docker compose up -d db') 'a Compose database with an unreachable published endpoint must fail readiness'
+  Assert-DevEnvironment (-not (Test-Path $goLog)) 'a failed published-endpoint check must fail before a build is started'
 
   Clear-RunEnvironment
   $env:PATH = "$dockerOnlyDir;$env:SystemRoot\System32;$env:SystemRoot"

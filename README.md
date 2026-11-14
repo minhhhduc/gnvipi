@@ -91,7 +91,7 @@ and give `run.ps1 -Claude` the one-time gateway token:
 
 ```powershell
 # Local-development credentials only; do not reuse them in production.
-docker compose up -d db
+docker compose up -d --wait db
 $env:GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
 $env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
 New-Item -ItemType Directory -Force .\bin | Out-Null

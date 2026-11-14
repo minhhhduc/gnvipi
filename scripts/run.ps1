@@ -180,10 +180,12 @@ if ($expectDb) {
     try {
       $env:PGHOST = $dbHost
       $env:PGPORT = "$dbPort"
-      if ($null -ne $dbUser) { $env:PGUSER = $dbUser } else { Remove-Item Env:PGUSER -ErrorAction SilentlyContinue }
-      if ($null -ne $dbName) { $env:PGDATABASE = $dbName } else { Remove-Item Env:PGDATABASE -ErrorAction SilentlyContinue }
-      if ($dbPassword) { $env:PGPASSWORD = $dbPassword } else { Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue }
-      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode } else { Remove-Item Env:PGSSLMODE -ErrorAction SilentlyContinue }
+      # Values the DSN omits keep their libpq environment defaults (for example
+      # PGPASSWORD or PGSSLMODE) instead of being scrubbed.
+      if ($null -ne $dbUser) { $env:PGUSER = $dbUser }
+      if ($null -ne $dbName) { $env:PGDATABASE = $dbName }
+      if ($dbPassword) { $env:PGPASSWORD = $dbPassword }
+      if ($dbSslMode) { $env:PGSSLMODE = $dbSslMode }
       $dbReady = Invoke-Bounded $psql.Source @('--no-password', '-tAc', 'select 1')
     } catch {
       $dbReady = $false
