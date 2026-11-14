@@ -14,9 +14,26 @@ export interface PlaygroundModelsResponse {
   union: boolean;
 }
 
+export interface ImagePart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | Array<{ type: "text"; text: string } | ImagePart>;
+}
+
+/** A user turn carrying optional images (data URLs or public URLs). */
+export function userMessage(text: string, images: string[] = []): ChatMessage {
+  if (images.length === 0) return { role: "user", content: text };
+  return {
+    role: "user",
+    content: [
+      { type: "text", text },
+      ...images.map((url): ImagePart => ({ type: "image_url", image_url: { url } })),
+    ],
+  };
 }
 
 export class PlaygroundError extends Error {

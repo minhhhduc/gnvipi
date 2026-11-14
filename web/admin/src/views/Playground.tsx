@@ -10,17 +10,23 @@ import {
   isStoppedError,
   parseModels,
   streamPlaygroundChat,
-  type ChatMessage,
+  userMessage,
   type PlaygroundModel,
 } from "../lib/playground";
 import { Card, CardHead, PageHeader } from "../components/ui";
 
-interface Turn extends ChatMessage {
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+  /** Data URLs or public URLs attached to a user turn. */
+  images?: string[];
   /** Milliseconds to the first streamed token, when measured. */
   firstTokenMs?: number;
   /** Milliseconds for the whole reply, when measured. */
   totalMs?: number;
 }
+
+const MAX_IMAGE_BYTES = 700 * 1024;
 
 const DEFAULT_TEMPERATURE = 1;
 
@@ -38,6 +44,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
   const [maxTokens, setMaxTokens] = useState("");
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<string[]>([]);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [error, setError] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -119,7 +126,11 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
           ...(system.trim() ? [{ role: "system" as const, content: system.trim() }] : []),
           ...history
             .filter((turn) => turn.role !== "assistant" || turn.content !== "")
-            .map((turn) => ({ role: turn.role, content: turn.content })),
+            .map((turn) =>
+              turn.role === "user"
+                ? userMessage(turn.content, turn.images)
+                : { role: "assistant" as const, content: turn.content },
+            ),
         ],
         userId: owner && accountID ? accountID : undefined,
         temperature,
@@ -162,9 +173,27 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
 
   const send = () => {
     const prompt = input.trim();
-    if (!prompt || !model || streaming) return;
+    if ((!prompt && images.length === 0) || !model || streaming) return;
+    const attached = images;
     setInput("");
-    void run([...turns, { role: "user", content: prompt }, { role: "assistant", content: "" }]);
+    setImages([]);
+    void run([
+      ...turns,
+      { role: "user", content: prompt, images: attached },
+      { role: "assistant", content: "" },
+    ]);
+  };
+
+  const addImageFile = (file: File) => {
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError(`Images must be ${Math.round(MAX_IMAGE_BYTES / 1024)} KB or smaller (the admin request limit).`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setImages((current) => [...current, reader.result as string]);
+    };
+    reader.readAsDataURL(file);
   };
 
   const regenerate = () => {
@@ -326,8 +355,22 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
                 {turns.map((turn, index) =>
                   turn.role === "user" ? (
                     <li key={index} class="flex justify-end">
-                      <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-[10px] bg-panel2 px-3 py-2 text-[13px] leading-6">
-                        {turn.content}
+                      <div class="max-w-[85%] rounded-[10px] bg-panel2 px-3 py-2">
+                        {turn.images && turn.images.length > 0 && (
+                          <div class="mb-1.5 flex flex-wrap gap-1.5">
+                            {turn.images.map((src, imageIndex) => (
+                              <img
+                                key={imageIndex}
+                                src={src}
+                                alt={`Attachment ${imageIndex + 1}`}
+                                class="h-24 w-24 rounded-[6px] border border-line object-cover"
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {turn.content && (
+                          <div class="whitespace-pre-wrap break-words text-[13px] leading-6">{turn.content}</div>
+                        )}
                       </div>
                     </li>
                   ) : (
@@ -361,6 +404,23 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
                 {error}
               </div>
             )}
+            {images.length > 0 && (
+              <div class="mb-2 flex flex-wrap gap-2">
+                {images.map((src, imageIndex) => (
+                  <div key={imageIndex} class="relative">
+                    <img src={src} alt={`Pending attachment ${imageIndex + 1}`} class="h-16 w-16 rounded-[6px] border border-line object-cover" />
+                    <button
+                      type="button"
+                      class="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-line bg-panel text-[11px] text-dim"
+                      aria-label={`Remove attachment ${imageIndex + 1}`}
+                      onClick={() => setImages((current) => current.filter((_, index) => index !== imageIndex))}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <label class="sr-only" for="playground-message">Message</label>
             <textarea
               id="playground-message"
@@ -378,10 +438,30 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
               }}
             />
             <div class="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" class="btn btn-primary" disabled={!model || streaming || !input.trim()} onClick={send}>
+              <button
+                type="button"
+                class="btn btn-primary"
+                disabled={!model || streaming || (!input.trim() && images.length === 0)}
+                onClick={send}
+              >
                 Send
               </button>
               <button type="button" class="btn" disabled={!streaming} onClick={stop}>Stop</button>
+              <label class="btn btn-sm cursor-pointer">
+                Attach image
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  class="hidden"
+                  disabled={!model || streaming}
+                  onChange={(e) => {
+                    const files = (e.currentTarget as HTMLInputElement).files;
+                    if (files) for (const file of Array.from(files)) addImageFile(file);
+                    (e.currentTarget as HTMLInputElement).value = "";
+                  }}
+                />
+              </label>
               <span class="text-[11px] text-dim">Enter to send · Shift+Enter for a new line</span>
               {streaming && <span class="ml-auto text-[11px] text-dim" role="status">Streaming…</span>}
             </div>

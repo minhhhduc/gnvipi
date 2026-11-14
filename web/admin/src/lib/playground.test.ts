@@ -111,7 +111,7 @@ describe("streamPlaygroundChat", () => {
   });
 
   it("forwards sampling parameters only when they are set", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(sseResponse(["data: [DONE]\n\n"])));
     vi.stubGlobal("document", { cookie: "" });
     vi.stubGlobal("fetch", fetchMock);
 
