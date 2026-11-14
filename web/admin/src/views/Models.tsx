@@ -594,8 +594,9 @@ function KeyEditorDialog({
               </div>
             ))}
             <div class="flex flex-wrap items-center gap-2">
-              <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={modelAlias}
-                onInput={(e) => setModelAlias((e.currentTarget as HTMLInputElement).value)} />
+              <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, press Enter to add" value={modelAlias}
+                onInput={(e) => setModelAlias((e.currentTarget as HTMLInputElement).value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addModel(); }} />
               <button class="btn btn-sm" disabled={!modelAlias.trim()} onClick={addModel}>Add model</button>
             </div>
             <span class="block text-[11px] font-normal text-dim">
@@ -624,25 +625,18 @@ function KeyModelsPanel({
   const [alias, setAlias] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Partial<KeyModel>>({});
   const choices = modelChoices(provider.models, rows);
 
-  const add = (value: string, upstreamModel: string) => {
-    if (!value.trim()) return;
-    setRows(toggleKeyModel(rows, { alias: value, upstream_model: buildUpstreamModel(value, upstreamModel) }, true));
-    setAlias("");
-  };
-
-  const update = (target: string, next: Partial<KeyModel>) => {
-    setRows(rows.map((item) => (item.alias === target ? { ...item, ...next } : item)));
-  };
-
-  const save = async () => {
+  // Every change is persisted immediately; Enter commits the row being edited.
+  const persist = async (next: KeyModel[]) => {
     setBusy(true);
     setError(null);
     try {
-      const next = parseKeyModels(await api<unknown>(endpoint, { method: "PUT", body: keyModelsPayload(rows) }));
-      setRows(next);
-      onSaved(next);
+      const saved = parseKeyModels(await api<unknown>(endpoint, { method: "PUT", body: keyModelsPayload(next) }));
+      setRows(saved);
+      onSaved(saved);
     } catch (err) {
       setError(message(err));
     } finally {
@@ -650,39 +644,74 @@ function KeyModelsPanel({
     }
   };
 
+  const add = (value: string, upstreamModel: string) => {
+    const model = value.trim();
+    if (!model) return;
+    setAlias("");
+    void persist(toggleKeyModel(rows, { alias: model, upstream_model: buildUpstreamModel(model, upstreamModel) }, true));
+  };
+
+  const startEdit = (item: KeyModel) => {
+    setEditing(item.alias);
+    setDraft({ upstream_model: item.upstream_model, hidden: item.hidden });
+  };
+
+  const commitEdit = () => {
+    if (!editing) return;
+    const next = rows.map((row) => (row.alias === editing ? { ...row, ...draft } : row));
+    setEditing(null);
+    setDraft({});
+    void persist(next);
+  };
+
   return (
     <div class="space-y-2 py-1">
       <div class="flex items-center gap-2">
         <b class="text-xs">Models for this key</b>
         <span class="text-[11px] text-dim">{rows.length} selected</span>
-        <button class="btn btn-sm ml-auto" disabled={busy} onClick={() => void save()}>
-          {busy ? "Saving…" : "Save models"}
-        </button>
+        {busy && <span class="text-[11px] text-dim">Saving…</span>}
       </div>
-      {rows.map((item) => (
-        <div key={item.alias} class="flex flex-wrap items-center gap-2">
-          <code class="mono w-[180px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
-          <input
-            class="input mono h-7 w-[220px]"
-            aria-label={`Upstream model for ${item.alias}`}
-            value={item.upstream_model}
-            placeholder={item.alias.endsWith("/*") ? "(suffix)" : "upstream model"}
-            onInput={(e) => update(item.alias, { upstream_model: (e.currentTarget as HTMLInputElement).value })}
-          />
-          <label class="flex items-center gap-1.5 text-[11px] text-dim">
-            <Switch checked={item.hidden} onChange={(v) => update(item.alias, { hidden: v })} label={`Hide ${item.alias}`} />
-            hidden
-          </label>
-          <button class="btn btn-sm" aria-label={`Remove ${item.alias}`} onClick={() => setRows(rows.filter((row) => row.alias !== item.alias))}>
-            <IconX />
-          </button>
-        </div>
-      ))}
+      {rows.map((item) =>
+        editing === item.alias ? (
+          <div key={item.alias} class="flex flex-wrap items-center gap-2">
+            <code class="mono w-[180px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
+            <input
+              class="input mono h-7 w-[220px]"
+              aria-label={`Upstream model for ${item.alias}`}
+              value={draft.upstream_model ?? ""}
+              placeholder={item.alias.endsWith("/*") ? "(suffix)" : "upstream model"}
+              autoFocus
+              onInput={(e) => setDraft((d) => ({ ...d, upstream_model: (e.currentTarget as HTMLInputElement).value }))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitEdit();
+                if (e.key === "Escape") { setEditing(null); setDraft({}); }
+              }}
+            />
+            <label class="flex items-center gap-1.5 text-[11px] text-dim">
+              <Switch checked={draft.hidden ?? false} onChange={(v) => setDraft((d) => ({ ...d, hidden: v }))} label={`Hide ${item.alias}`} />
+              hidden
+            </label>
+            <button class="btn btn-sm" disabled={busy} onClick={commitEdit}>Save</button>
+          </div>
+        ) : (
+          <div key={item.alias} class="flex flex-wrap items-center gap-2">
+            <code class="mono w-[180px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
+            <span class="mono w-[220px] truncate text-[11px] text-dim" title={item.upstream_model}>{item.upstream_model}</span>
+            {item.hidden && <span class="text-[11px] text-dim">hidden</span>}
+            <button class="btn btn-sm" disabled={busy} aria-label={`Edit ${item.alias}`} onClick={() => startEdit(item)}>Edit</button>
+            <button class="btn btn-sm" disabled={busy} aria-label={`Remove ${item.alias}`} onClick={() => void persist(rows.filter((row) => row.alias !== item.alias))}>
+              <IconX />
+            </button>
+          </div>
+        ),
+      )}
       {rows.length === 0 && <div class="text-[11px] text-dim">No models selected for this key.</div>}
       <div class="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-        <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, e.g. gpt-4o" value={alias}
-          onInput={(e) => setAlias((e.currentTarget as HTMLInputElement).value)} />
-        <button class="btn btn-sm" disabled={!alias.trim()} onClick={() => add(alias, "")}>Add model</button>
+        <input class="input mono h-7 w-[240px]" aria-label="New model" placeholder="model name, press Enter to save" value={alias}
+          disabled={busy}
+          onInput={(e) => setAlias((e.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(e) => { if (e.key === "Enter") add(alias, ""); }} />
+        <button class="btn btn-sm" disabled={!alias.trim() || busy} onClick={() => add(alias, "")}>Add model</button>
       </div>
       {choices.length > 0 && (
         <div class="flex flex-wrap items-center gap-1.5">
