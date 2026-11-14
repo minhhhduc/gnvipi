@@ -60,6 +60,16 @@ func TestParseCreateOwnerArgs(t *testing.T) {
 		{name: "blank username", args: []string{"--username", "  "}, wantErr: true},
 		{name: "unknown flag", args: []string{"--username", "owner", "--password", "nope"}, wantErr: true},
 		{name: "positional argument", args: []string{"--username", "owner", "extra"}, wantErr: true},
+		{
+			name: "display name at limit",
+			args: []string{"--username", "owner", "--display-name", strings.Repeat("x", 200)},
+			want: createOwnerOptions{Username: "owner", DisplayName: strings.Repeat("x", 200)},
+		},
+		{
+			name:    "display name too long",
+			args:    []string{"--username", "owner", "--display-name", strings.Repeat("x", 201)},
+			wantErr: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseCreateOwnerArgs(tc.args)
@@ -143,7 +153,13 @@ func TestCreateOwnerDB(t *testing.T) {
 
 	// The gateway token is printed exactly once and is usable.
 	const marker = "gateway token (shown once): "
-	if strings.Count(out.String(), "gw_") != 1 {
+	tokenLines := 0
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(line, marker) {
+			tokenLines++
+		}
+	}
+	if tokenLines != 1 {
 		t.Fatalf("gateway token not printed exactly once: %q", out.String())
 	}
 	start := strings.Index(out.String(), marker)

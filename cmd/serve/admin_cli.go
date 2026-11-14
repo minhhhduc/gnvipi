@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -48,6 +49,9 @@ func parseCreateOwnerArgs(args []string) (createOwnerOptions, error) {
 	opts.DisplayName = strings.TrimSpace(opts.DisplayName)
 	if opts.Username == "" {
 		return opts, errors.New("serve admin create-owner requires --username <name>")
+	}
+	if utf8.RuneCountInString(opts.DisplayName) > 200 {
+		return opts, errors.New("serve admin create-owner: --display-name must be at most 200 characters")
 	}
 	return opts, nil
 }
@@ -168,10 +172,17 @@ func openAdminPool(ctx context.Context, lookup func(string) (string, bool)) (*pg
 	return pool, nil
 }
 
-// createOwner commits the first owner and optionally mints one gateway token.
-// The plaintext token is written to stdout once and never stored.
+// createOwner creates the first owner and, when requested, a gateway token in
+// the same transaction. Nothing is printed until the transaction commits, so a
+// failed token write leaves no half-bootstrapped database.
 func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOptions, password string, cfg *auth.BootstrapConfig, stdout io.Writer) error {
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
+
+	owner, err := auth.CreateFirstOwnerTx(ctx, tx, auth.CreateOwnerInput{
 		Username:    opts.Username,
 		Email:       opts.Email,
 		DisplayName: opts.DisplayName,
@@ -180,31 +191,31 @@ func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOption
 	if err != nil {
 		return err
 	}
+	var raw string
+	if opts.WithGatewayToken {
+		raw, err = createGatewayToken(ctx, tx, owner.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(stdout, "owner %q created (id %s)\n", owner.Username, owner.ID); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
-	if !opts.WithGatewayToken {
-		return nil
-	}
-	raw, err := createGatewayToken(ctx, pool, owner.ID)
-	if err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(stdout, "gateway token (shown once): %s\n", raw); err != nil {
-		return fmt.Errorf("write output: %w", err)
+	if opts.WithGatewayToken {
+		if _, err := fmt.Fprintf(stdout, "gateway token (shown once): %s\n", raw); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
 	return nil
 }
 
-// createGatewayToken writes the token row and its audit entry in one
+// createGatewayToken writes the token row and its audit entry in the caller's
 // transaction, so a token never exists without a matching audit row.
-func createGatewayToken(ctx context.Context, pool *pgxpool.Pool, userID string) (string, error) {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
-	raw, token, err := auth.CreateAPIToken(ctx, tx, auth.CreateAPITokenInput{
+func createGatewayToken(ctx context.Context, q auth.Querier, userID string) (string, error) {
+	raw, token, err := auth.CreateAPIToken(ctx, q, auth.CreateAPITokenInput{
 		UserID: userID,
 		Kind:   auth.TokenKindGateway,
 		Name:   "bootstrap",
@@ -214,7 +225,7 @@ func createGatewayToken(ctx context.Context, pool *pgxpool.Pool, userID string) 
 	if err != nil {
 		return "", err
 	}
-	if err := auth.WriteAudit(ctx, tx, auth.AuditEntry{
+	if err := auth.WriteAudit(ctx, q, auth.AuditEntry{
 		ActorType:  "system",
 		Action:     "token.create",
 		TargetType: "token",
@@ -226,9 +237,6 @@ func createGatewayToken(ctx context.Context, pool *pgxpool.Pool, userID string) 
 			"name":    token.Name,
 		},
 	}); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return raw, nil
