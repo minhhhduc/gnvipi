@@ -14,9 +14,26 @@ export interface PlaygroundModelsResponse {
   union: boolean;
 }
 
+export interface ImagePart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | Array<{ type: "text"; text: string } | ImagePart>;
+}
+
+/** A user turn carrying optional images (data URLs or public URLs). */
+export function userMessage(text: string, images: string[] = []): ChatMessage {
+  if (images.length === 0) return { role: "user", content: text };
+  return {
+    role: "user",
+    content: [
+      { type: "text", text },
+      ...images.map((url): ImagePart => ({ type: "image_url", image_url: { url } })),
+    ],
+  };
 }
 
 export class PlaygroundError extends Error {
@@ -137,6 +154,8 @@ export async function streamPlaygroundChat(options: {
   model: string;
   messages: ChatMessage[];
   userId?: string;
+  temperature?: number;
+  maxTokens?: number;
   signal?: AbortSignal;
   onDelta: (text: string) => void;
 }): Promise<void> {
@@ -154,6 +173,8 @@ export async function streamPlaygroundChat(options: {
       model: options.model,
       messages: options.messages,
       stream: true,
+      ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
+      ...(options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens }),
     }),
   });
 
