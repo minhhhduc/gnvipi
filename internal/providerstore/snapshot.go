@@ -101,6 +101,119 @@ func (s *Snapshot) Provider(id string) (provider.Provider, bool) {
 	return provider.Clone(p), true
 }
 
+// AvailableModel is one concrete alias a caller can select in the console.
+// It carries identity metadata only, never credential material.
+type AvailableModel struct {
+	OwnerID       string
+	ProviderID    string
+	Alias         string
+	UpstreamModel string
+}
+
+// AvailableModels lists the concrete aliases a caller can resolve, with the
+// same personal-before-shared precedence as request-time routing. Hidden rows
+// and aliases that may not shadow a protected model are omitted, as are
+// wildcards (they are patterns, not selectable models). allOwners returns the
+// owner console's union view: every account's personal aliases plus shared.
+func (s *Snapshot) AvailableModels(userID string, allOwners bool) []AvailableModel {
+	if s == nil {
+		return nil
+	}
+	owners := []string{userID}
+	if allOwners {
+		owners = owners[:0]
+		for owner := range s.personalEx {
+			owners = append(owners, owner)
+		}
+		sort.Strings(owners)
+	}
+	type ownerList struct {
+		owner string
+		list  []*candidate
+	}
+	personal := make(map[string][]ownerList)
+	aliases := make(map[string]struct{})
+	for _, owner := range owners {
+		for alias, list := range s.personalEx[owner] {
+			aliases[alias] = struct{}{}
+			personal[alias] = append(personal[alias], ownerList{owner: owner, list: list})
+		}
+	}
+	for alias := range s.sharedEx {
+		aliases[alias] = struct{}{}
+	}
+
+	out := make([]AvailableModel, 0, len(aliases))
+	seen := make(map[string]struct{})
+	add := func(owner string, c *candidate) {
+		key := owner + "\x00" + c.providerID + "\x00" + c.alias + "\x00" + c.upstreamModel
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, AvailableModel{
+			OwnerID:       owner,
+			ProviderID:    c.providerID,
+			Alias:         c.alias,
+			UpstreamModel: c.upstreamModel,
+		})
+	}
+	// eligible applies the same hidden/protected rules as pickExact. A
+	// credential failure still counts as a personal match: request-time
+	// resolution does not fall back to shared when every personal candidate is
+	// unusable, so the picker must not advertise the shared alias either.
+	eligible := func(alias string, c *candidate) (matched, visible bool) {
+		if s.isProtected != nil && s.isProtected(alias) && !c.allowShadow {
+			return false, false
+		}
+		if c.hidden || c.credential != nil {
+			return true, false
+		}
+		return true, true
+	}
+	for alias := range aliases {
+		if state, ok := s.modelState[alias]; ok && (state.Hidden || state.Deleted) {
+			continue
+		}
+		hadPersonal := false
+		for _, entry := range personal[alias] {
+			for _, c := range entry.list {
+				matched, visible := eligible(alias, c)
+				if !matched {
+					continue
+				}
+				hadPersonal = true
+				if !visible {
+					continue
+				}
+				add(entry.owner, c)
+			}
+		}
+		if hadPersonal {
+			continue
+		}
+		for _, c := range s.sharedEx[alias] {
+			matched, visible := eligible(alias, c)
+			if matched && visible {
+				add("", c)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ProviderID != out[j].ProviderID {
+			return out[i].ProviderID < out[j].ProviderID
+		}
+		if out[i].Alias != out[j].Alias {
+			return out[i].Alias < out[j].Alias
+		}
+		if out[i].UpstreamModel != out[j].UpstreamModel {
+			return out[i].UpstreamModel < out[j].UpstreamModel
+		}
+		return out[i].OwnerID < out[j].OwnerID
+	})
+	return out
+}
+
 // Audit codes reported for key-level routing failures.
 const (
 	AuditCredentialUnavailable = "provider_key_credential_unavailable"

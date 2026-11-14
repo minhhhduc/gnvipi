@@ -5,6 +5,7 @@ import type { Page } from "./context";
 describe("pageFromUrl", () => {
   it.each([
     ["?page=stats", "stats"],
+    ["?page=playground", "playground"],
     ["?page=models", "models"],
     ["?page=config", "config"],
     ["?page=chromes", "chromes"],
@@ -65,5 +66,11 @@ describe("pageAllowed", () => {
     expect(pageAllowed("tokens", "owner")).toBe(true);
     expect(pageAllowed("tokens", "admin")).toBe(true);
     expect(pageAllowed("tokens", "user")).toBe(true);
+  });
+
+  it("opens the playground to every role", () => {
+    expect(pageAllowed("playground", "owner")).toBe(true);
+    expect(pageAllowed("playground", "admin")).toBe(true);
+    expect(pageAllowed("playground", "user")).toBe(true);
   });
 });

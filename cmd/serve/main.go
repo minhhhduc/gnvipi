@@ -397,9 +397,15 @@ func runServer() (err error) {
 		writeClaudeModelCache(*addr, getModels())
 	}
 
-	gatewayMiddleware, err := gatewayV2Middleware(prefs, *gatewayV2, proxyURL, snapshotRuntime)
+	gatewayDispatcher, err := newGatewayDispatcher(prefs, *gatewayV2, proxyURL, snapshotRuntime)
 	if err != nil {
 		return fmt.Errorf("gateway dispatcher: %w", err)
+	}
+	// The console playground re-enters the engine; with v2 disabled there is no
+	// key-aware dispatcher to resolve the caller's own models, so it stays off.
+	gatewayMiddleware := func(c *gin.Context) { c.Next() }
+	if gatewayDispatcher != nil {
+		gatewayMiddleware = gatewayDispatcher.Handle
 	}
 
 	tokenStore := sdkAuth.GetTokenStore()
@@ -498,6 +504,9 @@ func runServer() (err error) {
 					engine.POST("/admin/delete", adminHandler)
 					engine.POST("/admin/retry-failed", adminHandler)
 					registerAdminAPIRoutes(engine, prefs, nil, chromes, adminAuth)
+					if adminAuth != nil && gatewayDispatcher != nil {
+						registerAdminPlaygroundRoutes(engine, adminAuth, snapshotRuntime, prefs)
+					}
 				}
 				engine.POST("/mcp", searchMCP)
 				engine.GET("/mcp", searchMCP)

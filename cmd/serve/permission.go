@@ -237,6 +237,11 @@ var adminRoutePermissions = map[string]adminPermission{
 	// Audit trail is owner-only: it discloses every subject id.
 	"GET /admin/api/audit": {roles: allowed(auth.RoleOwner)},
 
+	// Console playground. Reads resolve the caller's own models; writes run a
+	// test completion as the session identity (an owner may select an account).
+	"GET /admin/api/playground/models": {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/playground/chat":  {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+
 	// Legacy configuration surface. Stats attribution per user arrives with the
 	// key-aware routing work, so it stays operator-only rather than leaking
 	// every caller's usage to a user-role account.

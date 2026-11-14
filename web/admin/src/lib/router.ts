@@ -8,6 +8,8 @@ export function rawPageFromUrl(search: string): string {
 
 const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   stats: ["owner", "admin", "user"],
+  // Every role can test the models it can actually reach.
+  playground: ["owner", "admin", "user"],
   // Every role reaches Models, because that is where users manage their own
   // provider keys and per-key model aliases.
   models: ["owner", "admin", "user"],
@@ -29,6 +31,7 @@ export function pageFromUrl(search: string, role?: AdminRole): Page {
   const value = rawPageFromUrl(search);
   const page: Page =
     value === "stats" ||
+    value === "playground" ||
     value === "models" ||
     value === "config" ||
     value === "chromes" ||

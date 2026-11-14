@@ -5,6 +5,7 @@ import { pageAllowed } from "../lib/router";
 
 const NAV: { page: Page; label: string }[] = [
   { page: "stats", label: "Stats" },
+  { page: "playground", label: "Playground" },
   { page: "models", label: "Models" },
   { page: "config", label: "Config" },
   { page: "chromes", label: "Chrome" },
