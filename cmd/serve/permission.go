@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +51,40 @@ type authState struct {
 	// address. Plaintext cookies are only accepted on such a bind, matching the
 	// file-token policy in adminAccess.
 	loopbackBind bool
+	// bootstrapToken is GNVIPI_ADMIN_TOKEN. It authenticates only while users
+	// is empty, and only to create the first owner; afterwards it is ignored.
+	bootstrapToken string
+	// bootstrapHash is sha256(bootstrapToken), precomputed at startup.
+	bootstrapHash [32]byte
+	// bootstrapWarned is a pointer so authState stays copyable.
+	bootstrapWarned *sync.Once
+	// usersExist caches the empty-install check: users only grows, so once it
+	// is true the count query is skipped for the rest of the process. The
+	// pointer keeps authState copyable, like bootstrapWarned.
+	usersExist *atomic.Bool
+}
+
+// setBootstrapToken records the one-time GNVIPI_ADMIN_TOKEN and precomputes its
+// hash so bootstrap checks do not re-hash a constant on every request.
+func (s *authState) setBootstrapToken(token string) {
+	s.bootstrapToken = token
+	s.bootstrapHash = sha256.Sum256([]byte(token))
+}
+
+// ownerExists reports whether any account exists. The answer is cached because
+// users only ever grows from zero; the first committed owner pins it true.
+func (s *authState) ownerExists(ctx context.Context) (bool, error) {
+	if s.usersExist != nil && s.usersExist.Load() {
+		return true, nil
+	}
+	users, err := auth.CountUsers(ctx, s.pool)
+	if err != nil {
+		return false, err
+	}
+	if users > 0 && s.usersExist != nil {
+		s.usersExist.Store(true)
+	}
+	return users > 0, nil
 }
 
 func loadPasswordHashConfig(lookup func(string) (string, bool)) (auth.BootstrapConfig, error) {
@@ -113,6 +151,9 @@ func newAuthState(pool *pgxpool.Pool, password *auth.BootstrapConfig) *authState
 			Lockout:           auth.DefaultLockoutConfig(),
 		},
 		password: *password,
+		// A pointer keeps authState copyable for per-request policy variants.
+		bootstrapWarned: &sync.Once{},
+		usersExist:      &atomic.Bool{},
 	}
 }
 
@@ -246,6 +287,9 @@ type adminIdentity struct {
 	TokenID            string
 	Scope              auth.Scope
 	SessionToken       string
+	// Bootstrap marks the one-time GNVIPI_ADMIN_TOKEN caller. It may only
+	// create the first owner.
+	Bootstrap bool
 }
 
 // adminAuthFailure is a complete error response. Callers turn it into JSON so
@@ -293,6 +337,17 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 					code:    "authentication_required",
 					message: "sign in to the admin console",
 				})
+				return
+			}
+			if identity.Bootstrap {
+				// The bootstrap token can only create the first owner; every
+				// other route stays closed until a real account signs in.
+				if c.Request.Method != http.MethodPost || c.FullPath() != "/admin/api/users" {
+					adminAPIError(c, http.StatusForbidden, "forbidden", "bootstrap access is limited to creating the first owner")
+					return
+				}
+				c.Set(adminIdentityKey, identity)
+				c.Next()
 				return
 			}
 			if identity.MustChangePassword && !adminPasswordChangeAllowed(c, identity) {
@@ -358,6 +413,15 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 		identity, err := auth.ValidateAPIToken(ctx, s.pool, raw, auth.TokenKindAdmin, now)
 		if err != nil {
 			if errors.Is(err, auth.ErrInvalidToken) {
+				if bootstrap, bootstrapErr := s.bootstrapIdentity(ctx, raw); bootstrapErr != nil {
+					return nil, &adminAuthFailure{
+						status:  http.StatusInternalServerError,
+						code:    "token_unavailable",
+						message: "could not validate the admin token",
+					}
+				} else if bootstrap != nil {
+					return bootstrap, nil
+				}
 				return nil, &adminAuthFailure{
 					status:  http.StatusUnauthorized,
 					code:    "invalid_credentials",
@@ -415,6 +479,28 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 		code:    "authentication_required",
 		message: "sign in to the admin console",
 	}
+}
+
+// bootstrapIdentity accepts GNVIPI_ADMIN_TOKEN only while no account exists.
+// Once the first owner is committed the token is ignored and a single warning
+// explains why, so an operator does not keep retrying it.
+func (s *authState) bootstrapIdentity(ctx context.Context, raw string) (*adminIdentity, error) {
+	if s.bootstrapToken == "" || !adminTokenMatches(raw, s.bootstrapHash) {
+		return nil, nil
+	}
+	usersExist, err := s.ownerExists(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !usersExist {
+		return &adminIdentity{ViaToken: true, Bootstrap: true}, nil
+	}
+	if s.bootstrapWarned != nil {
+		s.bootstrapWarned.Do(func() {
+			log.Print("warning: GNVIPI_ADMIN_TOKEN is bootstrap-only; it is ignored because an owner already exists")
+		})
+	}
+	return nil, nil
 }
 
 // verifyAdminCookieWrite enforces the double-submit token and the same-origin

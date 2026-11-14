@@ -75,6 +75,20 @@ func runCLICommand(
 		command = func(ctx context.Context) error { return runMigrateCommand(ctx, args[1:], lookup, migrate) }
 	case len(args) > 1 && args[0] == "admin" && args[1] == "import-v2":
 		command = func(ctx context.Context) error { return importV2(ctx, args[2:], lookup) }
+	case len(args) > 1 && args[0] == "admin" && args[1] == "create-owner":
+		command = func(ctx context.Context) error {
+			return runCreateOwnerCommand(ctx, args[2:], lookup, os.Stdin, os.Stdout)
+		}
+	case len(args) > 1 && args[0] == "admin" && args[1] == "reset-password":
+		command = func(ctx context.Context) error { return runResetPasswordCommand(ctx, args[2:], lookup, os.Stdin) }
+	case len(args) > 0 && args[0] == "admin":
+		// A mistyped admin subcommand must not start the server: that would look
+		// like the command silently succeeded and leave the bootstrap undone.
+		subcommand := ""
+		if len(args) > 1 {
+			subcommand = args[1]
+		}
+		return true, fmt.Errorf("serve admin: unknown or missing subcommand %q (expected create-owner, reset-password or import-v2)", subcommand)
 	default:
 		return false, nil
 	}
@@ -221,6 +235,9 @@ func runServer() (err error) {
 		// which openAppDB does not know.
 		adminAuth.loopbackBind = adminLoopbackBind(*addr)
 		adminAuth.clientIPs = clientIPs
+		// GNVIPI_ADMIN_TOKEN (or -admin-token) is a one-time bootstrap
+		// credential in database mode: it works only while no owner exists.
+		adminAuth.setBootstrapToken(*adminToken)
 	}
 
 	// Database mode also owns routing configuration: one immutable snapshot per
@@ -453,7 +470,7 @@ func runServer() (err error) {
 				// legacy endpoints and JSON API. Headless mode registers none of them.
 				if !*disableAdminUI {
 					// The SDK registers these routes before applying WithMiddleware.
-					engine.Use(adminAccess(*addr, *adminToken, adminAuth != nil))
+					engine.Use(adminAccess(*addr, *adminToken, adminAuth))
 					// Database mode authenticates /admin/api per route with a
 					// role/scope table; a route without a declaration is refused.
 					engine.Use(adminAPIAuthorization(adminAuth))

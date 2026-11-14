@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // BootstrapConfig controls hashing during owner creation and recovery.
@@ -37,6 +39,29 @@ type CreateOwnerInput struct {
 // committed user and returns ErrUsersExist. The user and audit row commit in
 // one transaction.
 func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
+
+	u, err := CreateFirstOwnerTx(ctx, tx, in, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// CreateFirstOwnerTx performs the bootstrap inside a caller-owned transaction
+// and leaves the commit to the caller, so related rows (for example a gateway
+// token) can be written atomically with the owner. The advisory lock is
+// transaction-scoped, so tx must be a real transaction: a connection pool also
+// satisfies Querier but would release the lock as soon as the statement ends,
+// letting two concurrent bootstraps create two owners.
+func CreateFirstOwnerTx(ctx context.Context, tx pgx.Tx, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
 	cfg = cfg.normalized()
 	username := strings.TrimSpace(in.Username)
 	if n := utf8.RuneCountInString(username); n < 3 || n > 64 {
@@ -49,12 +74,6 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 	if err != nil {
 		return nil, err
 	}
-
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('gnvipi:bootstrap'))`); err != nil {
 		return nil, err
@@ -84,9 +103,6 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 		UserID:     u.ID,
 		Details:    map[string]any{"username": u.Username, "role": string(u.Role)},
 	}); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return u, nil

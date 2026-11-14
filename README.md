@@ -97,10 +97,17 @@ $env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
 New-Item -ItemType Directory -Force .\bin | Out-Null
 go build -o .\bin\serve.exe ./cmd/serve
 .\bin\serve.exe migrate
-.\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+# The password is read from stdin and never echoed: pipe it in.
+'<temporary-password>' | .\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
 $env:GNVIPI_GATEWAY_TOKEN='gw_...'
 .\scripts\run.ps1 -Claude
 ```
+
+`serve admin create-owner` and `serve admin reset-password <user>` refuse a
+terminal stdin so the password is never echoed; pipe the password in on stdin
+instead of typing it interactively. In MSYS2/Git Bash (mintty) a pty is a named
+pipe that cannot be told apart from a real pipeline, so piping is refused there
+as well; run the command from cmd.exe or PowerShell, where piping works.
 
 The bootstrap command prints the gateway token once. `run.ps1` forwards it to
 Claude Code as `ANTHROPIC_AUTH_TOKEN` without printing the token.

@@ -20,7 +20,7 @@ func contractEngine(t *testing.T, p *modelPrefs, token string, catalog []*clipro
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use(requestBodyLimit(1<<20, 1<<20))
-	engine.Use(adminAccess("127.0.0.1:8080", token, false))
+	engine.Use(adminAccess("127.0.0.1:8080", token, nil))
 	registerAdminAPIRoutes(engine, p, catalog, newChromeLifecycle(context.Background(), nil, nil), nil)
 	registerAdminUI(engine)
 	return engine

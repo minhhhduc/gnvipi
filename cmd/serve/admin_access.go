@@ -24,10 +24,12 @@ const adminSessionCookie = "gnvipi_admin_session"
 const adminSessionLifetime = 12 * time.Hour
 
 // adminAccess protects only /admin and /admin/*, including the login endpoint
-// intercepted here. Install it before registering admin routes. With dbAuth the
-// JSON API authenticates against the database instead, so this gate leaves
-// /admin/api alone and keeps guarding the pages.
-func adminAccess(addr, token string, dbAuth bool) gin.HandlerFunc {
+// intercepted here. Install it before registering admin routes. With a database
+// identity store (dbAuth non-nil) the JSON API authenticates against the
+// database instead, so this gate leaves /admin/api alone. The shared token is a
+// bootstrap credential there: once an owner exists it stops being valid here
+// too, and the gate behaves as if no token were configured.
+func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 	loopback := adminLoopbackBind(addr)
 	tokenHash := sha256.Sum256([]byte(token))
 	var sessionKey [32]byte
@@ -43,7 +45,7 @@ func adminAccess(addr, token string, dbAuth bool) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if dbAuth && adminAPIPath(path) {
+		if dbAuth != nil && adminAPIPath(path) {
 			c.Next()
 			return
 		}
@@ -54,7 +56,21 @@ func adminAccess(addr, token string, dbAuth bool) gin.HandlerFunc {
 			adminAccessError(c, http.StatusForbidden, "Admin mutations require the same origin; cross-site requests are not allowed.")
 			return
 		}
-		if token == "" {
+		// GNVIPI_ADMIN_TOKEN is bootstrap-only. Once the first owner exists it is
+		// ignored everywhere, including the legacy surface guarded here, so the
+		// legacy shared-token login and header access both stop working.
+		activeToken := token
+		if dbAuth != nil {
+			ownerExists, err := dbAuth.ownerExists(r.Context())
+			if err != nil {
+				adminAccessError(c, http.StatusServiceUnavailable, "Admin identity store is unavailable; try again shortly.")
+				return
+			}
+			if ownerExists {
+				activeToken = ""
+			}
+		}
+		if activeToken == "" {
 			if !loopback {
 				adminAccessError(c, http.StatusForbidden, "Set -admin-token or GNVIPI_ADMIN_TOKEN to enable admin access on a non-loopback bind, or bind to localhost, 127.0.0.1, or [::1].")
 				return

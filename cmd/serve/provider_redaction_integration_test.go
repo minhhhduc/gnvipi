@@ -82,7 +82,7 @@ func TestGrepStyleAdminAPIsAndHTMLNeverExposeRawConfiguredKeys(t *testing.T) {
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	engine.Use(adminAccess("127.0.0.1:8080", "", nil))
 	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.GET("/admin", func(c *gin.Context) {
 		handleAdminDashboard(c, nil)
@@ -277,7 +277,7 @@ func TestPreservingSecretsWhenUpdatingProviderWithRedactedSentinel(t *testing.T)
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	engine.Use(adminAccess("127.0.0.1:8080", "", nil))
 	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.POST("/admin/providers", handleAdminProviders)
 
@@ -401,7 +401,7 @@ func TestAdminClearKeyOrSwitchToKeyEnvOrAuthNone(t *testing.T) {
 	}
 
 	engine := gin.New()
-	engine.Use(adminAccess("127.0.0.1:8080", "", false))
+	engine.Use(adminAccess("127.0.0.1:8080", "", nil))
 	registerAdminAPIRoutes(engine, m, nil, nil, nil)
 	engine.POST("/admin/providers", handleAdminProviders)
 
