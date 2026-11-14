@@ -237,6 +237,7 @@ export function Pager({
   from,
   to,
   total,
+  note,
   hasPrev,
   hasNext,
   onPrev,
@@ -245,6 +246,7 @@ export function Pager({
   from: number;
   to: number;
   total?: number;
+  note?: string;
   hasPrev: boolean;
   hasNext: boolean;
   onPrev: () => void;
@@ -252,7 +254,7 @@ export function Pager({
 }) {
   return (
     <div class="flex items-center gap-2 border-t border-line px-4 py-2.5 text-xs text-dim">
-      <span>Showing {from}–{to}{total != null ? ` of ${total}` : ""}</span>
+      <span>Showing {from}–{to}{total != null ? ` of ${total}` : ""}{note ? ` · ${note}` : ""}</span>
       <div class="ml-auto flex gap-2">
         <button class="btn btn-sm" disabled={!hasPrev} onClick={onPrev}>Previous</button>
         <button class="btn btn-sm" disabled={!hasNext} onClick={onNext}>Next</button>

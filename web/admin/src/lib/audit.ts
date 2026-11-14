@@ -46,6 +46,7 @@ const ALLOWED_DETAIL_KEYS = new Set([
   "action", "status", "role", "kind", "scope",
   "enabled", "disabled", "success", "hidden", "deleted",
   "must_change", "active",
+  "auth_scheme", "has_secret", "has_key_env", "has_key_ref",
   "count", "total", "revoked_sessions", "revoked_tokens",
 ]);
 
@@ -134,8 +135,22 @@ export function nextAuditRequest(request: AuditRequest, page: AuditPage): AuditR
 }
 
 export function previousAuditRequest(request: AuditRequest, page: AuditPage): AuditRequest | null {
-  if (request.depth <= 1 || !page.before_cursor) return null;
-  return { limit: request.limit, after: null, before: page.before_cursor, depth: request.depth - 1 };
+  if (!page.before_cursor) return null;
+  // A backward response's has_more is the newer direction: it says whether
+  // another page exists above this one. A forward response came from such a
+  // page, so it already proves one exists whatever its (older-direction)
+  // has_more says.
+  const backward = request.before != null;
+  if (backward ? !page.has_more : request.after == null) return null;
+  return { limit: request.limit, after: null, before: page.before_cursor, depth: Math.max(1, request.depth - 1) };
+}
+
+/** True row positions on the loaded cursor page; the client filter only hides rows. */
+export function auditWindow(request: AuditRequest, page: AuditPage): { from: number; to: number } {
+  const count = page.entries.length;
+  if (count === 0) return { from: 0, to: 0 };
+  const from = (request.depth - 1) * request.limit + 1;
+  return { from, to: from + count - 1 };
 }
 
 /** Client-side filter over the loaded page; the API has no filter parameters. */
