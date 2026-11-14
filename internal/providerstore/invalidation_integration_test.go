@@ -170,6 +170,29 @@ func integrationWaitForListeners(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 }
 
+// integrationWaitForListenerCount waits until the number of LISTEN sessions
+// reaches want and returns the observed count. The server drops the session
+// slightly after the client closes the connection, so a shutdown assertion
+// must wait for the server side instead of sampling once.
+func integrationWaitForListenerCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want int) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := integrationListenerCount(t, ctx, pool)
+		if got == want {
+			return got
+		}
+		if time.Now().After(deadline) {
+			return got
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for %d LISTEN gnvipi_config sessions: %v", want, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 // integrationStartWatcher runs a watcher for the lifetime of the test; the
 // goroutine has exited before the cleanup registered here returns.
 func integrationStartWatcher(t *testing.T, ctx context.Context, store *Store, pool *pgxpool.Pool, poll time.Duration) {
@@ -410,6 +433,73 @@ func TestTwoInstancesConvergeAfterCommittedWrite(t *testing.T) {
 		}
 		if route.KeyID != committedKeyID {
 			t.Fatalf("instance %s key id = %q, want %q", name, route.KeyID, committedKeyID)
+		}
+	}
+}
+
+// TestWatcherShutdownDoesNotRaceNotificationRead proves the watcher closes its
+// LISTEN connection only after the notification read has returned. pgx's
+// WaitForNotification and Close both mutate pgconn's connection status, so
+// closing the connection while the read is in flight is a data race. The
+// notification flood keeps the reader inside WaitForNotification while the
+// watcher shuts down, which is the window CI flagged.
+func TestWatcherShutdownDoesNotRaceNotificationRead(t *testing.T) {
+	dsn := integrationDSN(t)
+	integrationEnsureSchema(t, dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pool := integrationPool(t, dsn)
+	notifier := integrationPool(t, dsn)
+	store := NewStore(NewDBRowSource(pool), StoreOptions{Keyring: testKeyring(t), Now: time.Now})
+	if err := store.Reload(ctx); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+
+	for i := 0; i < 20; i++ {
+		watchCtx, stop := context.WithCancel(ctx)
+		watcher := &Watcher{
+			Store:          store,
+			Pool:           pool,
+			PollInterval:   time.Hour,
+			InitialBackoff: 20 * time.Millisecond,
+			MaxBackoff:     100 * time.Millisecond,
+		}
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := watcher.Run(watchCtx); err != nil && watchCtx.Err() == nil {
+				t.Errorf("watcher stopped: %v", err)
+			}
+		}()
+		integrationWaitForListeners(t, ctx, notifier, 1)
+
+		// Flood notifications so the reader is actively returning from
+		// WaitForNotification when the shutdown cancels the read.
+		floodDone := make(chan struct{})
+		go func() {
+			defer close(floodDone)
+			for {
+				select {
+				case <-watchCtx.Done():
+					return
+				default:
+				}
+				if _, err := notifier.Exec(ctx,
+					`SELECT pg_notify('gnvipi_config', '') FROM generate_series(1, 5000)`); err != nil {
+					return
+				}
+			}
+		}()
+		time.Sleep(30 * time.Millisecond)
+
+		stop()
+		wg.Wait()
+		<-floodDone
+
+		if got := integrationWaitForListenerCount(t, ctx, notifier, 0); got != 0 {
+			t.Fatalf("iteration %d: %d LISTEN gnvipi_config sessions remain after the watcher stopped", i, got)
 		}
 	}
 }

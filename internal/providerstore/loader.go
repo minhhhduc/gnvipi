@@ -239,10 +239,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 			w.report(reloadErr)
 		}
 		listenErr := w.listen(ctx, conn, poll)
-		// Close on a detached context in its own goroutine so it never
-		// blocks shutdown and cannot race WaitForNotification's read of
-		// the same connection state.
-		go func() { _ = conn.Close(context.Background()) }() //nolint:errcheck // best-effort cleanup
+		// listen only returns after the notification read has returned, so
+		// closing the connection here cannot race WaitForNotification's
+		// access to pgx's connection state.
+		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -273,8 +273,9 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 	notify := make(chan struct{}, 1)
 	errorsCh := make(chan error, 1)
 	listenCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	readerDone := make(chan struct{})
 	go func() {
+		defer close(readerDone)
 		for {
 			if _, err := conn.WaitForNotification(listenCtx); err != nil {
 				errorsCh <- err
@@ -285,6 +286,15 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 			default:
 			}
 		}
+	}()
+	// The reader owns the connection while it is inside WaitForNotification:
+	// pgx mutates connection state in both WaitForNotification and Close, so
+	// closing the connection before the reader has returned is a data race.
+	// Cancel the read, wait for it to finish, and only then let the caller
+	// close the connection.
+	defer func() {
+		cancel()
+		<-readerDone
 	}()
 
 	ticker := time.NewTicker(poll)
