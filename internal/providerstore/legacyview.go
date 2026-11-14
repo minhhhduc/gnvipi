@@ -62,6 +62,17 @@ func LegacyView(row ProviderRow, keys []KeyRow, models []KeyModelRow, opts Legac
 	return definition, nil
 }
 
+// AggregateModels returns the v2 provider-level model list built from the keys
+// visible to the caller. It is the read used to tell a deliberate models write
+// from a client echoing the current list.
+func AggregateModels(keys []KeyRow, models []KeyModelRow, opts LegacyViewOptions) []provider.ModelMapping {
+	visibleByID := make(map[string]bool, len(keys))
+	for _, key := range visibleKeys(keys, opts.VisibleKeyIDs) {
+		visibleByID[key.ID] = true
+	}
+	return legacyModels(models, visibleByID)
+}
+
 func visibleKeys(keys []KeyRow, allowed []string) []KeyRow {
 	if allowed == nil {
 		return append([]KeyRow(nil), keys...)

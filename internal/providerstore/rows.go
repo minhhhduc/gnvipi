@@ -340,6 +340,12 @@ func ValidateKeyModelRow(m KeyModelRow) error {
 	if strings.TrimSpace(m.KeyID) == "" || strings.TrimSpace(m.Alias) == "" {
 		return fmt.Errorf("%w: key model requires key id and alias", ErrInvalidConfig)
 	}
+	if len(m.Alias) > 200 {
+		return fmt.Errorf("%w: alias %q exceeds 200 characters", ErrInvalidConfig, m.Alias)
+	}
+	if len(m.UpstreamModel) > 200 {
+		return fmt.Errorf("%w: alias %q upstream_model exceeds 200 characters", ErrInvalidConfig, m.Alias)
+	}
 	if strings.ContainsAny(m.Alias, " \t\r\n") {
 		return fmt.Errorf("%w: alias %q contains whitespace", ErrInvalidConfig, m.Alias)
 	}
