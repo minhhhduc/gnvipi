@@ -15,7 +15,13 @@ export interface AuthSession {
   csrf_token: string;
 }
 
-const ADMIN_ROLES: Record<string, true> = { owner: true, admin: true, user: true };
+export function isAdminRole(value: unknown): value is AdminRole {
+  return value === "owner" || value === "admin" || value === "user";
+}
+
+export function isOperatorRole(value: unknown): boolean {
+  return value === "owner" || value === "admin";
+}
 
 export function parseAuthSession(value: unknown): AuthSession {
   if (!value || typeof value !== "object") throw new Error("Invalid admin session response");
@@ -28,14 +34,14 @@ export function parseAuthSession(value: unknown): AuthSession {
     typeof fields.username !== "string" || !fields.username ||
     typeof fields.email !== "string" ||
     typeof fields.display_name !== "string" ||
-    typeof fields.role !== "string" || !ADMIN_ROLES[fields.role] ||
+    !isAdminRole(fields.role) ||
     fields.status !== "active" ||
     typeof fields.must_change_password !== "boolean" ||
     typeof session.csrf_token !== "string" || !session.csrf_token
   ) {
     throw new Error("Invalid admin session response");
   }
-  return value as AuthSession;
+  return { user: fields as unknown as AdminUser, csrf_token: session.csrf_token };
 }
 
 export type AuthScreen = "login" | "password-change" | "console";

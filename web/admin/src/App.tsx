@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./lib/api";
 import { pageAllowed, pageFromUrl, rawPageFromUrl } from "./lib/router";
-import { authScreenFor, parseAuthSession, sessionFailureMode, type AdminUser, type AuthSession } from "./lib/auth";
+import { authScreenFor, isOperatorRole, parseAuthSession, sessionFailureMode, type AdminUser, type AuthSession } from "./lib/auth";
+import { createPoller, PollTimeoutError, type Poller } from "./lib/polling";
 import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { LoginScreen, PasswordChangeScreen } from "./components/Login";
@@ -11,6 +12,10 @@ import { StatsView } from "./views/Stats";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
+
+/** Stats refresh cadence, and the point at which a request counts as stalled. */
+const STATS_POLL_INTERVAL_MS = 2000;
+const STATS_POLL_TIMEOUT_MS = 15000;
 
 const LEGACY_ADMIN_USER: AdminUser = {
   id: "legacy-admin",
@@ -38,15 +43,15 @@ export function App() {
   const toastId = useRef(0);
   const statsErrorShown = useRef(false);
   const identityGeneration = useRef(0);
-  const statsAbort = useRef<AbortController | null>(null);
+  const statsPoller = useRef<Poller | null>(null);
   const consoleReady = authChecked && user !== null && authScreenFor(user) === "console";
   const effectivePage = user && pageAllowed(page, user.role) ? page : "stats";
-  const statsPollingAllowed = consoleReady && user?.role !== "user";
+  const statsPollingAllowed = consoleReady && isOperatorRole(user?.role);
 
   const invalidateIdentityData = useCallback(() => {
     identityGeneration.current += 1;
-    statsAbort.current?.abort();
-    statsAbort.current = null;
+    statsPoller.current?.stop();
+    statsPoller.current = null;
     statsErrorShown.current = false;
     setStats(null);
     setStatsUpdated(null);
@@ -126,52 +131,44 @@ export function App() {
   }, [authChecked, effectivePage, user]);
 
   const refreshStats = useCallback(() => {
+    statsPoller.current?.refresh();
+  }, []);
+
+  useEffect(() => {
     if (!statsPollingAllowed) return;
-    statsAbort.current?.abort();
-    const controller = new AbortController();
-    const generation = identityGeneration.current;
-    statsAbort.current = controller;
-    api<Stats>("/admin/api/stats", { signal: controller.signal })
-      .then((data) => {
-        if (controller.signal.aborted || generation !== identityGeneration.current) return;
+    const poller = createPoller(async (signal) => {
+      const generation = identityGeneration.current;
+      try {
+        const data = await api<Stats>("/admin/api/stats", { signal });
+        if (signal.aborted || generation !== identityGeneration.current) return;
         setStats(data);
         setStatsUpdated(Date.now());
         statsErrorShown.current = false;
-      })
-      .catch((err) => {
-        if (controller.signal.aborted || generation !== identityGeneration.current || statsErrorShown.current) return;
+      } catch (err) {
+        // Identity and visibility aborts are silent; a poll timeout is a failure.
+        const timedOut = signal.reason instanceof PollTimeoutError;
+        if (generation !== identityGeneration.current || (signal.aborted && !timedOut)) return;
+        if (statsErrorShown.current) return;
         statsErrorShown.current = true;
         setBannerState({
           message: `Stats unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
           retry: refreshStats,
           owner: "stats",
         });
-      })
-      .finally(() => {
-        if (statsAbort.current === controller) statsAbort.current = null;
-      });
-  }, [statsPollingAllowed]);
-
-  useEffect(() => {
-    if (!statsPollingAllowed) return;
-    let timer: number | undefined;
-    const syncPolling = () => {
-      clearInterval(timer);
-      timer = undefined;
-      if (document.hidden) {
-        statsAbort.current?.abort();
-        return;
       }
-      refreshStats();
-      timer = setInterval(refreshStats, 2000);
-    };
+    }, { intervalMs: STATS_POLL_INTERVAL_MS, timeoutMs: STATS_POLL_TIMEOUT_MS });
 
+    statsPoller.current = poller;
+    const syncPolling = () => {
+      if (document.hidden) poller.stop();
+      else poller.start();
+    };
     syncPolling();
     document.addEventListener("visibilitychange", syncPolling);
     return () => {
       document.removeEventListener("visibilitychange", syncPolling);
-      clearInterval(timer);
-      statsAbort.current?.abort();
+      poller.stop();
+      if (statsPoller.current === poller) statsPoller.current = null;
     };
   }, [refreshStats, statsPollingAllowed]);
 
@@ -229,7 +226,8 @@ export function App() {
     return <PasswordChangeScreen user={user} onChanged={setUser} onLogout={logout} />;
   }
 
-  const body = user.role === "user" ? (
+  const operator = isOperatorRole(user.role);
+  const body = !operator ? (
     <>
       <PageHeader title="Stats" sub="Usage for this gateway account" />
       <Card>

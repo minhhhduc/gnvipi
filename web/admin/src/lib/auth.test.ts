@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { authScreenFor, parseAuthSession, passwordChangeError, sessionFailureMode, type AdminUser } from "./auth";
+import {
+  authScreenFor,
+  isOperatorRole,
+  parseAuthSession,
+  passwordChangeError,
+  sessionFailureMode,
+  type AdminUser,
+} from "./auth";
 
 function user(mustChangePassword: boolean): AdminUser {
   return {
@@ -42,6 +49,21 @@ describe("admin session validation", () => {
     expect(parseAuthSession(valid)).toEqual(valid);
     expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "owner" } }).user.role).toBe("owner");
     expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "admin" } }).user.role).toBe("admin");
+  });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"])(
+    "rejects the inherited object member name %s as a role",
+    (role) => {
+      expect(() => parseAuthSession({ ...valid, user: { ...valid.user, role } })).toThrow(
+        "Invalid admin session response",
+      );
+    },
+  );
+
+  it("treats only owner and admin as operators", () => {
+    expect(isOperatorRole("owner")).toBe(true);
+    expect(isOperatorRole("admin")).toBe(true);
+    expect(isOperatorRole("user")).toBe(false);
   });
 
   it.each([
