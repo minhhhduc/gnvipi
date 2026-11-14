@@ -15,6 +15,15 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 )
 
+// internalGatewayUserKey marks an in-process gateway call whose identity was
+// already resolved by the admin console. A Go context value cannot arrive
+// over the network, so this never widens the authentication surface.
+type internalGatewayUserKey struct{}
+
+func withInternalGatewayUser(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, internalGatewayUserKey{}, userID)
+}
+
 // gatewayAuth protects client API routes. Static gateway keys keep their
 // legacy behavior; when a database authState is supplied, an unexpired
 // gateway API token is also accepted and its user is attached to the request
@@ -38,6 +47,18 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !clientAPIPath(path) && path != "/mcp" && path != "/mcp/" {
+			c.Next()
+			return
+		}
+		// The admin console forwards an already-authenticated request through
+		// the gateway in-process. Trust only the context marker created by that
+		// handler; no header or request field can produce it.
+		if userID, ok := c.Request.Context().Value(internalGatewayUserKey{}).(string); ok && userID != "" {
+			c.Request.Header.Del("Authorization")
+			c.Request.Header.Del("x-api-key")
+			if rc := core.RequestContextFrom(c.Request.Context()); rc != nil {
+				rc.UserID = userID
+			}
 			c.Next()
 			return
 		}

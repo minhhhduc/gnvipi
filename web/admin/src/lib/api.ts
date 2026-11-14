@@ -28,7 +28,7 @@ export type ApiRequestInit = Omit<RequestInit, "body"> & {
 
 const SAFE_METHODS: Record<string, true> = { GET: true, HEAD: true, OPTIONS: true };
 
-function cookieValue(name: string): string {
+export function cookieValue(name: string): string {
   if (typeof document === "undefined") return "";
   const prefix = `${name}=`;
   const pair = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));

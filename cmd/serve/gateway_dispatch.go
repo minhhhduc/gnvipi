@@ -18,17 +18,31 @@ import (
 // Catalog publication updates the stable resolver before invoking onChange.
 // A providerRuntime enables key-aware routing for database-authenticated users;
 // anonymous and file-mode requests still use the legacy registry resolver.
-func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string, runtimes ...*providerRuntime) (gin.HandlerFunc, error) {
-	if !enabled {
+func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string) (gin.HandlerFunc, error) {
+	dispatcher, err := newGatewayDispatcher(prefs, enabled, proxyURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if dispatcher == nil {
 		return func(c *gin.Context) { c.Next() }, nil
+	}
+	return dispatcher.Handle, nil
+}
+
+// newGatewayDispatcher builds the shared routing/relay stack. A nil dispatcher
+// means the v2 gateway is disabled. The console playground reuses this same
+// dispatcher through the engine's middleware chain.
+func newGatewayDispatcher(prefs *modelPrefs, enabled bool, proxyURL string, runtime *providerRuntime) (*dispatch.Dispatcher, error) {
+	if !enabled {
+		return nil, nil
 	}
 	registry, err := prefs.modelResolver()
 	if err != nil {
 		return nil, err
 	}
 	var resolver routing.Resolver = registry
-	if len(runtimes) > 0 && runtimes[0] != nil {
-		resolver = routing.NewKeyAwareResolver(runtimes[0].router, registry)
+	if runtime != nil {
+		resolver = routing.NewKeyAwareResolver(runtime.router, registry)
 	}
 	registryAdapters := adapter.NewRegistry()
 	registryAdapters.RegisterInbound(inboundanthropic.New())
@@ -46,5 +60,5 @@ func gatewayV2Middleware(prefs *modelPrefs, enabled bool, proxyURL string, runti
 			previousReload(list)
 		}
 	}
-	return dispatcher.Handle, nil
+	return dispatcher, nil
 }

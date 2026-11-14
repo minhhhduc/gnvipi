@@ -9,6 +9,7 @@ import { LoginScreen, PasswordChangeScreen } from "./components/Login";
 import { Shell } from "./components/Shell";
 import { Card, Empty, PageHeader, ThemeContext, UiContext, type UiApi } from "./components/ui";
 import { StatsView } from "./views/Stats";
+import { PlaygroundView } from "./views/Playground";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
@@ -240,6 +241,7 @@ export function App() {
     effectivePage === "users" && operator ? <UsersView user={user} /> :
     // Models is open to every role: users manage only their own keys there.
     effectivePage === "models" ? <ModelsView user={user} /> :
+    effectivePage === "playground" ? <PlaygroundView user={user} /> :
     effectivePage === "audit" ? <AuditView user={user} /> :
     !operator ? (
       <>
