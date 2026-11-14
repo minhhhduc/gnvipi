@@ -227,11 +227,6 @@ export function ConfigView() {
               value={engine}
               onChange={(e) => chooseSearchEngine((e.target as HTMLSelectElement).value)}
               disabled={searchState === "saving"}
-              onClick={(e) => {
-                const selectedEngine = (e.currentTarget as HTMLSelectElement).value;
-                const next = syncSearchEngine(selectedEngine, searchUrl);
-                if (selectedEngine === engine && next.save) void saveSearch(next);
-              }}
             >
               {ENGINES.map(([value, label]) => <option key={label} value={value}>{label}</option>)}
             </select>
