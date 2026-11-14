@@ -17,6 +17,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// CreateFirstOwnerTx must require pgx.Tx: a *pgxpool.Pool also satisfies
+// Querier, but pg_advisory_xact_lock releases as soon as the statement ends,
+// so concurrent bootstraps could both create an owner. This declaration fails
+// to compile if the parameter type is widened back to an interface.
+var _ func(context.Context, pgx.Tx, CreateOwnerInput, BootstrapConfig) (*User, error) = CreateFirstOwnerTx
+
 // testDB creates a throwaway schema with the identity tables and the
 // last-owner trigger, so DB-backed tests exercise real FKs, CHECKs and
 // trigger/advisory-lock behavior. It skips when no DSN is configured.
