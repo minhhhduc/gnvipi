@@ -1,9 +1,14 @@
 package auth
 
 import (
+	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestDefaultRetentionConfig(t *testing.T) {
@@ -298,4 +303,71 @@ func TestCleanupAuditDB(t *testing.T) {
 	if deleted != 1 {
 		t.Fatalf("deleted audit rows = %d, want 1", deleted)
 	}
+}
+
+// TestRunRetentionSplitRoleDB exercises the production topology, where the
+// retention role is a separate pool (and connection) from the application role:
+// application deletes run on the app pool and audit pruning plus its advisory
+// lock run on the maintenance pool.
+func TestRunRetentionSplitRoleDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cfg := DefaultRetentionConfig()
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+
+	var schema string
+	if err := db.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatalf("current schema: %v", err)
+	}
+	maintenance := newTestPoolWithSchema(t, schema)
+
+	if _, err := maintenance.Exec(ctx, `
+		INSERT INTO audit_log (ts, actor_type, action, target_type, target_id)
+		VALUES ($1, 'system', 'retention.test', 'retention', 'audit-pruned')`,
+		now.Add(-cfg.Audit-time.Hour)); err != nil {
+		t.Fatalf("insert audit: %v", err)
+	}
+	if err := RecordLoginAttempt(ctx, db, LoginAttempt{
+		Username: "retention-split", Now: now.Add(-cfg.LoginAttempts - time.Hour),
+	}, DefaultLockoutConfig()); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+
+	res, err := RunRetention(ctx, db, maintenance, now, cfg)
+	if err != nil {
+		t.Fatalf("run retention with separate maintenance pool: %v", err)
+	}
+	if res.Audit != 1 || res.LoginAttempts != 1 || res.AuditSkipped {
+		t.Fatalf("split-role result = %+v, want audit=1 attempts=1", res)
+	}
+
+	// The advisory lock is transaction-scoped, so a committed pass releases it.
+	again, err := RunRetention(ctx, db, maintenance, now, cfg)
+	if err != nil {
+		t.Fatalf("second split-role pass: %v", err)
+	}
+	if again != (RetentionResult{}) {
+		t.Fatalf("second split-role pass deleted rows: %+v", again)
+	}
+}
+
+// newTestPoolWithSchema opens a second pool over the test schema so a test can
+// act as two different roles/connections.
+func newTestPoolWithSchema(t *testing.T, schema string) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("GNVIPI_TEST_DATABASE_URL")
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, "SET search_path TO "+schema+", public")
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("connect test pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }

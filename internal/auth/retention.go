@@ -92,6 +92,13 @@ func RunRetention(ctx context.Context, app, maintenance DB, now time.Time, cfg R
 	}
 	defer func() { _ = lockTx.Rollback(ctx) }() //nolint:errcheck // rollback after a committed transaction is a no-op
 
+	// The lock transaction is intentionally idle while the application prune
+	// runs on its own transaction; the pool's idle_in_transaction guard would
+	// otherwise kill the lock holder mid-pass. Nothing here waits on a client.
+	if _, err := lockTx.Exec(ctx, `SET LOCAL idle_in_transaction_session_timeout = 0`); err != nil {
+		return res, err
+	}
+
 	var locked bool
 	if err := lockTx.QueryRow(ctx, retentionLockSQL).Scan(&locked); err != nil {
 		return res, err

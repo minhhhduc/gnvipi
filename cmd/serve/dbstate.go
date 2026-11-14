@@ -40,7 +40,8 @@ func loadRetentionConfig(sessions auth.SessionConfig) (auth.RetentionConfig, err
 func loadRetentionConfigFrom(lookup func(string) (string, bool), sessions auth.SessionConfig) (auth.RetentionConfig, error) {
 	cfg := auth.DefaultRetentionConfig()
 	cfg.Sessions = sessions
-	raw := strings.TrimSpace(envValue(lookup, auditRetentionDaysEnv))
+	value, _ := lookup(auditRetentionDaysEnv)
+	raw := strings.TrimSpace(value)
 	if raw == "" {
 		return cfg, nil
 	}
@@ -50,11 +51,6 @@ func loadRetentionConfigFrom(lookup func(string) (string, bool), sessions auth.S
 	}
 	cfg.Audit = time.Duration(days) * 24 * time.Hour
 	return cfg, nil
-}
-
-func envValue(lookup func(string) (string, bool), key string) string {
-	v, _ := lookup(key)
-	return v
 }
 
 func runMigrateCommand(
@@ -89,8 +85,8 @@ type appDB struct {
 	retention   auth.RetentionConfig
 	auth        *authState
 
-	cleanupCancel context.CancelFunc
-	cleanupDone   <-chan struct{}
+	retentionCancel context.CancelFunc
+	retentionDone   <-chan struct{}
 }
 
 // Close releases the pools and stops the retention loop. It is safe on the nil
@@ -99,11 +95,11 @@ func (d *appDB) Close() {
 	if d == nil {
 		return
 	}
-	if d.cleanupCancel != nil {
-		d.cleanupCancel()
+	if d.retentionCancel != nil {
+		d.retentionCancel()
 	}
-	if d.cleanupDone != nil {
-		<-d.cleanupDone
+	if d.retentionDone != nil {
+		<-d.retentionDone
 	}
 	if d.pool != nil {
 		d.pool.Close()
@@ -185,10 +181,10 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	if err := d.runRetention(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("database: auth retention failed: %v", err)
 	}
-	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
-	cleanupDone := make(chan struct{})
-	go runRetentionLoop(cleanupCtx, d, cleanupDone)
-	d.cleanupCancel, d.cleanupDone = cancelCleanup, cleanupDone
+	retentionCtx, cancelRetention := context.WithCancel(ctx)
+	retentionDone := make(chan struct{})
+	go runRetentionLoop(retentionCtx, d, retentionDone)
+	d.retentionCancel, d.retentionDone = cancelRetention, retentionDone
 	log.Printf("database: ready (schema v%d)", latest)
 	return d, nil
 }
