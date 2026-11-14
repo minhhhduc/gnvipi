@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
@@ -46,6 +47,7 @@ const (
 // the LISTEN connection, so it is nil in tests that do not need invalidation.
 type providerRuntimeOptions struct {
 	Keyring      *providerstore.Keyring
+	Refs         providerstore.RefResolver
 	IsProtected  func(model string) bool
 	Ping         func(context.Context) error
 	ListenPool   *pgxpool.Pool
@@ -59,6 +61,7 @@ type providerRuntimeOptions struct {
 // is observed. Snapshot reads never touch the database; /healthz probes it.
 type providerRuntime struct {
 	store  *providerstore.Store
+	router *providerstore.Router
 	source providerstore.RowSource
 	ping   func(context.Context) error
 	logf   func(format string, args ...any)
@@ -92,6 +95,7 @@ func openProviderRuntime(ctx context.Context, source providerstore.RowSource, op
 	}
 	store := providerstore.NewStore(source, providerstore.StoreOptions{
 		Keyring:     opts.Keyring,
+		Refs:        opts.Refs,
 		IsProtected: opts.IsProtected,
 		Audit:       opts.Audit,
 		OnPublish: func(snapshot *providerstore.Snapshot) {
@@ -105,6 +109,7 @@ func openProviderRuntime(ctx context.Context, source providerstore.RowSource, op
 	}
 	runtime := &providerRuntime{
 		store:     store,
+		router:    providerstore.NewRouter(store),
 		source:    source,
 		ping:      opts.Ping,
 		logf:      logf,
@@ -156,11 +161,19 @@ func logSnapshotDiagnostics(logf func(string, ...any), snapshot *providerstore.S
 }
 
 // openConfiguredProviderRuntime builds the snapshot runtime for a process whose
-// admin state is database-backed. File mode returns nil and keeps the legacy
-// file-backed routing.
-func openConfiguredProviderRuntime(ctx context.Context, state *appDB) (*providerRuntime, error) {
+// admin state is database-backed. modelsFile locates the adjacent imported
+// secrets map used to resolve key_ref credentials at request time. File mode
+// returns nil and keeps the legacy file-backed routing.
+func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile string) (*providerRuntime, error) {
 	if state == nil {
 		return nil, nil
+	}
+	// key_ref rows resolve against the same imported secrets map as the v2
+	// import; a missing file is an empty map, so those keys degrade to the
+	// documented credential-unavailable error instead of failing startup.
+	secrets, err := gatewayprovider.LoadSecrets(gatewayprovider.DefaultSecretsPath(modelsFile))
+	if err != nil {
+		return nil, fmt.Errorf("provider key references: %w", err)
 	}
 	keyring, err := providerstore.LoadKeyringFromEnv()
 	if err != nil {
@@ -174,6 +187,7 @@ func openConfiguredProviderRuntime(ctx context.Context, state *appDB) (*provider
 	}
 	runtime, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(state.pool), providerRuntimeOptions{
 		Keyring:     keyring,
+		Refs:        providerstore.MapRefResolver(secrets),
 		IsProtected: protectedModel,
 		Ping:        state.pool.Ping,
 		ListenPool:  state.pool,

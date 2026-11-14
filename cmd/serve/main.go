@@ -227,7 +227,7 @@ func runServer() (err error) {
 	// process, replaced after every committed write. A configured database that
 	// cannot produce a valid first snapshot is a startup error, so the process
 	// never serves an empty or partially validated configuration.
-	snapshotRuntime, err := openConfiguredProviderRuntime(ctx, appState)
+	snapshotRuntime, err := openConfiguredProviderRuntime(ctx, appState, *modelsFile)
 	if err != nil {
 		return err
 	}
@@ -378,7 +378,7 @@ func runServer() (err error) {
 		writeClaudeModelCache(*addr, getModels())
 	}
 
-	gatewayMiddleware, err := gatewayV2Middleware(prefs, *gatewayV2, proxyURL)
+	gatewayMiddleware, err := gatewayV2Middleware(prefs, *gatewayV2, proxyURL, snapshotRuntime)
 	if err != nil {
 		return fmt.Errorf("gateway dispatcher: %w", err)
 	}
@@ -448,7 +448,7 @@ func runServer() (err error) {
 				// Attach identity before early routes or cycle dispatch can finish the request.
 				engine.Use(gatewayRequestContext())
 				// Guard the early catalog routes and cycle dispatch before WithMiddleware.
-				engine.Use(gatewayAuth(*gatewayKey))
+				engine.Use(gatewayAuth(*gatewayKey, adminAuth))
 				// One switch owns the whole admin surface: access middleware, SPA,
 				// legacy endpoints and JSON API. Headless mode registers none of them.
 				if !*disableAdminUI {

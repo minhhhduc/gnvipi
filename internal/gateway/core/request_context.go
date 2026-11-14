@@ -26,6 +26,10 @@ type RequestContext struct {
 	InboundProtocol  ir.Protocol
 	ClientModel      string
 	ResolvedProvider string
+	// UserID and KeyID are additive attribution from database-backed routing.
+	// Empty in file mode; never contain credential material.
+	UserID           string
+	KeyID            string
 	UpstreamModel    string
 	UpstreamProtocol ir.Protocol
 	Start            time.Time
@@ -158,7 +162,8 @@ func (r *RequestContext) Complete(usage ir.Usage, err error) bool {
 	r.completed = true
 	request := &RequestContext{
 		ID: r.ID, InboundProtocol: r.InboundProtocol, ClientModel: r.ClientModel,
-		ResolvedProvider: r.ResolvedProvider, UpstreamModel: r.UpstreamModel,
+		ResolvedProvider: r.ResolvedProvider, UserID: r.UserID, KeyID: r.KeyID,
+		UpstreamModel:    r.UpstreamModel,
 		UpstreamProtocol: r.UpstreamProtocol, Start: r.Start, FirstByte: r.FirstByte,
 		Stream: r.Stream,
 	}
@@ -187,11 +192,13 @@ func (DefaultRecorder) Record(c *Completion) {
 		model = r.UpstreamModel
 	}
 	nvidia.GlobalStats.ObserveMeta(
-		nvidia.EventMeta{RequestID: r.ID, ProviderID: r.ResolvedProvider},
+		nvidia.EventMeta{RequestID: r.ID, UserID: r.UserID, KeyID: r.KeyID, ProviderID: r.ResolvedProvider},
 		model, uint64(max(c.Usage.InputTokens, 0)), uint64(max(c.Usage.OutputTokens, 0)),
 		c.Duration, c.TTFB, r.Stream, c.Err != nil)
 	line, err := json.Marshal(struct {
 		RequestID        string      `json:"request_id"`
+		UserID           string      `json:"user_id,omitempty"`
+		KeyID            string      `json:"key_id,omitempty"`
 		InboundProtocol  ir.Protocol `json:"inbound_protocol"`
 		ClientModel      string      `json:"client_model"`
 		Provider         string      `json:"provider"`
@@ -202,7 +209,7 @@ func (DefaultRecorder) Record(c *Completion) {
 		TTFBMS           int64       `json:"ttfb_ms"`
 		Usage            ir.Usage    `json:"usage"`
 		Error            bool        `json:"error"`
-	}{r.ID, r.InboundProtocol, r.ClientModel, r.ResolvedProvider, r.UpstreamModel,
+	}{r.ID, r.UserID, r.KeyID, r.InboundProtocol, r.ClientModel, r.ResolvedProvider, r.UpstreamModel,
 		r.UpstreamProtocol, r.Stream, c.Duration.Milliseconds(), c.TTFB.Milliseconds(), c.Usage, c.Err != nil})
 	if err != nil {
 		log.Print("gateway access log: JSON encoding failed")

@@ -86,6 +86,22 @@ func TestRequestCompletionRecordsOneTerminalOutcome(t *testing.T) {
 	}
 }
 
+func TestRequestCompletionCarriesAttribution(t *testing.T) {
+	r := &captureRecorder{done: make(chan *Completion, 1)}
+	rc := NewRequestContext("attribution")
+	rc.UserID = "user-1"
+	rc.KeyID = "key-1"
+	rc.ResolvedProvider = "provider"
+	if !rc.BeginRecording(t.Context(), r) {
+		t.Fatal("recorder was rejected")
+	}
+	rc.Complete(ir.Usage{}, nil)
+	c := receiveCompletion(t, r)
+	if c.Request.UserID != "user-1" || c.Request.KeyID != "key-1" {
+		t.Fatalf("attribution = user %q key %q, want user-1/key-1", c.Request.UserID, c.Request.KeyID)
+	}
+}
+
 func TestRequestCancellationRecordsWithoutExplicitCompletion(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	r := &captureRecorder{done: make(chan *Completion, 8)}
