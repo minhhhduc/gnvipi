@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	modelsPagePath        = "/models?pageSize=200&filters=nimType%3Anim_type_preview%2CnimType%3Anim_type_upgrade_available"
+	// No nimType filter: the catalog must include every Playground model, not
+	// just preview/upgrade-available ones. Models without a playground are
+	// dropped later by probe, which returns found=false.
+	modelsPagePath        = "/models?pageSize=200"
 	discoveryConcurrency  = 8
 	discoveryPageMaxBytes = 2 << 20
 )
