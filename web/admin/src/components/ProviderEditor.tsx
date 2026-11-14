@@ -110,6 +110,11 @@ function init(provider: Provider | null) {
   };
 }
 
+/** Derives the provider id from its name; stable enough for the console. */
+export function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
 export function ProviderEditor({
   provider,
   onClose,
@@ -128,6 +133,7 @@ export function ProviderEditor({
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const patch = (next: Partial<typeof f>) => {
@@ -148,7 +154,8 @@ export function ProviderEditor({
     if (extra.error) errs.extraBody = extra.error;
     if (extensions.error) errs.extensions = extensions.error;
     if (endpointPath.error) errs.endpointPath = endpointPath.error;
-    if (!f.id.trim()) errs.id = "Provider ID is required";
+    const providerID = f.id.trim() || (isEdit ? "" : slugify(f.name));
+    if (!providerID) errs.id = "Name is required";
     if (!f.name.trim()) errs.name = "Name is required";
     if (!f.base_url.trim()) errs.base_url = "Base URL is required";
     setErrors(errs);
@@ -197,7 +204,7 @@ export function ProviderEditor({
 
     const payload: Provider = {
       ...(provider || {}),
-      id: f.id.trim(),
+      id: providerID,
       name: f.name.trim(),
       base_url: f.base_url.trim(),
       protocol: f.protocol,
@@ -309,12 +316,7 @@ export function ProviderEditor({
         {formError && <div class="border-b border-bad bg-bad-soft px-[18px] py-2 text-xs text-bad">{formError}</div>}
 
         <div class="flex-1 overflow-auto px-[18px] py-4">
-          <Section title="Identity">
-            <Field label="Provider ID">
-              <input class="input mono" value={f.id} readOnly={isEdit} onInput={(e) => patch({ id: (e.target as HTMLInputElement).value })} />
-              {isEdit && <div class="mt-1 text-[11px] text-dim">Provider IDs are immutable.</div>}
-              {fieldError("id")}
-            </Field>
+          <Section title="Provider">
             <Field label="Name">
               <input class="input" value={f.name} onInput={(e) => patch({ name: (e.target as HTMLInputElement).value })} />
               {fieldError("name")}
@@ -323,25 +325,13 @@ export function ProviderEditor({
               <input class="input mono" value={f.base_url} onInput={(e) => patch({ base_url: (e.target as HTMLInputElement).value })} />
               {fieldError("base_url")}
             </Field>
-            <Field label="Proxy URL">
-              <input class="input mono" value={f.proxy_url} placeholder="(empty uses environment proxy)" onInput={(e) => patch({ proxy_url: (e.target as HTMLInputElement).value })} />
+            <Field label="Protocol">
+              <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
+                {getProtocolOptions(f.protocol, provider?.protocol).map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
             </Field>
-            <div class="grid grid-cols-2 gap-3">
-              <Field label="Protocol">
-                <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
-                  {getProtocolOptions(f.protocol, provider?.protocol).map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="TLS profile">
-                <input class="input" value={f.tls} onInput={(e) => patch({ tls: (e.target as HTMLInputElement).value })} />
-              </Field>
-            </div>
-            <label class="mt-2 flex items-center gap-2 text-xs font-semibold">
-              <Switch checked={f.enabled} onChange={(v) => patch({ enabled: v })} label="Provider enabled" />
-              Enabled
-            </label>
           </Section>
 
           <Section title="API key">
@@ -353,6 +343,11 @@ export function ProviderEditor({
             </span>
           </Section>
 
+          <button class="btn btn-sm" onClick={() => setShowAdvanced(!showAdvanced)}>
+            {showAdvanced ? "Hide advanced settings" : "Advanced settings (models, headers, timeouts)"}
+          </button>
+
+          {showAdvanced && (<>
           <Section title="Model mappings">
             {f.mappings.map((m, i) => (
               <div key={i} class="mb-2 rounded-lg border border-line p-2.5">
@@ -454,6 +449,7 @@ export function ProviderEditor({
               {fieldError("extensions")}
             </Field>
           </Section>
+          </>)}
         </div>
 
         <div class="flex flex-wrap items-center gap-2 border-t border-line bg-panel2 px-[18px] py-3">
