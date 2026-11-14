@@ -56,7 +56,10 @@ account's key.
 | Create shared `none` keys | yes | no | no |
 | Write `key_ref` keys | yes | own keys | no |
 | Create/update/delete providers | yes | yes | no |
-| Models, stats, automode/cycle/search config, Chrome pools | yes | yes | no |
+| Models and stats | yes | yes | yes |
+| Own automode/cycle settings | yes | yes | yes |
+| Global automode/cycle and web search config (file mode) | yes | yes | no |
+| Chrome pools | yes | yes | no |
 | List/create/update/delete users | yes | no | no |
 | Read audit log | yes | no | no |
 | Mint tokens for another user | yes | no | no |
@@ -278,17 +281,23 @@ keyring.
 
 ## Per-user automode and cycle
 
-In this release `automode` and `cycle` are **global** settings. They live in the
-single `settings` row and every account resolves them through its own keys.
-Only owner and admin accounts may read or change them. File-backed mode keeps
-the same single global behaviour.
+With `GNVIPI_DATABASE_URL` set, `automode` and `cycle` are **per account**:
 
-Per-user routing preferences are not implemented yet. Issue #240 proposes a
-`user_routing_prefs` table, per-caller `automode`/`cycle` endpoints, a per-user
-cycle cursor, and owner-only access to another account's settings. Until that
-ships, there is no per-user target, no per-user cycle list and no way for a
-regular user to read or write these settings. Do not provision around a
-per-user table that does not exist.
+- They live in `user_routing_prefs`, one row per user, deleted with the user.
+- `GET`/`PUT /admin/api/config/automode` and `/cycle` act as the signed-in
+  account. An owner may pass `?user_id=<uuid>` to read or edit another
+  account; anyone else naming a foreign id gets the same 404 as a missing one.
+- Resolution order is the account's own setting, then the global default, then
+  a typed "not configured" error. The chosen target must resolve through the
+  account's own provider keys plus shared `none` keys; a target reachable only
+  through another account's key is rejected on write and on resolve.
+- The cycle cursor is per account **and per process**: restarting the gateway
+  resets each account's rotation position.
+- Model lists are validated on write; an unknown alias returns
+  `field_errors.models`. Each write is one transaction and is audited as
+  `routing.automode.update` or `routing.cycle.update` with the model list.
+- File-backed mode (no `GNVIPI_DATABASE_URL`) keeps the single global
+  behaviour, edited by owner and admin accounts.
 
 ## `scripts/run.ps1 -Claude`
 
@@ -329,7 +338,6 @@ around them as if they exist:
 
 - Automatic provider key rotation or failover between credentials on 401, 403
   or quota errors. Model fallback chains exist; credential failover does not.
-- Per-user `automode` and `cycle` (issue #240).
 - Quotas or spend/cost limits per user, key or provider.
 - Credit, RPM or TPM budgets or throttles.
 - Per-token rate limits.
