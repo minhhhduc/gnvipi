@@ -270,7 +270,7 @@ func runServer() (err error) {
 		CaptchaWait:  *captchaWait,
 		HTTPClient:   &http.Client{Timeout: 0, Transport: transport},
 	})
-	chromes := newChromeLifecycle(ctx, exec, func(ctx context.Context) (chromeBrowser, *captcha.Pool, error) {
+	chromes := newChromeLifecycleWithTarget(ctx, exec, poolSize, poolWorkers, func(ctx context.Context) (chromeBrowser, *captcha.Pool, error) {
 		candidates := playgroundCandidates(8)
 		// Prefer a model-independent NVIDIA page when it exposes a usable
 		// CAPTCHA widget; otherwise retain the rotating playground fallback.

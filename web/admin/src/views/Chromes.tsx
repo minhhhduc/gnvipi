@@ -21,6 +21,8 @@ export function ChromesView() {
   const [confirm, setConfirm] = useState<{ kind: "all" } | { kind: "one"; worker: ChromeInfo } | null>(null);
   const [busy, setBusy] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
+  const [poolSize, setPoolSize] = useState("");
+  const [poolWorkers, setPoolWorkers] = useState("");
   const reqId = useRef(0);
 
   const load = async (signal?: AbortSignal) => {
@@ -104,6 +106,53 @@ export function ChromesView() {
               Kill All…
             </button>
           </div>
+        </div>
+      </Card>
+
+      <Card class="mb-3">
+        <CardHead title="Pool target" sub="How many captcha tokens to keep ready, and how many extractors to run" />
+        <div class="flex flex-wrap items-end gap-3 px-[22px] py-4">
+          <label class="block text-xs font-semibold">
+            Ready tokens
+            <input
+              class="input mt-1 w-24"
+              type="number"
+              min="1"
+              max="64"
+              value={poolSize}
+              placeholder={status?.pool_size !== undefined ? String(status.pool_size) : "3"}
+              onInput={(e) => setPoolSize((e.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+          <label class="block text-xs font-semibold">
+            Workers
+            <input
+              class="input mt-1 w-24"
+              type="number"
+              min="1"
+              max="16"
+              value={poolWorkers}
+              placeholder={status?.pool_workers !== undefined ? String(status.pool_workers) : "1"}
+              onInput={(e) => setPoolWorkers((e.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+          <button
+            class="btn"
+            disabled={busy || (!poolSize && !poolWorkers)}
+            onClick={() =>
+              void post(
+                {
+                  mode: "config",
+                  ...(poolSize ? { pool_size: Number(poolSize) } : {}),
+                  ...(poolWorkers ? { pool_workers: Number(poolWorkers) } : {}),
+                },
+                "Pool target saved",
+              )
+            }
+          >
+            Save target
+          </button>
+          <span class="text-[11px] text-dim">Applies the next time the pool starts.</span>
         </div>
       </Card>
 
