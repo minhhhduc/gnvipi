@@ -106,16 +106,16 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 		t.Fatalf("insert provider: %v", err)
 	}
 	for _, key := range []struct {
-		id, owner, scheme, env string
+		id, owner, name, scheme, env string
 	}{
-		{ownerKeyID, owner.ID, "none", ""},
-		{memberKeyID, member.ID, "none", ""},
-		{envKeyID, owner.ID, "bearer", "GNVIPI_KEY_SERVE_202_DB_UNSET"},
+		{ownerKeyID, owner.ID, "issue-202-owner", "none", ""},
+		{memberKeyID, member.ID, "issue-202-member", "none", ""},
+		{envKeyID, owner.ID, "issue-202-env", "bearer", "GNVIPI_KEY_SERVE_202_DB_UNSET"},
 	} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO provider_keys(id, provider_id, owner_id, name, auth_scheme, key_env)
-			 VALUES($1, 'db202', $2, 'issue-202', $3, NULLIF($4, ''))`,
-			key.id, key.owner, key.scheme, key.env); err != nil {
+			 VALUES($1, 'db202', $2, $3, $4, NULLIF($5, ''))`,
+			key.id, key.owner, key.name, key.scheme, key.env); err != nil {
 			t.Fatalf("insert key %s: %v", key.id, err)
 		}
 	}
