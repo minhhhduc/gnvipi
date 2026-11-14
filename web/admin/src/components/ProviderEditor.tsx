@@ -2,7 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useMemo, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { nsToSeconds, secondsToNs } from "../lib/format";
-import { buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
+import { STANDARD_PROTOCOLS, buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
 import type { Provider, TestResult } from "../lib/types";
 import { Dialog, IconPlus, IconX, Switch, useUi } from "./ui";
 
@@ -135,6 +135,10 @@ export function ProviderEditor({
   const [test, setTest] = useState<TestResult | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [protocolOther, setProtocolOther] = useState(() => {
+    const p = provider?.protocol;
+    return !!p && !(STANDARD_PROTOCOLS as readonly string[]).includes(p);
+  });
   const [formError, setFormError] = useState<string | null>(null);
 
   const patch = (next: Partial<typeof f>) => {
@@ -159,6 +163,7 @@ export function ProviderEditor({
     if (!providerID) errs.id = "Name is required";
     if (!f.name.trim()) errs.name = "Name is required";
     if (!f.base_url.trim()) errs.base_url = "Base URL is required";
+    if (!f.protocol.trim()) errs.protocol = "Protocol is required";
     setErrors(errs);
     if (Object.keys(errs).length) return null;
 
@@ -331,12 +336,30 @@ export function ProviderEditor({
               {fieldError("base_url")}
             </Field>
             <Field label="Protocol">
-              <select class="input" value={f.protocol} onChange={(e) => patch({ protocol: (e.target as HTMLSelectElement).value })}>
-                {getProtocolOptions(f.protocol, provider?.protocol).map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
+              <select
+                class="input"
+                value={protocolOther ? "__other__" : f.protocol}
+                onChange={(e) => {
+                  const value = (e.target as HTMLSelectElement).value;
+                  setProtocolOther(value === "__other__");
+                  patch({ protocol: value === "__other__" ? "" : value });
+                }}
+              >
+                {getProtocolOptions(f.protocol, provider?.protocol)
+                  .filter((p) => (STANDARD_PROTOCOLS as readonly string[]).includes(p))
+                  .map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                <option value="__other__">Other…</option>
               </select>
             </Field>
+            {protocolOther && (
+              <Field label="Custom protocol">
+                <input class="input mono" value={f.protocol} placeholder="e.g. gemini"
+                  onInput={(e) => patch({ protocol: (e.target as HTMLInputElement).value })} />
+                {fieldError("protocol")}
+              </Field>
+            )}
           </Section>
 
           <Section title="API key">
