@@ -36,6 +36,26 @@ func TestModelPrefsLoadKeepsEmbeddedModelCatalog(t *testing.T) {
 	}
 }
 
+// A rescan records models that vanished upstream in catalog_excluded so the
+// embedded list cannot resurrect them on the next restart.
+func TestModelPrefsLoadDropsRescanExcludedModels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	body := `{"groups":[{"publisher":"keep","models":[{"model":"keep/live","slug":"live","namespace":"qc69jvmznzxy","function_id":"00000000-0000-0000-0000-000000000001"}]}],"catalog_excluded":["nvidia/nemotron-3.5-lightning-30b-a3b"],"providers":[]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var prefs modelPrefs
+	if err := prefs.load(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := models.Lookup("nvidia/nemotron-3.5-lightning-30b-a3b"); err == nil {
+		t.Fatal("excluded embedded model came back after loading prefs")
+	}
+	if _, err := models.Lookup("keep/live"); err != nil {
+		t.Fatalf("saved catalog model missing: %v", err)
+	}
+}
+
 func TestAutoModelPersistsWithModelPrefs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	p := &modelPrefs{path: path}

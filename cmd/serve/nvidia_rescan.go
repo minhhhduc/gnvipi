@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,11 +51,14 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 		}
 		next[id] = info
 	}
+	var removedIDs []string
 	for id := range current {
 		if _, exists := upstream[id]; !exists {
 			result.Removed++
+			removedIDs = append(removedIDs, id)
 		}
 	}
+	sort.Strings(removedIDs)
 	if result.Added == 0 && result.Updated == 0 && result.Removed == 0 {
 		return result, nil
 	}
@@ -78,6 +82,7 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 		file.Groups = fileGroups
 		file.MasksID = retainKnown(file.MasksID, upstream)
 		file.DeletedID = retainKnown(file.DeletedID, upstream)
+		file.CatalogExcluded = removedIDs
 		return nil
 	}, false)
 	p.changeMu.Unlock()
