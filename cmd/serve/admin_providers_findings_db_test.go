@@ -179,9 +179,12 @@ func TestDBAdminProviders_UserViewOmitsForeignKeys(t *testing.T) {
 	}
 	userID := createContractUser(t, h, "issue204-viewer", auth.RoleUser)
 	clearMustChangePassword(t, h, userID)
-	userToken, _ := createContractAdminToken(t, h, userID, bearer(h.token))
+	// A user-role account holds gateway tokens, never admin tokens, so it
+	// reaches the admin API through a browser session.
+	session, _ := h.login(t, "issue204-viewer", dbUserPassword)
+	userHeaders := map[string]string{"Cookie": auth.SessionCookieName + "=" + session}
 
-	res = makeRequest(t, h.engine, http.MethodGet, providersAPIPath(providerID), nil, bearer(userToken))
+	res = makeRequest(t, h.engine, http.MethodGet, providersAPIPath(providerID), nil, userHeaders)
 	if res.Code != http.StatusOK {
 		t.Fatalf("user get provider = %d (body %s)", res.Code, res.Body.String())
 	}
