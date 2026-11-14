@@ -135,30 +135,6 @@ disabled. For NVIDIA generation, enable Chrome captcha from Admin
 (`/admin?page=chromes`), then check `pool.ready` in `/healthz` and worker state on
 `/admin?page=chromes`.
 
-### Configuration snapshot
-
-With `GNVIPI_DATABASE_URL` set, the gateway loads providers, keys and aliases once
-at startup and serves every request from that in-memory snapshot; a database that
-cannot produce a valid first snapshot aborts startup instead of serving an empty
-configuration. Later writes are picked up through `LISTEN gnvipi_config` plus a
-30-second version poll, so a missed notification is repaired within one interval.
-
-When the database becomes unreachable the process keeps serving the last snapshot
-that fully validated and reports it:
-
-| Field | Meaning |
-|---|---|
-| `db_ok` | The database answered during this probe. |
-| `degraded` | Serving from the last known good snapshot: database down or the last reload failed. |
-| `status` | `ok` or `degraded`. `ok` in the body is `false` when degraded, but the HTTP status stays 200 because requests are still served. |
-| `snapshot_version` | Version of the snapshot currently in service. |
-| `config_version` | Last `config_state.version` observed, ahead of the snapshot while a reload is pending or failing. |
-| `snapshot_age` | Seconds since that snapshot was published. |
-| `detail` | Error behind a degraded state, when known. |
-
-Without `GNVIPI_DATABASE_URL` these fields are absent and `/healthz` keeps its
-file-mode shape.
-
 | Symptom | What to check |
 |---|---|
 | Port already in use | Choose another `-Port` / `-addr` and update client URLs. |
@@ -169,3 +145,30 @@ file-mode shape.
 | `cycle` has no available models / 503 | Select at least one enabled model on the Config page (`/admin?page=config`). |
 | `automode target is hidden` / 404 | Re-enable the target model or choose a different enabled model. |
 | Admin changes fail to save | Check the `-models-file` parent directory and write permissions; container deployments require a writable mount. |
+
+### Configuration snapshot
+
+With `GNVIPI_DATABASE_URL` set, the gateway loads providers, keys and aliases
+once at startup into one immutable in-memory snapshot and uses it for
+configuration loading and the `/healthz` state described below; request routing
+from that snapshot arrives with #202. A database that cannot produce a valid
+first snapshot aborts startup instead of serving an empty configuration. Later
+writes are picked up through `LISTEN gnvipi_config` plus a 30-second version
+poll, so a missed notification is repaired within one interval.
+
+When the database becomes unreachable the process keeps the last snapshot that
+fully validated and reports it:
+
+| Field | Meaning |
+|---|---|
+| `db_ok` | The database answered during this probe (one shared, briefly cached probe per burst of checks). |
+| `watcher_ok` | The invalidation watcher is connected and refreshing; `false` means writes are not being picked up even if `db_ok` is `true`. |
+| `degraded` | Serving from the last known good snapshot: database down, watcher not refreshing, or the last reload failed. |
+| `status` | `ok` or `degraded`. `ok` in the body is `false` when degraded, but the HTTP status stays 200 because requests are still served. |
+| `snapshot_version` | Version of the snapshot currently in service. |
+| `config_version` | Last `config_state.version` observed, ahead of the snapshot while a reload is pending or failing. It does not regress during an outage. |
+| `snapshot_age` | Seconds since that snapshot was published. |
+| `detail` | Fixed category (`database unreachable`, `reload failed`, `watcher not refreshing`); driver error text is logged server-side, never returned. |
+
+Without `GNVIPI_DATABASE_URL` these fields are absent and `/healthz` keeps its
+file-mode shape.
