@@ -11,6 +11,10 @@ const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   models: ["owner", "admin"],
   config: ["owner", "admin"],
   chromes: ["owner", "admin"],
+  // Every role holds gateway tokens, so every role can reach its own list.
+  tokens: ["owner", "admin", "user"],
+  // Account administration is owner-only, including read access.
+  users: ["owner"],
 };
 
 export function pageAllowed(page: Page, role: AdminRole): boolean {
@@ -20,7 +24,12 @@ export function pageAllowed(page: Page, role: AdminRole): boolean {
 export function pageFromUrl(search: string, role?: AdminRole): Page {
   const value = rawPageFromUrl(search);
   const page: Page =
-    value === "stats" || value === "models" || value === "config" || value === "chromes"
+    value === "stats" ||
+    value === "models" ||
+    value === "config" ||
+    value === "chromes" ||
+    value === "tokens" ||
+    value === "users"
       ? value
       : "stats";
   return role && !pageAllowed(page, role) ? "stats" : page;
