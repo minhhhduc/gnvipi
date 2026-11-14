@@ -156,6 +156,75 @@ func TestLoadMigrationURLFromPolicy(t *testing.T) {
 	}
 }
 
+func TestLoadMaintenanceURLFromPolicy(t *testing.T) {
+	const (
+		runtimeDSN     = "postgres://runtime@localhost:5432/runtime?sslmode=disable"
+		maintenanceDSN = "postgres://retention@localhost:5432/runtime?sslmode=disable"
+	)
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    string
+		wantErr string
+	}{
+		{
+			name: "unset disables audit pruning",
+			env:  map[string]string{"GNVIPI_DATABASE_URL": runtimeDSN},
+			want: "",
+		},
+		{
+			name: "explicit maintenance role",
+			env: map[string]string{
+				"GNVIPI_DATABASE_URL":             runtimeDSN,
+				"GNVIPI_MAINTENANCE_DATABASE_URL": maintenanceDSN,
+			},
+			want: maintenanceDSN,
+		},
+		{
+			// The application role is denied DELETE on audit_log, so silently
+			// reusing its DSN would turn a misconfiguration into a nightly
+			// permission error.
+			name: "never falls back to the runtime role",
+			env: map[string]string{
+				"GNVIPI_DATABASE_URL":             runtimeDSN,
+				"GNVIPI_MAINTENANCE_DATABASE_URL": " ",
+			},
+			want: "",
+		},
+		{
+			name: "remote host without verify-full refused",
+			env: map[string]string{
+				"GNVIPI_MAINTENANCE_DATABASE_URL": "postgres://retention@db.example.com:5432/gnvipi?sslmode=require",
+			},
+			wantErr: "GNVIPI_MAINTENANCE_DATABASE_URL",
+		},
+		{
+			name: "malformed DSN refused",
+			env: map[string]string{
+				"GNVIPI_MAINTENANCE_DATABASE_URL": "mysql://retention@localhost/x",
+			},
+			wantErr: "GNVIPI_MAINTENANCE_DATABASE_URL",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := LoadMaintenanceURLFrom(mapLookup(tc.env))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadMaintenanceURLFrom() error = %v, want %q", err, tc.wantErr)
+				}
+				if got != "" {
+					t.Fatalf("LoadMaintenanceURLFrom() returned %q with an error", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("LoadMaintenanceURLFrom() = %q, %v; want %q, nil", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfigFromOverrides(t *testing.T) {
 	env := map[string]string{
 		"GNVIPI_DATABASE_URL":       "postgres://u@localhost:5432/x",

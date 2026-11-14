@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -662,6 +663,64 @@ func TestLoginAndLockoutDB(t *testing.T) {
 	}
 	if _, _, err := Login(ctx, db, "login-user", password, "192.0.2.20", now.Add(time.Hour), cfg); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("disabled login: %v", err)
+	}
+}
+
+// TestUnknownUserTimingDB pins the constant-work contract: a login for an
+// unknown account must burn a real Argon2id verification, so response time
+// cannot disclose whether an account exists. The threshold is deliberately
+// loose (fixed with the real parameter set, so a skipped verification is orders
+// of magnitude faster) to stay stable on shared CI machines.
+func TestUnknownUserTimingDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	const password = "correct horse battery staple"
+	params := DefaultParams()
+	cfg := LoginConfig{Params: params}
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+
+	hash, err := HashPassword(password, params, nil)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := CreateUser(ctx, db, CreateUserInput{
+		Username: "timing-user", Role: RoleUser, PasswordHash: hash,
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	median := func(durations []time.Duration) time.Duration {
+		t.Helper()
+		for i := 1; i < len(durations); i++ {
+			for j := i; j > 0 && durations[j] < durations[j-1]; j-- {
+				durations[j], durations[j-1] = durations[j-1], durations[j]
+			}
+		}
+		return durations[len(durations)/2]
+	}
+
+	const samples = 5
+	unknown := make([]time.Duration, 0, samples)
+	for i := range samples {
+		start := time.Now()
+		if _, _, err := Login(ctx, db, fmt.Sprintf("ghost-%d", i), password, "", now, cfg); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("unknown-user login %d: %v", i, err)
+		}
+		unknown = append(unknown, time.Since(start))
+	}
+	wrong := make([]time.Duration, 0, samples)
+	for range samples {
+		start := time.Now()
+		if _, _, err := Login(ctx, db, "timing-user", "not-the-password", "", now, cfg); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("wrong-password login: %v", err)
+		}
+		wrong = append(wrong, time.Since(start))
+	}
+
+	unknownMedian, wrongMedian := median(unknown), median(wrong)
+	if unknownMedian*3 < wrongMedian {
+		t.Fatalf("unknown-user login median %v is far faster than wrong-password median %v: timing leaks account existence",
+			unknownMedian, wrongMedian)
 	}
 }
 
