@@ -239,7 +239,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 			w.report(reloadErr)
 		}
 		listenErr := w.listen(ctx, conn, poll)
-		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup/best-effort parse
+		// Close on a detached context in its own goroutine so it never
+		// blocks shutdown and cannot race WaitForNotification's read of
+		// the same connection state.
+		go func() { _ = conn.Close(context.Background()) }() //nolint:errcheck // best-effort cleanup
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
