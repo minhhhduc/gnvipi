@@ -9,29 +9,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-interface Pending {
-  signals: AbortSignal[];
-  resolve: () => void;
-}
-
-/** A run() that keeps its first request in flight until the test settles it. */
-function slowFirstRequest(): Pending {
-  const signals: AbortSignal[] = [];
-  let release: () => void = () => {};
-  const first = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const poller = createPoller(
-    (signal) => {
-      signals.push(signal);
-      return signals.length === 1 ? first : Promise.resolve();
-    },
-    { intervalMs: 2_000, timeoutMs: 15_000 },
-  );
-  poller.start();
-  return { signals, resolve: release };
-}
-
 describe("stats polling", () => {
   it("never aborts a request that outlives the poll interval", async () => {
     const signals: AbortSignal[] = [];
@@ -82,13 +59,26 @@ describe("stats polling", () => {
   });
 
   it("keeps one request in flight so refreshes coalesce", async () => {
-    const { signals, resolve } = slowFirstRequest();
-    expect(signals).toHaveLength(1);
+    const signals: AbortSignal[] = [];
+    let release: () => void = () => {};
+    const first = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return signals.length === 1 ? first : Promise.resolve();
+    });
+    const poller = createPoller(run, { intervalMs: 2_000, timeoutMs: 15_000 });
 
+    poller.start();
+    expect(poller.refresh()).toBe(false);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(signals).toHaveLength(1);
-    resolve();
-    await vi.advanceTimersByTimeAsync(2_000);
+    expect(poller.refresh()).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
     expect(signals).toHaveLength(2);
   });
 
