@@ -41,13 +41,8 @@ func TestPlaygroundAdminContractDB(t *testing.T) {
 		t.Fatalf("invalid CSRF = %d %s, want 403 csrf_failed", res.Code, res.Body.String())
 	}
 
-	member, err := auth.CreateUser(t.Context(), h.pool, auth.CreateUserInput{
-		Username: "playground-member", Email: "playground-member@example.test", DisplayName: "Playground Member",
-		Role: auth.RoleUser, PasswordHash: h.owner.PasswordHash,
-	})
-	if err != nil {
-		t.Fatalf("create member: %v", err)
-	}
+	memberID := createContractUser(t, h, "playground-member", auth.RoleUser)
+	clearMustChangePassword(t, h, memberID)
 	session, csrf := h.login(t, "playground-member", dbUserPassword)
 	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/playground/models?user_id="+h.owner.ID, nil, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
@@ -58,7 +53,7 @@ func TestPlaygroundAdminContractDB(t *testing.T) {
 		t.Fatalf("foreign user_id chat = %d %s, want 404", res.Code, res.Body.String())
 	}
 	// A non-owner may still name itself.
-	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/playground/models?user_id="+member.ID, nil, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/playground/models?user_id="+memberID, nil, cookieAuth(session, csrf))
 	if res.Code == http.StatusNotFound {
 		t.Fatal("a user was treated as foreign to its own id")
 	}
