@@ -5,24 +5,20 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
-	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
 const (
 	keyNameMaxLength = 100
-	keyProbeTimeout  = 10 * time.Second
 )
 
 func registerAdminKeyRoutes(engine *gin.Engine, state *authState) {
@@ -49,7 +45,7 @@ const (
 	keyReachFull
 )
 
-func keyReachFor(identity *adminIdentity, key providerstore.KeyRow) keyReach {
+func keyReachFor(identity *adminIdentity, key *providerstore.KeyRow) keyReach {
 	if identity == nil {
 		return keyReachNone
 	}
@@ -84,7 +80,7 @@ var errInvalidOwnerID = errors.New("owner_id must be a user id or null")
 
 // ownerScope distinguishes an absent owner_id from an explicit null (a shared
 // key) and from a named user.
-func (r keyWriteRequest) ownerScope() (present, shared bool, id string, err error) {
+func (r *keyWriteRequest) ownerScope() (present, shared bool, id string, err error) {
 	raw := strings.TrimSpace(string(r.OwnerID))
 	if raw == "" {
 		return false, false, "", nil
@@ -98,23 +94,40 @@ func (r keyWriteRequest) ownerScope() (present, shared bool, id string, err erro
 	return true, false, id, nil
 }
 
-func (r keyWriteRequest) secretValue() []byte {
+func (r *keyWriteRequest) secretValue() []byte {
 	if r.Secret == nil || *r.Secret == "" {
 		return nil
 	}
 	return []byte(*r.Secret)
 }
 
-func (r keyWriteRequest) carriesCredential() bool {
+func (r *keyWriteRequest) carriesCredential() bool {
 	return len(r.secretValue()) > 0 ||
 		(r.KeyEnv != nil && *r.KeyEnv != "") ||
-		(r.KeyRef != nil && *r.KeyRef != "") ||
-		(r.AuthHeaderName != nil && *r.AuthHeaderName != "")
+		(r.KeyRef != nil && *r.KeyRef != "")
+}
+
+// noneSchemeRejectsCredential keeps a caller from handing over a secret that a
+// "none" key would silently drop.
+func noneSchemeRejectsCredential(scheme string, r *keyWriteRequest) bool {
+	if scheme != providerstore.SchemeNone {
+		return false
+	}
+	return r.carriesCredential() || (r.AuthHeaderName != nil && strings.TrimSpace(*r.AuthHeaderName) != "")
+}
+
+// patchScheme is the scheme the row will carry after the patch: an explicit
+// auth_scheme wins, otherwise the stored one applies.
+func patchScheme(current string, patch providerstore.KeyPatch) string {
+	if patch.AuthScheme != nil {
+		return strings.TrimSpace(*patch.AuthScheme)
+	}
+	return current
 }
 
 // keyPatch builds the providerstore patch. AllowKeyRef is only ever set for
 // owner and admin callers, which is what keeps key_ref out of user writes.
-func (r keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPatch {
+func (r *keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPatch {
 	return providerstore.KeyPatch{
 		Enabled:        r.Enabled,
 		AuthScheme:     r.AuthScheme,
@@ -129,7 +142,7 @@ func (r keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPatc
 
 // adminDisableOnly reports whether the body is exactly the one mutation an
 // admin may apply to someone else's key.
-func (r keyWriteRequest) adminDisableOnly() bool {
+func (r *keyWriteRequest) adminDisableOnly() bool {
 	if r.Enabled == nil || *r.Enabled {
 		return false
 	}
@@ -189,7 +202,7 @@ func decodeKeyRequest(c *gin.Context, dst any) bool {
 
 // keyJSON is the only key representation an API returns: metadata plus secret
 // presence, never ciphertext or plaintext.
-func keyJSON(record providerstore.KeyRecord) gin.H {
+func keyJSON(record *providerstore.KeyRecord) gin.H {
 	var ownerID any
 	if record.OwnerID != "" {
 		ownerID = record.OwnerID
@@ -215,13 +228,13 @@ func keyJSON(record providerstore.KeyRecord) gin.H {
 
 func keyListJSON(records []providerstore.KeyRecord) gin.H {
 	keys := make([]gin.H, 0, len(records))
-	for _, record := range records {
-		keys = append(keys, keyJSON(record))
+	for i := range records {
+		keys = append(keys, keyJSON(&records[i]))
 	}
 	return gin.H{"keys": keys}
 }
 
-func writeKeyAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action string, key providerstore.KeyRow, ip string, details map[string]any) error {
+func writeKeyAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action string, key *providerstore.KeyRow, ip string, details map[string]any) error {
 	entry := adminAuditActor(identity)
 	entry.Action, entry.TargetType, entry.TargetID = action, "provider_key", key.ID
 	entry.UserID, entry.KeyID, entry.ProviderID = key.OwnerID, key.ID, key.ProviderID
@@ -245,7 +258,7 @@ func loadKey(c *gin.Context, q providerstore.Querier, identity *adminIdentity, f
 		adminAPIError(c, http.StatusInternalServerError, "internal_error", "read provider key failed")
 		return providerstore.KeyRecord{}, keyReachNone, false
 	}
-	reach := keyReachFor(identity, record.KeyRow)
+	reach := keyReachFor(identity, &record.KeyRow)
 	if reach == keyReachNone {
 		adminNotFoundResponse(c)
 		return providerstore.KeyRecord{}, keyReachNone, false
@@ -272,9 +285,9 @@ func handleAdminKeyList(state *authState) gin.HandlerFunc {
 			return
 		}
 		visible := make([]providerstore.KeyRecord, 0, len(records))
-		for _, record := range records {
-			if keyReachFor(identity, record.KeyRow) != keyReachNone {
-				visible = append(visible, record)
+		for i := range records {
+			if keyReachFor(identity, &records[i].KeyRow) != keyReachNone {
+				visible = append(visible, records[i])
 			}
 		}
 		c.JSON(http.StatusOK, keyListJSON(visible))
@@ -287,7 +300,7 @@ func handleAdminKeyGet(state *authState) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		c.JSON(http.StatusOK, keyJSON(record))
+		c.JSON(http.StatusOK, keyJSON(&record))
 	}
 }
 
@@ -316,7 +329,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			adminKeyFieldError(c, http.StatusBadRequest, "name", "name must be 1-100 characters")
 			return
 		}
-		ownerID, ok := createKeyOwner(c, identity, body)
+		ownerID, ok := createKeyOwner(c, identity, &body)
 		if !ok {
 			return
 		}
@@ -324,10 +337,14 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 		switch {
 		case body.AuthScheme != nil:
 			scheme = strings.TrimSpace(*body.AuthScheme)
+		case body.AuthHeaderName != nil && strings.TrimSpace(*body.AuthHeaderName) != "":
+			adminKeyFieldError(c, http.StatusBadRequest, "auth_scheme", "auth_scheme is required with auth_header_name")
+			return
 		case body.carriesCredential():
+			// A credential without a scheme is the common bearer case.
 			scheme = providerstore.SchemeBearer
 		}
-		if scheme == providerstore.SchemeNone && body.carriesCredential() {
+		if noneSchemeRejectsCredential(scheme, &body) {
 			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
 			return
 		}
@@ -360,7 +377,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "begin key transaction failed")
 			return
 		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
+		defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort rollback after an aborted write
 		record, err := providerstore.InsertProviderKey(ctx, tx, row)
 		if err != nil {
 			adminKeyStoreError(c, err)
@@ -374,7 +391,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			"has_key_env": record.KeyEnv != "",
 			"has_key_ref": record.KeyRef != "",
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.create", record.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.create", &record.KeyRow, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -382,13 +399,13 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "commit key transaction failed")
 			return
 		}
-		c.JSON(http.StatusCreated, keyJSON(record))
+		c.JSON(http.StatusCreated, keyJSON(&record))
 	}
 }
 
 // createKeyOwner resolves owner_id without widening a user's reach: a user may
 // only create keys for themselves, and only the owner creates shared keys.
-func createKeyOwner(c *gin.Context, identity *adminIdentity, body keyWriteRequest) (string, bool) {
+func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteRequest) (string, bool) {
 	present, shared, id, err := body.ownerScope()
 	if err != nil {
 		adminKeyFieldError(c, http.StatusBadRequest, "owner_id", err.Error())
@@ -428,7 +445,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "begin key transaction failed")
 			return
 		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
+		defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort rollback after an aborted write
 		record, reach, ok := loadKey(c, tx, identity, true)
 		if !ok {
 			return
@@ -437,7 +454,12 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusForbidden, "forbidden", "this key belongs to another user")
 			return
 		}
-		next, err := providerstore.ApplyKeyPatch(record.KeyRow, body.keyPatch(identity), state.keyring)
+		patch := body.keyPatch(identity)
+		if noneSchemeRejectsCredential(patchScheme(record.AuthScheme, patch), &body) {
+			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
+			return
+		}
+		next, err := providerstore.ApplyKeyPatch(record.KeyRow, patch, state.keyring)
 		if err != nil {
 			adminKeyCredentialError(c, err)
 			return
@@ -463,7 +485,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			"has_key_env": updated.KeyEnv != "",
 			"has_key_ref": updated.KeyRef != "",
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.update", updated.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.update", &updated.KeyRow, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -471,7 +493,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "commit key transaction failed")
 			return
 		}
-		c.JSON(http.StatusOK, keyJSON(updated))
+		c.JSON(http.StatusOK, keyJSON(&updated))
 	}
 }
 
@@ -484,7 +506,7 @@ func handleAdminKeyDelete(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "begin key transaction failed")
 			return
 		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
+		defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort rollback after an aborted write
 		record, reach, ok := loadKey(c, tx, identity, true)
 		if !ok {
 			return
@@ -497,7 +519,7 @@ func handleAdminKeyDelete(state *authState) gin.HandlerFunc {
 			"name":        record.Name,
 			"auth_scheme": record.AuthScheme,
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.delete", record.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeKeyAudit(ctx, tx, identity, "key.delete", &record.KeyRow, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -550,75 +572,35 @@ func handleAdminKeyTest(state *authState) gin.HandlerFunc {
 			adminKeyFieldError(c, http.StatusUnprocessableEntity, "provider", "provider configuration is invalid")
 			return
 		}
-		c.JSON(http.StatusOK, probeKeyCredential(ctx, definition, record.KeyRow, credential))
+		c.JSON(http.StatusOK, probeKeyCredential(ctx, &definition, &record.KeyRow, credential))
 	}
 }
 
-// probeKeyCredential sends the resolved credential upstream. Bearer and header
-// keys reuse the provider connection tester; basic auth needs its own request
-// because the tester expresses credentials only as provider-level bearer or
-// api-key headers.
-func probeKeyCredential(ctx context.Context, definition gatewayprovider.Provider, key providerstore.KeyRow, credential providerstore.ResolvedCredential) ConnectionTestResult {
+// probeKeyCredential sends the resolved credential upstream. Every scheme goes
+// through the provider connection tester so URL policy, proxying, timeouts and
+// redaction stay identical to the provider-level test; basic auth travels as
+// an Authorization header because the tester only speaks bearer and api-key.
+func probeKeyCredential(ctx context.Context, definition *gatewayprovider.Provider, key *providerstore.KeyRow, credential providerstore.ResolvedCredential) ConnectionTestResult {
 	switch key.AuthScheme {
 	case providerstore.SchemeBearer:
 		definition.Auth = gatewayprovider.Auth{Scheme: gatewayprovider.AuthBearer, Key: credential.Raw}
-		return testProviderConnection(ctx, &definition)
 	case providerstore.SchemeHeader:
 		definition.Auth = gatewayprovider.Auth{
 			Scheme:     gatewayprovider.AuthAPIKey,
 			Key:        credential.Raw,
 			HeaderName: key.AuthHeaderName,
 		}
-		return testProviderConnection(ctx, &definition)
 	case providerstore.SchemeBasic:
-		return probeBasicCredential(ctx, definition.BaseURL, credential.Basic)
+		token := base64.StdEncoding.EncodeToString([]byte(credential.Basic.Username + ":" + credential.Basic.Password))
+		definition.Auth = gatewayprovider.Auth{
+			Scheme:     gatewayprovider.AuthAPIKey,
+			Key:        "Basic " + token,
+			HeaderName: "Authorization",
+		}
 	default:
 		return ConnectionTestResult{OK: false, Status: "error", Message: "unsupported auth scheme"}
 	}
-}
-
-func probeBasicCredential(ctx context.Context, baseURL string, basic providerstore.BasicSecret) ConnectionTestResult {
-	token := base64.StdEncoding.EncodeToString([]byte(basic.Username + ":" + basic.Password))
-	base := strings.TrimRight(baseURL, "/")
-	probeURL := base + "/models"
-	if !strings.HasSuffix(base, "/v1") {
-		probeURL = base + "/v1/models"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, http.NoBody)
-	if err != nil {
-		return ConnectionTestResult{OK: false, Status: "error", Error: "build probe request failed"}
-	}
-	req.Header.Set("Authorization", "Basic "+token)
-	client := &http.Client{Timeout: keyProbeTimeout}
-	start := time.Now()
-	resp, err := client.Do(req)
-	latency := time.Since(start).Milliseconds()
-	if err != nil {
-		return ConnectionTestResult{
-			OK:        false,
-			Status:    "connect_failure",
-			LatencyMs: latency,
-			Error:     redact.Default.TextWithSecrets(err.Error(), basic.Password, token),
-		}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	result := ConnectionTestResult{StatusCode: resp.StatusCode, LatencyMs: latency}
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		result.OK, result.Status, result.Message = true, "success", "Connection successful"
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		result.Status, result.Message = "auth_failure", fmt.Sprintf("upstream rejected the credential (HTTP %d)", resp.StatusCode)
-	default:
-		result.Status, result.Message = "error", fmt.Sprintf("upstream returned HTTP %d", resp.StatusCode)
-	}
-	if snippet := strings.TrimSpace(string(body)); snippet != "" {
-		if len(snippet) > 512 {
-			snippet = snippet[:512]
-		}
-		result.Error = redact.Default.TextWithSecrets(snippet, basic.Password, token)
-	}
-	return result
+	return testProviderConnection(ctx, definition)
 }
 
 func handleAdminKeyModelList(state *authState) gin.HandlerFunc {
@@ -674,8 +656,8 @@ func keyModelsJSON(models []providerstore.KeyModel) []gin.H {
 	return out
 }
 
-func (r keyModelsRequest) validate() ([]providerstore.KeyModel, string, string) {
-	models := make([]providerstore.KeyModel, 0, len(r.Models))
+func (r keyModelsRequest) validate() (models []providerstore.KeyModel, field, problem string) {
+	models = make([]providerstore.KeyModel, 0, len(r.Models))
 	seen := make(map[string]bool, len(r.Models))
 	for _, model := range r.Models {
 		alias := strings.TrimSpace(model.Alias)
@@ -743,7 +725,7 @@ func handleAdminKeyModelReplace(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "begin key transaction failed")
 			return
 		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
+		defer func() { _ = tx.Rollback(context.Background()) }() //nolint:errcheck // best-effort rollback after an aborted write
 		record, reach, ok := loadKey(c, tx, adminIdentityOf(c), true)
 		if !ok {
 			return

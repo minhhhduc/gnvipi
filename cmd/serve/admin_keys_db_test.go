@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,12 +32,12 @@ func newAdminKeyring(t *testing.T) *providerstore.Keyring {
 	return ring
 }
 
-func insertTestProvider(t *testing.T, h *dbAdminHarness, id, baseURL string) {
+func insertTestProvider(t *testing.T, h *dbAdminHarness, baseURL string) {
 	t.Helper()
 	if _, err := h.pool.Exec(t.Context(), `
 		INSERT INTO providers (id, name, protocol, base_url)
-		VALUES ($1, $1, 'openai-chat', $2)`, id, baseURL); err != nil {
-		t.Fatalf("insert provider %s: %v", id, err)
+		VALUES ($1, $1, 'openai-chat', $2)`, keyTestProviderID, baseURL); err != nil {
+		t.Fatalf("insert provider %s: %v", keyTestProviderID, err)
 	}
 }
 
@@ -157,7 +158,7 @@ func prepareKeyActor(t *testing.T, h *dbAdminHarness, username string, role auth
 
 func TestDBAdminKeys_RoleMatrix(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 	admin := prepareKeyActor(t, h, "key-admin", auth.RoleAdmin)
 	user := prepareKeyActor(t, h, "key-user", auth.RoleUser)
 
@@ -285,7 +286,7 @@ func TestDBAdminKeys_RoleMatrix(t *testing.T) {
 
 func TestDBAdminKeys_SecretMaskingAndAudit(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 
 	created := createTestKey(t, h, bearer(h.token), gin.H{"name": "masked", "secret": keyTestSecret})
 	if created["has_secret"] != true || created["secret_last4"] != "1234" {
@@ -346,7 +347,7 @@ func TestDBAdminKeys_SecretMaskingAndAudit(t *testing.T) {
 
 func TestDBAdminKeys_UpdateKeepsSecretAndExplicitClear(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 
 	created := createTestKey(t, h, bearer(h.token), gin.H{"name": "keep secret", "secret": keyTestSecret})
 	keyID, _ := created["id"].(string)
@@ -421,7 +422,7 @@ func TestDBAdminKeys_UpdateKeepsSecretAndExplicitClear(t *testing.T) {
 
 func TestDBAdminKeys_BasicAuthSecret(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 
 	res := makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
 		"name": "basic", "auth_scheme": "basic", "secret": "not-json",
@@ -480,7 +481,7 @@ func TestDBAdminKeys_BasicAuthSecret(t *testing.T) {
 
 func TestDBAdminKeys_DuplicateNameAndAlias(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 
 	first := createTestKey(t, h, bearer(h.token), gin.H{"name": "duplicate", "secret": keyTestSecret})
 	res := makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
@@ -567,7 +568,7 @@ func TestDBAdminKeys_DuplicateNameAndAlias(t *testing.T) {
 
 func TestDBAdminKeys_ValidationAndCredentialSources(t *testing.T) {
 	h := newDBAdminHarness(t)
-	insertTestProvider(t, h, keyTestProviderID, keyTestProviderURL)
+	insertTestProvider(t, h, keyTestProviderURL)
 
 	res := makeRequest(t, h.engine, http.MethodGet, "/admin/api/providers/missing-provider/keys", nil, bearer(h.token))
 	if res.Code != http.StatusNotFound {
@@ -595,6 +596,44 @@ func TestDBAdminKeys_ValidationAndCredentialSources(t *testing.T) {
 		}
 		assertFieldError(t, decodeBody(t, res), "credential")
 	}
+
+	// An auth header name cannot pick its own scheme: without auth_scheme the
+	// request is ambiguous, so it is refused on the auth_scheme field.
+	res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
+		"name": "header name without scheme", "auth_header_name": "X-Issue203", "secret": keyTestSecret,
+	}, bearer(h.token))
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("auth_header_name without auth_scheme = %d, want 400 (body %s)", res.Code, res.Body.String())
+	}
+	assertFieldError(t, decodeBody(t, res), "auth_scheme")
+
+	// A credential with no auth_scheme defaults to bearer.
+	defaulted := createTestKey(t, h, bearer(h.token), gin.H{"name": "default bearer", "secret": keyTestSecret})
+	if defaulted["auth_scheme"] != providerstore.SchemeBearer {
+		t.Fatalf("scheme-less credential = %v, want the bearer default", defaulted["auth_scheme"])
+	}
+
+	// An enabled non-none key needs exactly one credential source, so a scheme
+	// without a secret is refused on the credential field, not by a raw DB
+	// constraint error.
+	res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
+		"name": "bearer without secret", "auth_scheme": "bearer",
+	}, bearer(h.token))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bearer key without a credential = %d, want 422 (body %s)", res.Code, res.Body.String())
+	}
+	assertFieldError(t, decodeBody(t, res), "credential")
+
+	// Switching a key to "none" while handing over a secret must not silently
+	// discard the credential.
+	live := createTestKey(t, h, bearer(h.token), gin.H{"name": "none transition", "secret": keyTestSecret})
+	res = makeRequest(t, h.engine, http.MethodPut, keysPath(live["id"].(string)), gin.H{
+		"auth_scheme": "none", "secret": keyTestSecret,
+	}, bearer(h.token))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("update to none with secret = %d, want 422 (body %s)", res.Code, res.Body.String())
+	}
+	assertFieldError(t, decodeBody(t, res), "credential")
 
 	// key_ref never reaches a regular user, but the owner may store one.
 	user := prepareKeyActor(t, h, "key-ref-user", auth.RoleUser)
@@ -628,17 +667,23 @@ func TestDBAdminKeys_ValidationAndCredentialSources(t *testing.T) {
 
 func TestDBAdminKeys_TestEndpoint(t *testing.T) {
 	h := newDBAdminHarness(t)
+	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("issue203:hunter2-wxyz"))
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+keyTestSecret {
+		switch r.Header.Get("Authorization") {
+		case "Bearer " + keyTestSecret, basicAuth:
+			w.Header().Set("Content-Type", "application/json")
+			if _, err := w.Write([]byte(`{"data":[]}`)); err != nil {
+				t.Errorf("write upstream response: %v", err)
+			}
+		default:
 			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"bad credential"}`))
-			return
+			if _, err := w.Write([]byte(`{"error":"bad credential"}`)); err != nil {
+				t.Errorf("write upstream response: %v", err)
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[]}`))
 	}))
 	t.Cleanup(upstream.Close)
-	insertTestProvider(t, h, keyTestProviderID, upstream.URL)
+	insertTestProvider(t, h, upstream.URL)
 
 	key := createTestKey(t, h, bearer(h.token), gin.H{"name": "probe", "secret": keyTestSecret})
 	keyID, _ := key["id"].(string)
@@ -663,6 +708,19 @@ func TestDBAdminKeys_TestEndpoint(t *testing.T) {
 		t.Fatalf("rejected key test = %v, want auth_failure 401", rejected)
 	}
 	assertNoKeySecretMaterial(t, rejected, "sk-issue203-wrong-9999")
+
+	basic := createTestKey(t, h, bearer(h.token), gin.H{
+		"name": "probe basic", "auth_scheme": "basic", "secret": keyBasicSecret,
+	})
+	res = makeRequest(t, h.engine, http.MethodPost, keysPath(basic["id"].(string))+"/test", nil, bearer(h.token))
+	if res.Code != http.StatusOK {
+		t.Fatalf("basic key test = %d, want 200 (body %s)", res.Code, res.Body.String())
+	}
+	basicResult := decodeBody(t, res)
+	if basicResult["ok"] != true {
+		t.Fatalf("basic key test = %v, want ok", basicResult)
+	}
+	assertNoKeySecretMaterial(t, basicResult, "hunter2-wxyz", "issue203:hunter2-wxyz")
 
 	// A key without any credential cannot be probed.
 	noneKey := createTestKey(t, h, bearer(h.token), gin.H{"name": "probe none", "auth_scheme": "none"})

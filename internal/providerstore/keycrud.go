@@ -230,12 +230,12 @@ func ListKeyModels(ctx context.Context, q Querier, keyID string) ([]KeyModel, er
 		}
 		if len(fallbacks) > 0 {
 			if err := json.Unmarshal(fallbacks, &model.Fallbacks); err != nil {
-				return nil, fmt.Errorf("%w: key %s alias %s fallbacks: %v", ErrInvalidConfig, keyID, model.Alias, err)
+				return nil, fmt.Errorf("%w: key %s alias %s fallbacks: %w", ErrInvalidConfig, keyID, model.Alias, err)
 			}
 		}
 		if len(statuses) > 0 {
 			if err := json.Unmarshal(statuses, &model.FallbackStatuses); err != nil {
-				return nil, fmt.Errorf("%w: key %s alias %s fallback_statuses: %v", ErrInvalidConfig, keyID, model.Alias, err)
+				return nil, fmt.Errorf("%w: key %s alias %s fallback_statuses: %w", ErrInvalidConfig, keyID, model.Alias, err)
 			}
 		}
 		models = append(models, model)
