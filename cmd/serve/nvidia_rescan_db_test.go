@@ -53,6 +53,9 @@ func TestDBAdminNvidiaRescanRoleMatrix(t *testing.T) {
 func TestDBAdminNvidiaRescanAuditCountsOnly(t *testing.T) {
 	const canary = "captcha-canary-4d8e"
 	restoreModels(t)
+	// Start from an empty catalog so the counts under test do not depend on
+	// whatever the checkout's model file happens to contain in CI.
+	models.Replace(map[string]models.ModelInfo{})
 	stubNvidiaDiscovery(t, rescanFixture(
 		models.PlaygroundRow{Model: "acme/" + canary, Slug: canary, Namespace: "qc69jvmznzxy", FunctionID: "77777777-7777-7777-7777-777777777777"},
 	))
