@@ -31,6 +31,12 @@ var (
 	integrationSchemaErr  error
 )
 
+// providerstoreTestApplicationName scopes listener-count assertions to this
+// package. go test runs packages in parallel against one
+// GNVIPI_TEST_DATABASE_URL, so a database-global count collides with the
+// watchers opened by cmd/serve's runtime tests.
+const providerstoreTestApplicationName = "gnvipi-providerstore-test"
+
 func integrationDSN(t *testing.T) string {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("GNVIPI_TEST_DATABASE_URL"))
@@ -59,7 +65,17 @@ func integrationPool(t *testing.T, dsn string) *pgxpool.Pool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse integration dsn: %v", err)
+	}
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	// The watcher copies the pool config for its LISTEN connection, so tagging
+	// the pool also scopes the listener-count assertions to this package.
+	cfg.ConnConfig.RuntimeParams["application_name"] = providerstoreTestApplicationName
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("connect integration database: %v", err)
 	}
@@ -138,17 +154,19 @@ func integrationUniqueSuffix() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// integrationListenerCount reports how many sessions in this database are
-// currently parked in LISTEN gnvipi_config. pg_stat_activity keeps the last
-// statement text, which is how the watcher's dedicated connection is
-// identified.
+// integrationListenerCount reports how many of this package's sessions in this
+// database are currently parked in LISTEN gnvipi_config. pg_stat_activity keeps
+// the last statement text, which is how the watcher's dedicated connection is
+// identified; application_name scopes the count to connections this test
+// package opened.
 func integrationListenerCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
 	t.Helper()
 	var count int
 	err := pool.QueryRow(ctx,
 		`SELECT count(*) FROM pg_stat_activity
 		  WHERE datname = current_database()
-		    AND query = 'LISTEN gnvipi_config'`).Scan(&count)
+		    AND application_name = $1
+		    AND query = 'LISTEN gnvipi_config'`, providerstoreTestApplicationName).Scan(&count)
 	if err != nil {
 		t.Fatalf("count listeners: %v", err)
 	}

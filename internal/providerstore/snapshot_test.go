@@ -233,3 +233,48 @@ func TestStoreGivesUpWhenVersionKeepsAdvancing(t *testing.T) {
 		t.Fatal("last error not recorded")
 	}
 }
+
+// TestStorePollRetriesReloadAfterTransientFailure covers the poll fallback: a
+// single failed reload with an unchanged config version must not leave
+// LastError stuck until the next write. The next poll tick must retry, and a
+// successful retry clears the error.
+func TestStorePollRetriesReloadAfterTransientFailure(t *testing.T) {
+	var loadErr error
+	source := &stubSource{
+		load: func(context.Context) (Rows, int64, error) {
+			if loadErr != nil {
+				return Rows{}, 0, loadErr
+			}
+			return baseRows(), 3, nil
+		},
+		version: func(context.Context) (int64, error) { return 3, nil },
+	}
+	store := NewStore(source, StoreOptions{Now: fixedNow})
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+
+	loadErr = errors.New("database unavailable")
+	if err := store.Reload(context.Background()); err == nil {
+		t.Fatal("reload with a failing source returned no error")
+	}
+	if store.LastError() == nil {
+		t.Fatal("last error not recorded")
+	}
+
+	reload, err := store.pollReload(context.Background())
+	if err != nil {
+		t.Fatalf("poll decision: %v", err)
+	}
+	if !reload {
+		t.Fatal("poll tick did not schedule a retry while LastError is set")
+	}
+
+	loadErr = nil
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("retry reload: %v", err)
+	}
+	if store.LastError() != nil {
+		t.Fatalf("last error survives a successful reload: %v", store.LastError())
+	}
+}

@@ -200,6 +200,9 @@ type Watcher struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	OnError        func(error)
+	// OnHealthy runs after a successful connect/reload, clearing the
+	// "not refreshing" signal an earlier OnError reported.
+	OnHealthy func()
 }
 
 // Run blocks until ctx is canceled.
@@ -235,9 +238,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		}
 		backoff = initial
 		// Reconnect is a possible lost-notification window: reload immediately.
-		if reloadErr := w.Store.Reload(ctx); reloadErr != nil {
-			w.report(reloadErr)
-		}
+		w.reload(ctx)
 		listenErr := w.listen(ctx, conn, poll)
 		// listen only returns after the notification read has returned, so
 		// closing the connection here cannot race WaitForNotification's
@@ -309,20 +310,30 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 			}
 			return fmt.Errorf("providerstore: notification connection lost: %w", err)
 		case <-notify:
-			if err := w.Store.Reload(ctx); err != nil {
-				w.report(err)
-			}
+			w.reload(ctx)
 		case <-ticker.C:
-			changed, err := w.Store.configVersionChanged(ctx)
+			// Retry after a failed reload even when the version is unchanged,
+			// so one transient error does not stick until the next write.
+			reload, err := w.Store.pollReload(ctx)
 			if err != nil {
 				return fmt.Errorf("providerstore: poll config version: %w", err)
 			}
-			if changed {
-				if err := w.Store.Reload(ctx); err != nil {
-					w.report(err)
-				}
+			if reload {
+				w.reload(ctx)
 			}
 		}
+	}
+}
+
+// reload publishes the current configuration. A failure keeps the last good
+// snapshot and is reported; success clears the watcher's error signal.
+func (w *Watcher) reload(ctx context.Context) {
+	if err := w.Store.Reload(ctx); err != nil {
+		w.report(err)
+		return
+	}
+	if w.OnHealthy != nil {
+		w.OnHealthy()
 	}
 }
 
