@@ -14,6 +14,7 @@ import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
 import { TokensView } from "./views/Tokens";
 import { UsersView } from "./views/Users";
+import { AuditView } from "./views/Audit";
 
 /** Stats refresh cadence, and the point at which a request counts as stalled. */
 const STATS_POLL_INTERVAL_MS = 2000;
@@ -235,6 +236,7 @@ export function App() {
   const body =
     effectivePage === "tokens" ? <TokensView user={user} /> :
     effectivePage === "users" && operator ? <UsersView user={user} /> :
+    effectivePage === "audit" ? <AuditView user={user} /> :
     !operator ? (
       <>
         <PageHeader title="Stats" sub="Usage for this gateway account" />

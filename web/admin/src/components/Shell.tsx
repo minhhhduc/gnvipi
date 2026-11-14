@@ -10,6 +10,7 @@ const NAV: { page: Page; label: string }[] = [
   { page: "chromes", label: "Chrome" },
   { page: "tokens", label: "Tokens" },
   { page: "users", label: "Users" },
+  { page: "audit", label: "Audit" },
 ];
 
 export function HealthPill() {
