@@ -110,6 +110,18 @@ describe("streamPlaygroundChat", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/admin/api/playground/chat?user_id=user-42");
   });
 
+  it("forwards sampling parameters only when they are set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+    vi.stubGlobal("document", { cookie: "" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamPlaygroundChat({ model: "m", messages: [], temperature: 0.3, maxTokens: 128, onDelta: () => {} });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ temperature: 0.3, max_tokens: 128 });
+
+    await streamPlaygroundChat({ model: "m", messages: [], onDelta: () => {} });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).not.toHaveProperty("temperature");
+  });
+
   it("maps an OpenAI-style error body to a typed console error", async () => {
     vi.stubGlobal("document", { cookie: "" });
     vi.stubGlobal(

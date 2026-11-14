@@ -15,11 +15,14 @@ import {
 } from "../lib/playground";
 import { Card, CardHead, PageHeader } from "../components/ui";
 
-/** One rendered turn. `model` and `provider` label assistant turns. */
 interface Turn extends ChatMessage {
-  provider?: string;
-  upstream?: string;
+  /** Milliseconds to the first streamed token, when measured. */
+  firstTokenMs?: number;
+  /** Milliseconds for the whole reply, when measured. */
+  totalMs?: number;
 }
+
+const DEFAULT_TEMPERATURE = 1;
 
 export function PlaygroundView({ user }: { user: AdminUser }) {
   const owner = user.role === "owner";
@@ -29,13 +32,16 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   const [models, setModels] = useState<PlaygroundModel[]>([]);
   const [union, setUnion] = useState(false);
   const [model, setModel] = useState("");
-  const [filter, setFilter] = useState("");
   const [modelsLoading, setModelsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [system, setSystem] = useState("");
+  const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
+  const [maxTokens, setMaxTokens] = useState("");
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [error, setError] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [copied, setCopied] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const transcript = useRef<HTMLDivElement | null>(null);
 
@@ -93,47 +99,59 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   }, [turns]);
 
   const selected = models.find((entry) => entry.alias === model);
+  const groups = useMemo(() => groupModels(models), [models]);
+  const asUser = accountID ? accounts.find((entry) => entry.id === accountID)?.username ?? "the selected account" : user.username;
+  const maxTokensValue = Number.parseInt(maxTokens, 10);
 
-  const visible = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    if (!needle) return models;
-    return models.filter((entry) =>
-      [entry.alias, entry.upstream_model, entry.provider].some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [models, filter]);
-
-  const groups = groupModels(visible);
-
-  const send = async () => {
-    const prompt = input.trim();
-    if (!prompt || !model || streaming) return;
+  /** Streams a reply for an existing turn list; the last turn is the empty assistant. */
+  const run = async (history: Turn[]) => {
+    if (!model || streaming) return;
     const controller = new AbortController();
     abort.current = controller;
-    const history: Turn[] = [...turns, { role: "user", content: prompt }, { role: "assistant", content: "" }];
-    setTurns(history);
-    setInput("");
     setStreaming(true);
     setError("");
+    const started = performance.now();
+    let firstToken: number | null = null;
     try {
       await streamPlaygroundChat({
         model,
-        messages: history
-          .filter((turn) => turn.role !== "assistant" || turn.content !== "")
-          .map((turn) => ({ role: turn.role, content: turn.content })),
+        messages: [
+          ...(system.trim() ? [{ role: "system" as const, content: system.trim() }] : []),
+          ...history
+            .filter((turn) => turn.role !== "assistant" || turn.content !== "")
+            .map((turn) => ({ role: turn.role, content: turn.content })),
+        ],
         userId: owner && accountID ? accountID : undefined,
+        temperature,
+        maxTokens: Number.isFinite(maxTokensValue) && maxTokensValue > 0 ? maxTokensValue : undefined,
         signal: controller.signal,
-        onDelta: (text) =>
+        onDelta: (text) => {
+          if (firstToken === null) firstToken = performance.now() - started;
           setTurns((current) => {
             const next = [...current];
             const last = next[next.length - 1];
+            if (!last) return next;
             next[next.length - 1] = { ...last, content: last.content + text };
             return next;
-          }),
+          });
+        },
+      });
+      setTurns((current) => {
+        const next = [...current];
+        const last = next[next.length - 1];
+        if (last) {
+          next[next.length - 1] = {
+            ...last,
+            firstTokenMs: firstToken ?? undefined,
+            totalMs: performance.now() - started,
+          };
+        }
+        return next;
       });
     } catch (err) {
       if (!isStoppedError(err)) {
         setError(message(err));
-        // Drop the empty assistant placeholder so the transcript stays honest.
+        // Drop an empty assistant placeholder so the transcript stays honest.
         setTurns((current) => (current[current.length - 1]?.content === "" ? current.slice(0, -1) : current));
       }
     } finally {
@@ -142,9 +160,35 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     }
   };
 
-  const stop = () => abort.current?.abort();
+  const send = () => {
+    const prompt = input.trim();
+    if (!prompt || !model || streaming) return;
+    setInput("");
+    void run([...turns, { role: "user", content: prompt }, { role: "assistant", content: "" }]);
+  };
 
-  const composerDisabled = !model || streaming;
+  const regenerate = () => {
+    if (streaming) return;
+    const lastUser = turns.map((turn) => turn.role).lastIndexOf("user");
+    if (lastUser < 0) return;
+    const history = turns.slice(0, lastUser + 1);
+    void run([...history, { role: "assistant", content: "" }]);
+  };
+
+  const copyReply = async () => {
+    const reply = [...turns].reverse().find((turn) => turn.role === "assistant" && turn.content);
+    if (!reply) return;
+    try {
+      await navigator.clipboard.writeText(reply.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Could not copy the reply");
+    }
+  };
+
+  const stop = () => abort.current?.abort();
+  const hasReply = turns.some((turn) => turn.role === "assistant" && turn.content);
 
   return (
     <>
@@ -166,74 +210,99 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
         )}
       </PageHeader>
 
-      <div class="grid items-start gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
-        <Card class="flex max-h-[46vh] flex-col overflow-hidden md:max-h-[calc(100vh-190px)]">
-          <CardHead title="Models" sub={models.length > 0 ? `${models.length} reachable` : undefined} />
-          <div class="border-b border-line px-[15px] py-2.5">
-            <input
-              class="input"
-              type="search"
-              placeholder="Filter by model or provider"
-              aria-label="Filter models"
-              value={filter}
-              onInput={(e) => setFilter((e.currentTarget as HTMLInputElement).value)}
-            />
-          </div>
-
-          <div class="min-h-0 flex-1 overflow-auto p-1.5">
-            {modelsLoading ? (
-              <p class="px-2 py-3 text-xs text-dim">Loading models…</p>
-            ) : loadError ? (
-              <p class="px-2 py-3 text-xs text-bad">Models unavailable: {loadError}</p>
+      <div class="grid items-start gap-3 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <Card class="lg:sticky lg:top-3">
+          <CardHead title="Settings" />
+          <div class="space-y-3 px-[15px] py-3">
+            {loadError ? (
+              <p class="text-xs text-bad">Models unavailable: {loadError}</p>
+            ) : modelsLoading ? (
+              <p class="text-xs text-dim">Loading models…</p>
             ) : models.length === 0 ? (
-              <div class="px-2 py-3 text-xs text-dim">
+              <div class="text-xs text-dim">
                 <p>No model this account can reach.</p>
-                <p class="mt-1.5">Add a provider key on Models, or rescan the NVIDIA catalog.</p>
+                <p class="mt-1.5">Add a provider key, or rescan the NVIDIA catalog.</p>
                 <button class="btn btn-sm mt-2.5" type="button" onClick={() => navigate("models")}>Open Models</button>
               </div>
-            ) : visible.length === 0 ? (
-              <p class="px-2 py-3 text-xs text-dim">Nothing matches “{filter.trim()}”.</p>
             ) : (
-              groups.map((group) => (
-                <div key={group.provider} class="mb-1.5 last:mb-0">
-                  <div class="px-2 py-1 text-[11px] font-semibold text-dim">{group.provider}</div>
-                  {group.models.map((entry) => {
-                    const active = entry.alias === model;
-                    return (
-                      <button
-                        key={`${entry.provider}:${entry.alias}:${entry.upstream_model}`}
-                        type="button"
-                        aria-pressed={active}
-                        class={`flex w-full flex-col items-start gap-0.5 rounded-[6px] border-l-2 px-2 py-1.5 text-left transition-colors ${
-                          active
-                            ? "border-accent bg-panel2"
-                            : "border-transparent hover:bg-panel2 focus-visible:bg-panel2"
-                        }`}
-                        onClick={() => setModel(entry.alias)}
-                      >
-                        <span class="mono w-full truncate text-[12px] text-fg" title={entry.alias}>{entry.alias}</span>
-                        {entry.upstream_model !== entry.alias && (
-                          <span class="mono w-full truncate text-[10px] text-dim" title={entry.upstream_model}>
-                            {entry.upstream_model}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))
+              <>
+                <label class="block text-xs font-semibold">
+                  Model
+                  <select class="input mt-1" value={model} onChange={(e) => setModel((e.target as HTMLSelectElement).value)}>
+                    {groups.map((group) => (
+                      <optgroup key={group.provider} label={group.provider}>
+                        {group.models.map((entry) => (
+                          <option key={`${entry.provider}:${entry.alias}:${entry.upstream_model}`} value={entry.alias}>
+                            {entry.alias}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+                {selected && (
+                  <p class="mono break-all text-[11px] text-dim">
+                    {selected.provider} · {selected.upstream_model}
+                  </p>
+                )}
+                {union && (
+                  <p class="text-[11px] text-dim">Union of every account’s models; pick an account above to test as that account.</p>
+                )}
+
+                <label class="block text-xs font-semibold">
+                  System prompt
+                  <textarea
+                    class="input mt-1 min-h-[64px] resize-y text-[12px]"
+                    rows={3}
+                    placeholder="Optional instructions sent before the conversation"
+                    value={system}
+                    onInput={(e) => setSystem((e.currentTarget as HTMLTextAreaElement).value)}
+                  />
+                </label>
+
+                <label class="block text-xs font-semibold">
+                  <span class="flex items-center justify-between">
+                    Temperature
+                    <span class="mono text-[11px] font-normal text-dim">{temperature.toFixed(1)}</span>
+                  </span>
+                  <input
+                    class="mt-2 w-full accent-[var(--accent)]"
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={temperature}
+                    onInput={(e) => setTemperature(Number.parseFloat((e.currentTarget as HTMLInputElement).value))}
+                  />
+                </label>
+
+                <label class="block text-xs font-semibold">
+                  Max tokens
+                  <input
+                    class="input mt-1"
+                    type="number"
+                    min="1"
+                    inputMode="numeric"
+                    placeholder="Provider default"
+                    value={maxTokens}
+                    onInput={(e) => setMaxTokens((e.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+              </>
             )}
           </div>
-          {union && (
-            <p class="border-t border-line px-3 py-2 text-[11px] text-dim">
-              Union of every account’s models. Pick an account above to test as that account.
-            </p>
-          )}
         </Card>
 
-        <Card class="flex min-h-[420px] flex-col md:min-h-[calc(100vh-190px)]">
-          <CardHead title="Transcript" sub={selected ? selected.upstream_model : "No model selected"}>
-            {selected && <span class="chip mono">{selected.provider}</span>}
+        <Card class="flex min-h-[520px] flex-col">
+          <CardHead title="Conversation" sub={`as ${asUser}`}>
+            {hasReply && !streaming && (
+              <>
+                <button class="btn btn-sm" type="button" onClick={() => void copyReply()}>
+                  {copied ? "Copied" : "Copy reply"}
+                </button>
+                <button class="btn btn-sm" type="button" onClick={regenerate}>Regenerate</button>
+              </>
+            )}
             {turns.length > 0 && !streaming && (
               <button class="btn btn-sm" type="button" onClick={() => setTurns([])}>Clear</button>
             )}
@@ -241,41 +310,47 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
 
           <div
             ref={transcript}
-            class="min-h-0 flex-1 overflow-auto px-[15px] py-3"
+            class="min-h-0 flex-1 overflow-auto px-[15px] py-4"
             aria-live="polite"
             aria-label="Conversation transcript"
           >
             {turns.length === 0 ? (
-              <div class="flex h-full min-h-[240px] flex-col items-start justify-center gap-1 text-dim">
-                <span class="text-[15px] font-semibold text-fg">Nothing sent yet</span>
-                <span class="max-w-[52ch] text-xs">
-                  {model
-                    ? `Messages resolve as ${
-                        accountID ? accounts.find((entry) => entry.id === accountID)?.username ?? "the selected account" : user.username
-                      } using ${model}.`
-                    : "Pick a model on the left to start."}
+              <div class="flex h-full min-h-[260px] flex-col items-center justify-center gap-1 text-center text-dim">
+                <span class="text-[15px] font-semibold text-fg">Send a message to start</span>
+                <span class="max-w-[46ch] text-xs">
+                  {model ? `Replies come from ${model}, resolved as ${asUser}.` : "Choose a model on the left first."}
                 </span>
               </div>
             ) : (
-              <ol class="mx-auto max-w-[78ch]">
-                {turns.map((turn, index) => (
-                  <li key={index} class="border-b border-line py-3 first:pt-0 last:border-b-0">
-                    <div class="mb-1 flex items-baseline gap-2 text-[11px] text-dim">
-                      <span class="font-semibold text-fg">{turn.role === "user" ? "You" : "Assistant"}</span>
-                      {turn.role === "assistant" && selected && (
-                        <span class="mono truncate">
-                          {selected.provider} · {selected.upstream_model}
-                        </span>
+              <ol class="mx-auto flex max-w-[760px] flex-col gap-3">
+                {turns.map((turn, index) =>
+                  turn.role === "user" ? (
+                    <li key={index} class="flex justify-end">
+                      <div class="max-w-[85%] whitespace-pre-wrap break-words rounded-[10px] bg-panel2 px-3 py-2 text-[13px] leading-6">
+                        {turn.content}
+                      </div>
+                    </li>
+                  ) : (
+                    <li key={index} class="max-w-[92%]">
+                      <div class="mb-1 mono text-[10px] text-dim">{selected ? selected.upstream_model : "assistant"}</div>
+                      <div class="whitespace-pre-wrap break-words text-[13px] leading-6">
+                        {turn.content}
+                        {streaming && index === turns.length - 1 && (
+                          <span
+                            class="ml-0.5 inline-block h-4 w-[6px] translate-y-0.5 bg-accent motion-safe:animate-pulse"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </div>
+                      {turn.totalMs !== undefined && !streaming && (
+                        <div class="mt-1 text-[10px] text-dim">
+                          {turn.firstTokenMs !== undefined ? `first token ${Math.round(turn.firstTokenMs)} ms · ` : ""}
+                          {Math.round(turn.totalMs)} ms
+                        </div>
                       )}
-                    </div>
-                    <div class="whitespace-pre-wrap break-words text-[13px] leading-6">
-                      {turn.content}
-                      {streaming && index === turns.length - 1 && (
-                        <span class="ml-0.5 inline-block h-4 w-[6px] translate-y-0.5 bg-accent motion-safe:animate-pulse" aria-hidden="true" />
-                      )}
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  ),
+                )}
               </ol>
             )}
           </div>
@@ -289,27 +364,25 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
             <label class="sr-only" for="playground-message">Message</label>
             <textarea
               id="playground-message"
-              class="input min-h-[76px] resize-y text-[13px]"
+              class="input min-h-[72px] resize-y text-[13px]"
               rows={3}
               placeholder={model ? `Message ${model}` : "Select a model first"}
               value={input}
-              disabled={composerDisabled}
+              disabled={!model || streaming}
               onInput={(e) => setInput((e.currentTarget as HTMLTextAreaElement).value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  void send();
+                  send();
                 }
               }}
             />
             <div class="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" class="btn btn-primary" disabled={composerDisabled || !input.trim()} onClick={() => void send()}>
+              <button type="button" class="btn btn-primary" disabled={!model || streaming || !input.trim()} onClick={send}>
                 Send
               </button>
               <button type="button" class="btn" disabled={!streaming} onClick={stop}>Stop</button>
-              <span class="text-[11px] text-dim">
-                Enter to send · Shift+Enter for a new line
-              </span>
+              <span class="text-[11px] text-dim">Enter to send · Shift+Enter for a new line</span>
               {streaming && <span class="ml-auto text-[11px] text-dim" role="status">Streaming…</span>}
             </div>
           </div>
