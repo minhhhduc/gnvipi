@@ -46,7 +46,7 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 	}
 	providerRows := make([]ProviderRow, len(doc.Providers))
 	for i := range doc.Providers {
-		providerRows[i], err = importProviderRow(doc.Providers[i])
+		providerRows[i], err = ProviderRowFromV2(doc.Providers[i])
 		if err != nil {
 			return false, err
 		}
@@ -120,7 +120,7 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 	}
 
 	for i, p := range doc.Providers {
-		if err := insertImportedProvider(ctx, tx, providerRows[i]); err != nil {
+		if err := InsertProvider(ctx, tx, providerRows[i]); err != nil {
 			return false, err
 		}
 		key, err := importedKey(ctx, tx, p, ownerID, keyring, refs)
@@ -160,73 +160,6 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 	return true, nil
 }
 
-func importProviderRow(p provider.Provider) (ProviderRow, error) {
-	if p.Auth.Scheme == provider.AuthBearer && p.Auth.HeaderName != "" {
-		return ProviderRow{}, &provider.FieldError{
-			Provider: p.ID,
-			Field:    "auth.header_name",
-			Problem:  "bearer header overrides cannot be represented by database keys",
-		}
-	}
-	endpointPaths, err := marshalImportJSON(p.EndpointPaths, `{}`)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: provider %q endpoint_paths: %w", p.ID, err)
-	}
-	forwardHeaders, err := marshalImportJSON(p.ForwardHeaders, `[]`)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: provider %q forward_headers: %w", p.ID, err)
-	}
-	headers, err := marshalImportJSON(p.Headers, `{}`)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: provider %q headers: %w", p.ID, err)
-	}
-	extensions, err := marshalImportJSON(p.Extensions, `{}`)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: provider %q extensions: %w", p.ID, err)
-	}
-	timeouts, err := json.Marshal(p.Timeouts)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: provider %q timeouts: %w", p.ID, err)
-	}
-	extraBody := append([]byte(nil), p.ExtraBody...)
-	if len(bytes.TrimSpace(extraBody)) == 0 {
-		extraBody = []byte(`{}`)
-	}
-	tls := string(p.TLS)
-	if tls == "" {
-		tls = string(provider.TLSDefault)
-	}
-	row := ProviderRow{
-		ID:             p.ID,
-		Name:           p.Name,
-		Protocol:       p.Protocol.String(),
-		BaseURL:        p.BaseURL,
-		ProxyURL:       p.ProxyURL,
-		Enabled:        p.Enabled,
-		TLS:            tls,
-		EndpointPaths:  endpointPaths,
-		ForwardHeaders: forwardHeaders,
-		Headers:        headers,
-		ExtraBody:      extraBody,
-		Extensions:     extensions,
-		Timeouts:       timeouts,
-		MaxConcurrency: p.MaxConcurrency,
-		QueueTimeout:   int64(p.QueueTimeout),
-	}
-	definition, err := BuildProviderDefinition(row)
-	if err != nil {
-		return ProviderRow{}, fmt.Errorf("providerstore: imported provider %q: %w", p.ID, err)
-	}
-	if problems := ValidateSensitiveConfig(row, definition); len(problems) > 0 {
-		fieldErrors := make([]*provider.FieldError, len(problems))
-		for i, problem := range problems {
-			fieldErrors[i] = &provider.FieldError{Provider: p.ID, Field: problem.Field, Problem: problem.Problem}
-		}
-		return ProviderRow{}, &provider.ValidationError{Errors: fieldErrors}
-	}
-	return row, nil
-}
-
 func marshalImportJSON(value any, empty string) ([]byte, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -236,23 +169,6 @@ func marshalImportJSON(value any, empty string) ([]byte, error) {
 		return []byte(empty), nil
 	}
 	return raw, nil
-}
-
-func insertImportedProvider(ctx context.Context, tx pgx.Tx, row ProviderRow) error {
-	_, err := tx.Exec(ctx, `INSERT INTO providers
-		(id, name, protocol, base_url, proxy_url, enabled, tls, endpoint_paths,
-		 forward_headers, headers, extra_body, extensions, max_concurrency,
-		 queue_timeout, timeouts)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb,
-		        $11::jsonb, $12::jsonb, $13, $14, $15::jsonb)`,
-		row.ID, row.Name, row.Protocol, row.BaseURL, row.ProxyURL, row.Enabled, row.TLS,
-		string(row.EndpointPaths), string(row.ForwardHeaders), string(row.Headers),
-		string(row.ExtraBody), string(row.Extensions), row.MaxConcurrency, row.QueueTimeout,
-		string(row.Timeouts))
-	if err != nil {
-		return fmt.Errorf("providerstore: import provider %q: %w", row.ID, err)
-	}
-	return nil
 }
 
 func importedKey(ctx context.Context, tx pgx.Tx, p provider.Provider, ownerID string, keyring *Keyring, refs RefResolver) (KeyRow, error) {

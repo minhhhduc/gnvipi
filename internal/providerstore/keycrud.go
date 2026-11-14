@@ -102,22 +102,24 @@ func ProviderExists(ctx context.Context, q Querier, providerID string) (bool, er
 
 // GetProviderRow reads one providers row for credential probing.
 func GetProviderRow(ctx context.Context, q Querier, providerID string) (ProviderRow, error) {
-	var row ProviderRow
-	var endpointPaths, forwardHeaders, headers, extraBody, extensions, timeouts []byte
-	err := q.QueryRow(ctx, `SELECT id, name, protocol, base_url, proxy_url, enabled, tls,
+	return getProviderRow(ctx, q, providerID, false)
+}
+
+func getProviderRow(ctx context.Context, q Querier, providerID string, forUpdate bool) (ProviderRow, error) {
+	query := `SELECT id, name, protocol, base_url, proxy_url, enabled, tls,
 		endpoint_paths, forward_headers, headers, extra_body, extensions,
 		max_concurrency, queue_timeout, timeouts
-		FROM providers WHERE id = $1`, providerID).Scan(&row.ID, &row.Name, &row.Protocol,
-		&row.BaseURL, &row.ProxyURL, &row.Enabled, &row.TLS, &endpointPaths, &forwardHeaders,
-		&headers, &extraBody, &extensions, &row.MaxConcurrency, &row.QueueTimeout, &timeouts)
+		FROM providers WHERE id = $1`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
+	row, err := scanProviderRow(q.QueryRow(ctx, query, providerID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProviderRow{}, ErrProviderNotFound
 	}
 	if err != nil {
 		return ProviderRow{}, fmt.Errorf("providerstore: read provider %s: %w", providerID, err)
 	}
-	row.EndpointPaths, row.ForwardHeaders, row.Headers = endpointPaths, forwardHeaders, headers
-	row.ExtraBody, row.Extensions, row.Timeouts = extraBody, extensions, timeouts
 	return row, nil
 }
 
@@ -125,6 +127,10 @@ func GetProviderRow(ctx context.Context, q Querier, providerID string) (Provider
 // non-empty ownerID limits the read to that user's keys, so a caller never
 // loads another owner's ciphertext.
 func ListProviderKeys(ctx context.Context, q Querier, providerID, ownerID string) ([]KeyRecord, error) {
+	return listProviderKeys(ctx, q, providerID, ownerID, false)
+}
+
+func listProviderKeys(ctx context.Context, q Querier, providerID, ownerID string, forUpdate bool) ([]KeyRecord, error) {
 	query := `SELECT ` + keyRecordColumns + `
 		FROM provider_keys WHERE provider_id = $1`
 	args := []any{providerID}
@@ -132,7 +138,11 @@ func ListProviderKeys(ctx context.Context, q Querier, providerID, ownerID string
 		query += ` AND owner_id = $2::uuid`
 		args = append(args, ownerID)
 	}
-	rows, err := q.Query(ctx, query+` ORDER BY owner_id NULLS FIRST, name, id`, args...)
+	query += ` ORDER BY owner_id NULLS FIRST, name, id`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
+	rows, err := q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("providerstore: list provider keys: %w", err)
 	}

@@ -187,12 +187,19 @@ func getProviderID(c *gin.Context) string {
 }
 
 func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*cliproxy.ModelInfo, chromes *chromeLifecycle, state *authState) {
-	engine.GET("/admin/api/providers", func(c *gin.Context) { handleAdminAPIListProviders(c, p) })
-	engine.POST("/admin/api/providers", func(c *gin.Context) { handleAdminAPICreateProvider(c, p) })
+	// Database mode owns provider configuration: the v2 surface reads and writes
+	// the providers/keys/key_models tables through LegacyView. Without a
+	// database the file-backed store keeps serving.
+	if state != nil && state.pool != nil {
+		registerAdminProviderDBRoutes(engine, state)
+	} else {
+		engine.GET("/admin/api/providers", func(c *gin.Context) { handleAdminAPIListProviders(c, p) })
+		engine.POST("/admin/api/providers", func(c *gin.Context) { handleAdminAPICreateProvider(c, p) })
+		engine.GET("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIGetProvider(c, p) })
+		engine.PUT("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIUpdateProvider(c, p) })
+		engine.DELETE("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIDeleteProvider(c, p) })
+	}
 	engine.POST("/admin/api/providers/test", func(c *gin.Context) { handleAdminAPITestProviderDirect(c, p) })
-	engine.GET("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIGetProvider(c, p) })
-	engine.PUT("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIUpdateProvider(c, p) })
-	engine.DELETE("/admin/api/providers/:id", func(c *gin.Context) { handleAdminAPIDeleteProvider(c, p) })
 	engine.POST("/admin/api/providers/:id/test", func(c *gin.Context) { handleAdminAPITestProvider(c, p) })
 
 	engine.GET("/admin/api/stats", handleAdminStats)
