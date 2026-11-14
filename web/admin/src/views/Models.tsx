@@ -474,6 +474,27 @@ function KeyEditorDialog({
   const [shared, setShared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<KeyModel[] | null>(target ? null : []);
+  const [modelAlias, setModelAlias] = useState("");
+  const [modelUpstream, setModelUpstream] = useState("");
+
+  const base = `/admin/api/providers/${encodeURIComponent(provider.id)}/keys`;
+
+  useEffect(() => {
+    if (!target) return;
+    let live = true;
+    void api<unknown>(`${base}/${encodeURIComponent(target.id)}/models`)
+      .then((body) => { if (live) setRows(parseKeyModels(body)); })
+      .catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [target, base]);
+
+  const addModel = () => {
+    if (!modelAlias.trim()) return;
+    setRows(toggleKeyModel(rows ?? [], { alias: modelAlias.trim(), upstream_model: buildUpstreamModel(modelAlias.trim(), modelUpstream) }, true));
+    setModelAlias("");
+    setModelUpstream("");
+  };
 
   const effectiveScheme = shared ? "none" : "bearer";
   const showCredential = effectiveScheme !== "none";
@@ -483,16 +504,19 @@ function KeyEditorDialog({
     setBusy(true);
     try {
       const input = { name, enabled, authScheme: effectiveScheme, secret };
+      let keyID = target?.id;
       if (target) {
-        await api(`/admin/api/providers/${encodeURIComponent(provider.id)}/keys/${encodeURIComponent(target.id)}`, {
+        await api(`${base}/${encodeURIComponent(target.id)}`, {
           method: "PUT",
           body: keyUpdatePayload(input),
         });
       } else {
-        await api(`/admin/api/providers/${encodeURIComponent(provider.id)}/keys`, {
-          method: "POST",
-          body: keyCreatePayload(input, { shared }),
-        });
+        const created = await api<unknown>(base, { method: "POST", body: keyCreatePayload(input, { shared }) });
+        const id = (created as { id?: unknown } | null)?.id;
+        keyID = typeof id === "string" ? id : undefined;
+      }
+      if (keyID && rows) {
+        await api(`${base}/${encodeURIComponent(keyID)}/models`, { method: "PUT", body: keyModelsPayload(rows) });
       }
       onSaved();
     } catch (err) {
@@ -539,6 +563,41 @@ function KeyEditorDialog({
               Write-only. The key is encrypted at rest; only the last four characters are shown.
             </span>
           </label>
+        )}
+        {rows !== null && (
+          <div class="space-y-2 border-t border-line pt-3">
+            <b class="text-xs">Models for this key</b>
+            {rows.map((item) => (
+              <div key={item.alias} class="flex flex-wrap items-center gap-2">
+                <code class="mono w-[150px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
+                <input
+                  class="input mono h-7 w-[190px]"
+                  aria-label={`Upstream model for ${item.alias}`}
+                  value={item.upstream_model}
+                  placeholder={item.alias.endsWith("/*") ? "(suffix)" : "upstream model"}
+                  onInput={(e) =>
+                    setRows(rows.map((row) =>
+                      row.alias === item.alias ? { ...row, upstream_model: (e.currentTarget as HTMLInputElement).value } : row,
+                    ))
+                  }
+                />
+                <button class="btn btn-sm" aria-label={`Remove ${item.alias}`}
+                  onClick={() => setRows(rows.filter((row) => row.alias !== item.alias))}>
+                  <IconX />
+                </button>
+              </div>
+            ))}
+            <div class="flex flex-wrap items-center gap-2">
+              <input class="input mono h-7 w-[150px]" aria-label="New model alias" placeholder="alias or vendor/*" value={modelAlias}
+                onInput={(e) => setModelAlias((e.currentTarget as HTMLInputElement).value)} />
+              <input class="input mono h-7 w-[190px]" aria-label="New upstream model" placeholder="upstream model (defaults to alias)" value={modelUpstream}
+                onInput={(e) => setModelUpstream((e.currentTarget as HTMLInputElement).value)} />
+              <button class="btn btn-sm" disabled={!modelAlias.trim()} onClick={addModel}>Add model</button>
+            </div>
+            <span class="block text-[11px] font-normal text-dim">
+              Aliases chosen here belong to this key only.
+            </span>
+          </div>
         )}
         {error && <div role="alert" class="rounded-lg border border-bad bg-bad-soft px-3 py-2 text-xs text-bad">{error}</div>}
       </div>
