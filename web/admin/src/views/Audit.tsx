@@ -6,6 +6,7 @@ import { isOwnerRole, type AdminUser } from "../lib/auth";
 import {
   auditMatches,
   auditTime,
+  auditWindow,
   detailRows,
   fetchAuditPage,
   firstAuditRequest,
@@ -20,6 +21,18 @@ import { DEFAULT_LIMIT, PAGE_SIZES, clampLimit, message } from "../lib/admin";
 function shortID(value: string | null): string {
   if (!value) return "—";
   return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+}
+
+/** The context cell: request/IP plus attribution read from the entry fields. */
+export function AuditContext({ entry }: { entry: AuditEntry }) {
+  const parts = [
+    entry.ip,
+    entry.request_id ? shortID(entry.request_id) : "",
+    entry.user_id ? `user ${shortID(entry.user_id)}` : "",
+    entry.key_id ? `key ${shortID(entry.key_id)}` : "",
+    entry.provider_id ? `provider ${entry.provider_id}` : "",
+  ].filter(Boolean);
+  return <span>{parts.length > 0 ? parts.join(" · ") : "—"}</span>;
 }
 
 /** The redacted details cell. `details` was allowlisted when the page parsed. */
@@ -87,9 +100,8 @@ export function AuditView({ user }: { user: AdminUser }) {
   const next = page ? nextAuditRequest(request, page) : null;
   const entries = (page?.entries ?? []).filter((entry) => auditMatches(entry, filter));
   const filtering = filter.trim().length > 0;
-  const loaded = entries.length;
-  const from = loaded ? (request.depth - 1) * request.limit + 1 : 0;
-  const to = from ? from + loaded - 1 : 0;
+  // Positions describe the loaded page; the filter only hides rows from view.
+  const { from, to } = page ? auditWindow(request, page) : { from: 0, to: 0 };
 
   return (
     <>
@@ -98,7 +110,7 @@ export function AuditView({ user }: { user: AdminUser }) {
       </PageHeader>
 
       <Card>
-        <CardHead title="Entries" sub={page ? `${loaded} on this page` : undefined}>
+        <CardHead title="Entries" sub={page ? `${page.entries.length} on this page` : undefined}>
           <input
             class="input w-56"
             placeholder="Filter this page"
@@ -148,10 +160,7 @@ export function AuditView({ user }: { user: AdminUser }) {
                     <span class="chip">{entry.target_type}</span>{" "}
                     <span class="mono text-[11px] text-dim" title={entry.target_id ?? undefined}>{shortID(entry.target_id)}</span>
                   </td>
-                  <td class="muted text-[11px]">
-                    {entry.ip || "—"}
-                    {entry.request_id ? ` · ${shortID(entry.request_id)}` : ""}
-                  </td>
+                  <td class="muted text-[11px]"><AuditContext entry={entry} /></td>
                   <td><AuditDetails entry={entry} /></td>
                 </tr>
               ))}
@@ -162,6 +171,7 @@ export function AuditView({ user }: { user: AdminUser }) {
         <Pager
           from={from}
           to={to}
+          note={filtering ? `${entries.length} match filter` : undefined}
           hasPrev={!!previous && !loading}
           hasNext={!!next && !loading}
           onPrev={() => { if (!loading && previous) setRequest(previous); }}

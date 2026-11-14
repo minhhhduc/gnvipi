@@ -8,6 +8,7 @@ import {
   auditMatches,
   auditPath,
   auditTime,
+  auditWindow,
   detailRows,
   fetchAuditPage,
   firstAuditRequest,
@@ -16,7 +17,8 @@ import {
   previousAuditRequest,
   sanitizeDetails,
 } from "./audit";
-import { AuditDetails } from "../views/Audit";
+import { Pager } from "../components/ui";
+import { AuditContext, AuditDetails } from "../views/Audit";
 
 function textContent(value: ComponentChildren): string {
   return toChildArray(value)
@@ -164,6 +166,51 @@ describe("audit redaction", () => {
       }),
     ).toEqual({ id: "abc", count: 3, enabled: true, NAME: "bob" });
   });
+
+  it("keeps the key lifecycle details the server allows", () => {
+    expect(
+      sanitizeDetails({
+        auth_scheme: "bearer",
+        has_secret: true,
+        has_key_env: false,
+        has_key_ref: false,
+        secret_last4: CANARY,
+        has_secret_preview: { value: CANARY },
+      }),
+    ).toEqual({
+      auth_scheme: "bearer",
+      has_secret: true,
+      has_key_env: false,
+      has_key_ref: false,
+    });
+  });
+});
+
+describe("audit context attribution", () => {
+  it("renders key and provider attribution from entry fields", () => {
+    const entry = parseAuditPage({
+      entries: [
+        {
+          ...entryJSON,
+          actor_type: "system",
+          actor_id: "",
+          user_id: "",
+          key_id: "lk-1",
+          provider_id: "anthropic",
+          request_id: "",
+          ip: "",
+          details: { key_id: "dl-1" },
+        },
+      ],
+      has_more: false,
+      limit: 50,
+    }).entries[0];
+
+    const rendered = textContent(AuditContext({ entry }));
+    expect(rendered).toContain("lk-1");
+    expect(rendered).toContain("provider anthropic");
+    expect(rendered).not.toContain("dl-1");
+  });
 });
 
 describe("audit cursor pagination", () => {
@@ -206,10 +253,36 @@ describe("audit cursor pagination", () => {
   });
 
   it("stops at the oldest page and at the newest page", () => {
-    const first = parseAuditPage({ ...firstPageBody, has_more: false });
     const firstRequest = firstAuditRequest(2);
+    const first = parseAuditPage({ ...firstPageBody, has_more: false });
     expect(nextAuditRequest(firstRequest, first)).toBeNull();
     expect(previousAuditRequest(firstRequest, first)).toBeNull();
+
+    // The first page's has_more speaks for older rows, not for Previous.
+    const olderRowsExist = parseAuditPage({ ...firstPageBody, has_more: true });
+    expect(previousAuditRequest(firstRequest, olderRowsExist)).toBeNull();
+  });
+
+  it("uses the backward response's has_more for Previous", () => {
+    const backward = { ...firstAuditRequest(2), after: null, before: "cursor-5", depth: 1 };
+
+    // New rows were appended above this page: Previous stays reachable even
+    // though the depth counter is already at the top.
+    const appended = parseAuditPage({ ...secondPageBody, has_more: true });
+    expect(previousAuditRequest(backward, appended)).toEqual({
+      limit: 2, after: null, before: "cursor-5", depth: 1,
+    });
+
+    // Nothing newer remains, so another Previous would fetch an empty page.
+    const exhausted = parseAuditPage({ ...secondPageBody, has_more: false });
+    expect(previousAuditRequest(backward, exhausted)).toBeNull();
+
+    // A forward page came from a newer page, whatever its older-direction
+    // has_more says.
+    const forward = { ...firstAuditRequest(2), after: "cursor-4", depth: 2 };
+    expect(previousAuditRequest(forward, exhausted)).toEqual({
+      limit: 2, after: null, before: "cursor-5", depth: 1,
+    });
   });
 
   it("refuses to send both cursors", () => {
@@ -238,6 +311,32 @@ describe("audit cursor pagination", () => {
       }),
     ).rejects.toBe(err);
     expect(message(err)).toBe("after: after must be a cursor returned by this endpoint");
+  });
+});
+
+describe("audit pager window", () => {
+  it("shows loaded row positions separately from the filtered count", () => {
+    const request = { limit: 50, after: "cursor-4", before: null, depth: 2 };
+    const page = parseAuditPage({
+      entries: [entryJSON, { ...entryJSON, id: 6 }],
+      has_more: false,
+      limit: 50,
+    });
+
+    // The page holds rows 51–52; a filter may hide one but not move it.
+    expect(auditWindow(request, page)).toEqual({ from: 51, to: 52 });
+
+    const rendered = textContent(Pager({
+      from: 51,
+      to: 52,
+      note: "1 match filter",
+      hasPrev: true,
+      hasNext: false,
+      onPrev: () => {},
+      onNext: () => {},
+    }));
+    expect(rendered).toMatch(/Showing\s+51\s*–\s*52/);
+    expect(rendered).toContain("1 match filter");
   });
 });
 
