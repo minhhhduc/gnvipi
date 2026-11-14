@@ -380,6 +380,9 @@ type StoreOptions struct {
 	IsProtected func(string) bool
 	Now         func() time.Time
 	Audit       AuditFunc
+	// OnPublish runs after a snapshot becomes current. It must not block for
+	// long: it runs while the reload lock is held.
+	OnPublish func(*Snapshot)
 }
 
 // Store loads and publishes snapshots. A failed reload keeps the last-known-good
@@ -391,6 +394,7 @@ type Store struct {
 	isProtected func(string) bool
 	now         func() time.Time
 	audit       AuditFunc
+	onPublish   func(*Snapshot)
 
 	current atomic.Pointer[Snapshot]
 	lastErr atomic.Pointer[errorBox]
@@ -410,6 +414,7 @@ func NewStore(source RowSource, opts StoreOptions) *Store {
 		isProtected: opts.IsProtected,
 		now:         now,
 		audit:       opts.Audit,
+		onPublish:   opts.OnPublish,
 	}
 }
 
@@ -453,6 +458,13 @@ func (s *Store) Reload(ctx context.Context) error {
 			s.recordError(err)
 			return err
 		}
+		if current := s.Current(); current != nil && version == current.Version() {
+			// The published snapshot already reflects this version, so a rebuild
+			// would only repeat its audit and OnPublish side effects. A retry
+			// after a failed load still clears the recorded error.
+			s.recordError(nil)
+			return nil
+		}
 		snapshot, err := BuildSnapshot(rows, version, BuildOptions{
 			Keyring:     s.keyring,
 			Refs:        s.refs,
@@ -474,6 +486,9 @@ func (s *Store) Reload(ctx context.Context) error {
 		if latest <= version {
 			s.current.Store(snapshot)
 			s.lastErr.Store(nil)
+			if s.onPublish != nil {
+				s.onPublish(snapshot)
+			}
 			return nil
 		}
 	}
@@ -498,4 +513,16 @@ func (s *Store) configVersionChanged(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return version != s.Version(), nil
+}
+
+// pollReload reports whether the poll fallback must reload: the version
+// advanced, or the previous load failed and must be retried even when the
+// version is unchanged. Without the retry a single transient failure leaves
+// LastError set until the next config write.
+func (s *Store) pollReload(ctx context.Context) (bool, error) {
+	changed, err := s.configVersionChanged(ctx)
+	if err != nil {
+		return false, err
+	}
+	return changed || s.LastError() != nil, nil
 }

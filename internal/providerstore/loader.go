@@ -190,9 +190,15 @@ func (s *DBRowSource) Version(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
+// ReloadTimeout bounds one configuration reload, matching the 30-second poll
+// interval. Without it a database that blocks on a query stalls cold start or
+// the invalidation watcher instead of failing closed.
+const ReloadTimeout = 30 * time.Second
+
 // Watcher keeps a Store in sync through LISTEN gnvipi_config plus a 30-second
 // polling fallback. It reconnects with exponential backoff and reloads on
-// reconnect. Reload failures keep the last-known-good snapshot.
+// reconnect. Reload failures keep the last-known-good snapshot and are recorded
+// on the Store; OnError reports connection failures only.
 type Watcher struct {
 	Store          *Store
 	Pool           *pgxpool.Pool
@@ -200,6 +206,10 @@ type Watcher struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	OnError        func(error)
+	// OnHealthy runs after a successful reload, clearing the "not refreshing"
+	// signal an earlier OnError reported. A connected watcher that cannot
+	// refresh must not look healthy.
+	OnHealthy func()
 }
 
 // Run blocks until ctx is canceled.
@@ -233,24 +243,42 @@ func (w *Watcher) Run(ctx context.Context) error {
 			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
-		backoff = initial
+		connectedAt := time.Now()
 		// Reconnect is a possible lost-notification window: reload immediately.
-		if reloadErr := w.Store.Reload(ctx); reloadErr != nil {
-			w.report(reloadErr)
-		}
+		// The successful reload clears the connection-failure signal; reload
+		// failures are recorded on the Store, never here, so they cannot be
+		// mistaken for a dead listener.
+		w.reload(ctx)
 		listenErr := w.listen(ctx, conn, poll)
-		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup/best-effort parse
+		// listen only returns after the notification read has returned, so
+		// closing the connection here cannot race WaitForNotification's
+		// access to pgx's connection state.
+		_ = conn.Close(context.Background()) //nolint:errcheck // best-effort cleanup
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if listenErr != nil {
 			w.report(listenErr)
 		}
+		// Reset the delay only after the listener proved stable: an
+		// accept-then-drop loop must keep backing off instead of reconnecting
+		// once per initial interval forever.
+		backoff = reconnectBackoff(backoff, initial, maxBackoff, time.Since(connectedAt))
 		if waitErr := sleepContext(ctx, backoff); waitErr != nil {
 			return waitErr
 		}
 		backoff = nextBackoff(backoff, maxBackoff)
 	}
+}
+
+// reconnectBackoff returns the delay before the next connect attempt after a
+// listener dropped. A connection that survived at least maxBackoff is stable and
+// starts over; otherwise the current delay is kept.
+func reconnectBackoff(current, initial, maxBackoff, uptime time.Duration) time.Duration {
+	if uptime >= maxBackoff {
+		return initial
+	}
+	return current
 }
 
 func (w *Watcher) connect(ctx context.Context) (*pgx.Conn, error) {
@@ -270,8 +298,9 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 	notify := make(chan struct{}, 1)
 	errorsCh := make(chan error, 1)
 	listenCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	readerDone := make(chan struct{})
 	go func() {
+		defer close(readerDone)
 		for {
 			if _, err := conn.WaitForNotification(listenCtx); err != nil {
 				errorsCh <- err
@@ -282,6 +311,15 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 			default:
 			}
 		}
+	}()
+	// The reader owns the connection while it is inside WaitForNotification:
+	// pgx mutates connection state in both WaitForNotification and Close, so
+	// closing the connection before the reader has returned is a data race.
+	// Cancel the read, wait for it to finish, and only then let the caller
+	// close the connection.
+	defer func() {
+		cancel()
+		<-readerDone
 	}()
 
 	ticker := time.NewTicker(poll)
@@ -296,20 +334,30 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 			}
 			return fmt.Errorf("providerstore: notification connection lost: %w", err)
 		case <-notify:
-			if err := w.Store.Reload(ctx); err != nil {
-				w.report(err)
-			}
+			w.reload(ctx)
 		case <-ticker.C:
-			changed, err := w.Store.configVersionChanged(ctx)
+			// Retry after a failed reload even when the version is unchanged,
+			// so one transient error does not stick until the next write.
+			reload, err := w.Store.pollReload(ctx)
 			if err != nil {
 				return fmt.Errorf("providerstore: poll config version: %w", err)
 			}
-			if changed {
-				if err := w.Store.Reload(ctx); err != nil {
-					w.report(err)
-				}
+			if reload {
+				w.reload(ctx)
 			}
 		}
+	}
+}
+
+// reload publishes the current configuration. A failure keeps the last good
+// snapshot and is recorded on the Store, where /healthz reports it as a reload
+// failure rather than a watcher connection failure. The reload is bounded so a
+// blocking query cannot stall the watcher forever.
+func (w *Watcher) reload(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, ReloadTimeout)
+	defer cancel()
+	if err := w.Store.Reload(ctx); err == nil && w.OnHealthy != nil {
+		w.OnHealthy()
 	}
 }
 

@@ -8,8 +8,10 @@ import (
 )
 
 // modelsAndHealthMiddleware handles /v1/models catalog discovery and /healthz
-// status checks before CLIProxyAPI's default routes.
-func modelsAndHealthMiddleware(getModels func() []gatewayModel, exec *nvidia.Executor) gin.HandlerFunc {
+// status checks before CLIProxyAPI's default routes. runtime is the
+// database-backed configuration snapshot; it is nil in file mode, which keeps
+// the previous response shape.
+func modelsAndHealthMiddleware(getModels func() []gatewayModel, exec *nvidia.Executor, runtime *providerRuntime) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if c.Request.Method == http.MethodGet && (path == "/v1/models" || path == "/v1/models/") {
@@ -50,6 +52,27 @@ func modelsAndHealthMiddleware(getModels func() []gatewayModel, exec *nvidia.Exe
 					"takes":   takes,
 					"errors":  errs,
 					"expired": expired,
+				}
+			}
+			if runtime != nil {
+				// A degraded instance keeps serving the last known good
+				// snapshot, so the status stays 200 and the body carries the
+				// detail an operator needs (spec §8.3).
+				health := runtime.health(c.Request.Context())
+				status := "ok"
+				if health.Degraded {
+					status = "degraded"
+					out["ok"] = false
+				}
+				out["status"] = status
+				out["degraded"] = health.Degraded
+				out["db_ok"] = health.DBOK
+				out["watcher_ok"] = health.WatcherOK
+				out["snapshot_version"] = health.SnapshotVersion
+				out["config_version"] = health.ConfigVersion
+				out["snapshot_age"] = health.SnapshotAge.Seconds()
+				if health.Detail != "" {
+					out["detail"] = health.Detail
 				}
 			}
 			c.JSON(http.StatusOK, out)

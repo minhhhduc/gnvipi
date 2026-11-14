@@ -127,6 +127,13 @@ func newAdminTestPool(t *testing.T, dsn string) *pgxpool.Pool {
 		admin.Close()
 		t.Fatalf("parse dsn: %v", err)
 	}
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	// Tag this package's connections so listener assertions count only the
+	// watchers this test package owns, not ones opened by another package that
+	// shares GNVIPI_TEST_DATABASE_URL.
+	cfg.ConnConfig.RuntimeParams["application_name"] = serveTestApplicationName
 	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
 		_, err := c.Exec(ctx, "SET search_path TO "+schema+", public")
 		return err

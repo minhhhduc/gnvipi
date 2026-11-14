@@ -2,6 +2,7 @@ package providerstore
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -15,6 +16,52 @@ func TestNextBackoff(t *testing.T) {
 	}
 	if got := nextBackoff(20*time.Second, 30*time.Second); got != 30*time.Second {
 		t.Fatalf("capped backoff = %v", got)
+	}
+}
+
+// TestReconnectBackoffResetsOnlyAfterStableConnection covers the accept-then-drop
+// loop: a connection that is accepted and immediately lost must keep backing
+// off to MaxBackoff instead of resetting to the initial delay every second.
+func TestReconnectBackoffResetsOnlyAfterStableConnection(t *testing.T) {
+	const initial = time.Second
+	const maxBackoff = 30 * time.Second
+
+	if got := reconnectBackoff(4*time.Second, initial, maxBackoff, 10*time.Millisecond); got != 4*time.Second {
+		t.Fatalf("immediate-drop backoff = %v, want the current 4s", got)
+	}
+
+	backoff := initial
+	for i := 0; i < 10 && backoff != maxBackoff; i++ {
+		backoff = nextBackoff(reconnectBackoff(backoff, initial, maxBackoff, time.Millisecond), maxBackoff)
+	}
+	if backoff != maxBackoff {
+		t.Fatalf("backoff after repeated immediate drops = %v, want %v", backoff, maxBackoff)
+	}
+
+	if got := reconnectBackoff(maxBackoff, initial, maxBackoff, maxBackoff); got != initial {
+		t.Fatalf("stable-connection backoff = %v, want the initial %v", got, initial)
+	}
+}
+
+// TestWatcherReloadFailureIsNotAConnectionError keeps reload failures on the
+// Store (where /healthz reads LastError) instead of the watcher's connection
+// error slot, which would claim the LISTEN connection is unhealthy.
+func TestWatcherReloadFailureIsNotAConnectionError(t *testing.T) {
+	source := &stubSource{
+		load:    func(context.Context) (Rows, int64, error) { return Rows{}, 0, errors.New("reload failed") },
+		version: func(context.Context) (int64, error) { return 1, nil },
+	}
+	store := NewStore(source, StoreOptions{})
+
+	var reported []error
+	watcher := &Watcher{Store: store, OnError: func(err error) { reported = append(reported, err) }}
+	watcher.reload(context.Background())
+
+	if len(reported) != 0 {
+		t.Fatalf("reload failure reported as a watcher connection error: %v", reported)
+	}
+	if store.LastError() == nil {
+		t.Fatal("reload failure was not recorded on the store")
 	}
 }
 

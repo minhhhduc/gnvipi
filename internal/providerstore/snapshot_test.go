@@ -141,6 +141,7 @@ func TestBuildSnapshotDisabledProviderAndKeyAreNotRoutable(t *testing.T) {
 
 func TestStorePublishesAndKeepsLastKnownGood(t *testing.T) {
 	rows := baseRows()
+	version := int64(3)
 	var loadErr error
 	var loadCalls int
 	source := &stubSource{
@@ -149,9 +150,9 @@ func TestStorePublishesAndKeepsLastKnownGood(t *testing.T) {
 			if loadErr != nil {
 				return Rows{}, 0, loadErr
 			}
-			return rows, 3, nil
+			return rows, version, nil
 		},
-		version: func(context.Context) (int64, error) { return 3, nil },
+		version: func(context.Context) (int64, error) { return version, nil },
 	}
 	store := NewStore(source, StoreOptions{Now: fixedNow})
 	if store.Current() != nil || store.Version() != 0 {
@@ -176,8 +177,11 @@ func TestStorePublishesAndKeepsLastKnownGood(t *testing.T) {
 		t.Fatal("last error not recorded")
 	}
 
-	// A structurally invalid row keeps the previous snapshot as well.
+	// A structurally invalid row keeps the previous snapshot as well. A config
+	// write always bumps config_state.version, so the invalid rows arrive at a
+	// new version.
 	loadErr = nil
+	version = 4
 	rows = baseRows()
 	rows.Providers[0].Protocol = "broken"
 	if err := store.Reload(context.Background()); !errors.Is(err, ErrInvalidConfig) {
@@ -231,5 +235,85 @@ func TestStoreGivesUpWhenVersionKeepsAdvancing(t *testing.T) {
 	}
 	if store.LastError() == nil {
 		t.Fatal("last error not recorded")
+	}
+}
+
+// TestStorePollRetriesReloadAfterTransientFailure covers the poll fallback: a
+// single failed reload with an unchanged config version must not leave
+// LastError stuck until the next write. The next poll tick must retry, and a
+// successful retry clears the error.
+func TestStorePollRetriesReloadAfterTransientFailure(t *testing.T) {
+	var loadErr error
+	source := &stubSource{
+		load: func(context.Context) (Rows, int64, error) {
+			if loadErr != nil {
+				return Rows{}, 0, loadErr
+			}
+			return baseRows(), 3, nil
+		},
+		version: func(context.Context) (int64, error) { return 3, nil },
+	}
+	store := NewStore(source, StoreOptions{Now: fixedNow})
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+
+	loadErr = errors.New("database unavailable")
+	if err := store.Reload(context.Background()); err == nil {
+		t.Fatal("reload with a failing source returned no error")
+	}
+	if store.LastError() == nil {
+		t.Fatal("last error not recorded")
+	}
+
+	reload, err := store.pollReload(context.Background())
+	if err != nil {
+		t.Fatalf("poll decision: %v", err)
+	}
+	if !reload {
+		t.Fatal("poll tick did not schedule a retry while LastError is set")
+	}
+
+	loadErr = nil
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("retry reload: %v", err)
+	}
+	if store.LastError() != nil {
+		t.Fatalf("last error survives a successful reload: %v", store.LastError())
+	}
+}
+
+// TestStoreReloadSkipsPublishWhenVersionUnchanged covers criterion (b): a
+// reconnect or notification with no committed write must not rebuild and
+// republish, which would duplicate audit and OnPublish side effects.
+func TestStoreReloadSkipsPublishWhenVersionUnchanged(t *testing.T) {
+	rows := baseRows()
+	rows.Keys[0].AuthScheme = SchemeBearer
+	rows.Keys[0].SecretEnc = []byte("ciphertext")
+	rows.Keys[0].SecretNonce = make([]byte, SecretNonceSize)
+	rows.Keys[0].SecretKVer = 1
+	rows.Keys[0].SecretLast4 = "last"
+
+	publishes, audits := 0, 0
+	source := &stubSource{
+		load:    func(context.Context) (Rows, int64, error) { return rows, 3, nil },
+		version: func(context.Context) (int64, error) { return 3, nil },
+	}
+	store := NewStore(source, StoreOptions{
+		Now:       fixedNow,
+		OnPublish: func(*Snapshot) { publishes++ },
+		Audit:     func(AuditEvent) { audits++ },
+	})
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+	if err := store.Reload(context.Background()); err != nil {
+		t.Fatalf("unchanged-version reload: %v", err)
+	}
+	if publishes != 1 {
+		t.Fatalf("publishes = %d, want 1 for an unchanged config version", publishes)
+	}
+	if audits != 1 {
+		t.Fatalf("audit events = %d, want 1 for an unchanged config version", audits)
 	}
 }
