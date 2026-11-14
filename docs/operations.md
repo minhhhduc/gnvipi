@@ -3,6 +3,9 @@
 Running the gateway: flags, storage, the Admin Console, virtual models, and what
 to check when a request fails. Configuration of upstreams lives in
 [providers.md](providers.md); client-side setup lives in [clients.md](clients.md).
+Database provisioning and backup are in
+[postgres-operations.md](postgres-operations.md); roles, bootstrap and provider
+key handling are in [auth.md](auth.md).
 
 ## Run flags
 
@@ -56,6 +59,7 @@ Plain-HTTP cookie login is allowed only on loopback; remote browser login requir
 a real TLS connection, not an untrusted forwarded scheme header. All mutations
 require same-origin browser provenance. Explicit `-admin-token` values override
 the environment, including empty values; non-loopback access then stays closed.
+Database-backed sign-in, roles and bootstrap are in [auth.md](auth.md).
 
 - **`?page=dashboard`:** Real-time request and token throughput KPIs, TTFT, p95 latency over the last 200 requests, error rates, and 200-request rolling history frames surviving restarts. Aggregate counters and charts reset on server restart. Logs default to `gnvipi/stats.jsonl` under the OS user cache directory (override with `GNVIPI_STATS_FILE`).
 - **`?page=models`:** Toggle models on/off (persisted), delete/restore catalog entries, and configure v2 custom providers with live validation.
@@ -175,4 +179,5 @@ fully validated and reports it:
 | `detail` | Fixed category (`database unreachable`, `reload failed`, `watcher not refreshing`); driver error text is logged server-side, never returned. |
 
 Without `GNVIPI_DATABASE_URL` these fields are absent and `/healthz` keeps its
-file-mode shape.
+file-mode shape. Provisioning, migrations, backups, restore checks and retention
+are in [postgres-operations.md](postgres-operations.md).
