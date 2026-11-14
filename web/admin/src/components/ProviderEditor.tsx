@@ -81,6 +81,7 @@ function init(provider: Provider | null) {
     enabled: provider?.enabled ?? true,
     tls: provider?.tls || "default",
     scheme: provider?.auth?.scheme === "api-key" ? "x-api-key" : provider?.auth?.scheme || "bearer",
+    source: provider?.auth?.key_env ? "env" : provider?.auth?.key_ref ? "ref" : "key",
     key: "",
     keyEnv: provider?.auth?.key_env || "",
     keyRef: provider?.auth?.key_ref || "",
@@ -164,7 +165,11 @@ export function ProviderEditor({
     // The web always sends the credential as a bearer token; the API key is the
     // only auth input in this console.
     const auth: Provider["auth"] = { scheme: provider?.auth?.scheme === "none" ? "none" : "bearer" };
-    if (auth.scheme !== "none" && f.key.trim()) auth.key = f.key.trim();
+    if (auth.scheme !== "none") {
+      if (f.source === "key" && f.key.trim()) auth.key = f.key.trim();
+      if (f.source === "env" && f.keyEnv.trim()) auth.key_env = f.keyEnv.trim();
+      if (f.source === "ref" && f.keyRef.trim()) auth.key_ref = f.keyRef.trim();
+    }
     const mapping = f.mappings
       .filter((m) => m.alias.trim())
       .map((m) => {
@@ -335,11 +340,32 @@ export function ProviderEditor({
           </Section>
 
           <Section title="API key">
-            <Field label="API key">
-              <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "paste the provider API key"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
+            <Field label="Credential source">
+              <select class="input" value={f.source} onChange={(e) => patch({ source: (e.target as HTMLSelectElement).value })}>
+                <option value="key">API key (paste it here)</option>
+                <option value="env">Other · environment variable</option>
+                <option value="ref">Other · key reference</option>
+              </select>
             </Field>
+            {f.source === "key" && (
+              <Field label="API key">
+                <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "paste the provider API key"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
+            {f.source === "env" && (
+              <Field label="Environment variable">
+                <input class="input mono" value={f.keyEnv} placeholder="OPENAI_API_KEY" onInput={(e) => patch({ keyEnv: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
+            {f.source === "ref" && (
+              <Field label="Key reference">
+                <input class="input mono" value={f.keyRef} placeholder="vault/provider-key" onInput={(e) => patch({ keyRef: (e.target as HTMLInputElement).value })} />
+              </Field>
+            )}
             <span class="block text-[11px] text-dim">
-              Sent as <code class="mono">Authorization: Bearer &lt;key&gt;</code>. Write-only: only the last four characters are shown later.
+              {f.source === "key"
+                ? "Sent as Authorization: Bearer <key>. Write-only: only the last four characters are shown later."
+                : "The credential is read from the selected source; the value never enters this form."}
             </span>
           </Section>
 
