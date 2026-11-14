@@ -26,7 +26,10 @@ import (
 // database; GNVIPI_REQUIRE_DB_TESTS=true turns a missing database into a
 // failure.
 
-var integrationSchemaOnce sync.Once
+var (
+	integrationSchemaOnce sync.Once
+	integrationSchemaErr  error
+)
 
 func integrationDSN(t *testing.T) string {
 	t.Helper()
@@ -42,10 +45,13 @@ func integrationDSN(t *testing.T) string {
 
 func integrationEnsureSchema(t *testing.T, dsn string) {
 	t.Helper()
-	var err error
-	integrationSchemaOnce.Do(func() { err = db.Migrate(context.Background(), dsn) })
-	if err != nil {
-		t.Fatalf("migrate integration database: %v", err)
+	integrationSchemaOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		integrationSchemaErr = db.Migrate(ctx, dsn)
+	})
+	if integrationSchemaErr != nil {
+		t.Fatalf("migrate integration database: %v", integrationSchemaErr)
 	}
 }
 

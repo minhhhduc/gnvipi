@@ -114,7 +114,7 @@ func openConfiguredProviderRuntime(ctx context.Context, state *appDB) (*provider
 		// A missing master key is not fatal: keys without stored secrets stay
 		// routable and encrypted keys degrade to diagnostics instead of
 		// failing the whole snapshot.
-		log.Printf("warning: %s is not set; stored provider credentials cannot be decrypted", "GNVIPI_MASTER_KEY")
+		log.Printf("warning: GNVIPI_MASTER_KEY is not set; keys with stored secrets are excluded from routing")
 	}
 	runtime, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(state.pool), providerRuntimeOptions{
 		Keyring:     keyring,
@@ -199,9 +199,12 @@ func (r *providerRuntime) health(ctx context.Context) snapshotHealth {
 			health.ConfigVersion = version
 		}
 	}
-	if err := r.store.LastError(); err != nil {
-		health.Detail = err.Error()
+	lastErr := r.store.LastError()
+	if lastErr != nil {
+		health.Detail = lastErr.Error()
 	}
-	health.Degraded = !health.DBOK || snapshot == nil || r.store.LastError() != nil
+	// Derive every field from the snapshot captured above: a reload landing
+	// mid-probe must not produce a body that mixes two versions.
+	health.Degraded = !health.DBOK || snapshot == nil || lastErr != nil
 	return health
 }
