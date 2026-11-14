@@ -98,7 +98,9 @@ func openProviderRuntime(ctx context.Context, source providerstore.RowSource, op
 			logSnapshotDiagnostics(logf, snapshot)
 		},
 	})
-	if err := store.Reload(ctx); err != nil {
+	reloadCtx, cancelReload := context.WithTimeout(ctx, providerstore.ReloadTimeout)
+	defer cancelReload()
+	if err := store.Reload(reloadCtx); err != nil {
 		return nil, fmt.Errorf("provider snapshot: %w", err)
 	}
 	runtime := &providerRuntime{
@@ -296,7 +298,11 @@ func (r *providerRuntime) cachedHealth(ctx context.Context) snapshotHealth {
 			if completed {
 				return result
 			}
-			return snapshotHealth{SnapshotVersion: r.store.Version(), Degraded: true}
+			return snapshotHealth{
+				SnapshotVersion: r.store.Version(),
+				ConfigVersion:   r.lastConfigVersion.Load(),
+				Degraded:        true,
+			}
 		}
 		r.healthMu.Lock()
 		result := r.healthResult

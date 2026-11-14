@@ -190,6 +190,11 @@ func (s *DBRowSource) Version(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
+// ReloadTimeout bounds one configuration reload, matching the 30-second poll
+// interval. Without it a database that blocks on a query stalls cold start or
+// the invalidation watcher instead of failing closed.
+const ReloadTimeout = 30 * time.Second
+
 // Watcher keeps a Store in sync through LISTEN gnvipi_config plus a 30-second
 // polling fallback. It reconnects with exponential backoff and reloads on
 // reconnect. Reload failures keep the last-known-good snapshot and are recorded
@@ -201,8 +206,9 @@ type Watcher struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	OnError        func(error)
-	// OnHealthy runs after a successful connect, clearing the "not refreshing"
-	// signal an earlier OnError reported.
+	// OnHealthy runs after a successful reload, clearing the "not refreshing"
+	// signal an earlier OnError reported. A connected watcher that cannot
+	// refresh must not look healthy.
 	OnHealthy func()
 }
 
@@ -238,13 +244,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 			continue
 		}
 		connectedAt := time.Now()
-		// A successful connect clears the connection-failure signal. Reload
+		// Reconnect is a possible lost-notification window: reload immediately.
+		// The successful reload clears the connection-failure signal; reload
 		// failures are recorded on the Store, never here, so they cannot be
 		// mistaken for a dead listener.
-		if w.OnHealthy != nil {
-			w.OnHealthy()
-		}
-		// Reconnect is a possible lost-notification window: reload immediately.
 		w.reload(ctx)
 		listenErr := w.listen(ctx, conn, poll)
 		// listen only returns after the notification read has returned, so
@@ -348,9 +351,14 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 
 // reload publishes the current configuration. A failure keeps the last good
 // snapshot and is recorded on the Store, where /healthz reports it as a reload
-// failure rather than a watcher connection failure.
+// failure rather than a watcher connection failure. The reload is bounded so a
+// blocking query cannot stall the watcher forever.
 func (w *Watcher) reload(ctx context.Context) {
-	_ = w.Store.Reload(ctx) //nolint:errcheck // Reload records the error; the poll tick retries it.
+	ctx, cancel := context.WithTimeout(ctx, ReloadTimeout)
+	defer cancel()
+	if err := w.Store.Reload(ctx); err == nil && w.OnHealthy != nil {
+		w.OnHealthy()
+	}
 }
 
 func (w *Watcher) report(err error) {

@@ -869,4 +869,7 @@ func TestProviderRuntimeCanceledWaiterReportsDegraded(t *testing.T) {
 	if !health.Degraded {
 		t.Fatalf("canceled waiter reported degraded=false (zero value): %+v", health)
 	}
+	if health.ConfigVersion != 5 {
+		t.Fatalf("canceled waiter config_version = %d, want the last observed 5", health.ConfigVersion)
+	}
 }
