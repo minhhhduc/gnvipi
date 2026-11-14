@@ -235,6 +235,8 @@ export function App() {
   const body =
     effectivePage === "tokens" ? <TokensView user={user} /> :
     effectivePage === "users" && operator ? <UsersView user={user} /> :
+    // Models is open to every role: users manage only their own keys there.
+    effectivePage === "models" ? <ModelsView user={user} /> :
     !operator ? (
       <>
         <PageHeader title="Stats" sub="Usage for this gateway account" />
@@ -246,7 +248,6 @@ export function App() {
         </Card>
       </>
     ) :
-    effectivePage === "models" ? <ModelsView /> :
     effectivePage === "config" ? <ConfigView /> :
     effectivePage === "chromes" ? <ChromesView /> :
     <StatsView />;

@@ -145,6 +145,30 @@ export function CardHead({ title, sub, children }: { title: string; sub?: string
   );
 }
 
+/** A long base URL that wraps instead of stretching the layout, plus a copy button. */
+export function BaseUrlLine({
+  url,
+  label = "Base URL",
+  onCopy,
+}: {
+  url: string;
+  label?: string;
+  onCopy?: () => void;
+}) {
+  if (!url) return null;
+  return (
+    <div class="flex min-w-0 items-start gap-2">
+      <span class="shrink-0 text-[11px] text-dim">{label}</span>
+      <span class="mono min-w-0 flex-1 break-all text-[11px] leading-4 text-dim" title={url}>{url}</span>
+      {onCopy && (
+        <button class="btn btn-sm shrink-0" type="button" title="Copy base URL" aria-label={`Copy ${label.toLowerCase()}`} onClick={onCopy}>
+          Copy
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Empty({ title, body }: { title: string; body: string }) {
   return (
     <div class="flex flex-col items-center justify-center gap-1 px-4 py-11 text-center text-dim">

@@ -70,6 +70,36 @@ export interface ModelsResponse {
   deleted?: string[];
 }
 
+/** One provider API key. The server only ever returns metadata plus has_secret/last4. */
+export interface ProviderKey {
+  id: string;
+  provider_id: string;
+  owner_id: string | null;
+  name: string;
+  enabled: boolean;
+  auth_scheme: string;
+  auth_header_name: string;
+  has_secret: boolean;
+  secret_last4: string | null;
+  has_key_env: boolean;
+  has_key_ref: boolean;
+  key_env?: string;
+  key_ref?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** One model alias assigned to a key. */
+export interface KeyModel {
+  alias: string;
+  upstream_model: string;
+  hidden: boolean;
+  fallbacks: string[];
+  fallback_statuses: number[];
+  allow_shadow: boolean;
+  legacy_position: number;
+}
+
 export interface MinuteStats {
   minute: string;
   requests: number;

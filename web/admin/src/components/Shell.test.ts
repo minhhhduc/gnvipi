@@ -47,10 +47,10 @@ describe("Shell role navigation", () => {
     expect(text).toContain("Chrome");
   });
 
-  it("hides operator-only screens from users", () => {
+  it("shows Models to users and hides the other operator-only screens", () => {
     const text = renderShell("user");
     expect(text).toContain("Stats");
-    expect(text).not.toContain("Models");
+    expect(text).toContain("Models");
     expect(text).not.toContain("Config");
     expect(text).not.toContain("Chrome");
   });
