@@ -115,6 +115,9 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     if (!model || streaming) return;
     const controller = new AbortController();
     abort.current = controller;
+    // Show the turn (and the empty assistant placeholder) before any network
+    // wait, so a failed request still leaves the sent message visible.
+    setTurns(history);
     setStreaming(true);
     setError("");
     const started = performance.now();
