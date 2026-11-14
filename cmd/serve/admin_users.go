@@ -139,7 +139,7 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the user")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.create", "user", user.ID, user.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.create", "user", user.ID, user.ID, "", "", "", map[string]any{
 			"username": user.Username,
 			"role":     string(user.Role),
 		}); err != nil {
@@ -237,7 +237,7 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.update", "user", user.ID, user.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.update", "user", user.ID, user.ID, "", "", "", map[string]any{
 			"username": user.Username,
 			"role":     string(user.Role),
 			"status":   string(user.Status),
@@ -279,7 +279,7 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 			}
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.delete", "user", target.ID, target.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.delete", "user", target.ID, target.ID, "", "", "", map[string]any{
 			"username": target.Username,
 			"role":     string(target.Role),
 		}); err != nil {
@@ -377,7 +377,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke credentials")
 			return
 		}
-		if err := writeAdminAudit(ctx, tx, identity, "user.revoke", "user", target.ID, target.ID, map[string]any{
+		if err := writeAdminAudit(ctx, tx, identity, "user.revoke", "user", target.ID, target.ID, "", "", "", map[string]any{
 			"username":         target.Username,
 			"revoked_sessions": sessions,
 			"revoked_tokens":   tokens,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
@@ -91,6 +92,10 @@ func (r *keyWriteRequest) ownerScope() (present, shared bool, id string, err err
 	if err := json.Unmarshal(r.OwnerID, &id); err != nil || strings.TrimSpace(id) == "" {
 		return true, false, "", errInvalidOwnerID
 	}
+	var parsed pgtype.UUID
+	if err := parsed.Scan(id); err != nil || !parsed.Valid {
+		return true, false, "", errInvalidOwnerID
+	}
 	return true, false, id, nil
 }
 
@@ -150,24 +155,11 @@ func (r *keyWriteRequest) adminDisableOnly() bool {
 		r.Secret == nil && r.KeyEnv == nil && r.KeyRef == nil && !r.ClearSecret
 }
 
-// adminKeyFieldError answers with the shared validation envelope and lists the
-// offending field once in every shape the console and tests read.
-func adminKeyFieldError(c *gin.Context, status int, field, problem string) {
-	fields := []gin.H{{"field": field, "problem": problem}}
-	c.JSON(status, gin.H{
-		"error":        problem,
-		"field":        field,
-		"fields":       map[string]string{field: problem},
-		"errors":       fields,
-		"field_errors": fields,
-	})
-}
-
 func adminKeyCredentialError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, providerstore.ErrInvalidCredentialSource),
 		errors.Is(err, providerstore.ErrClearSecretNotAllowed):
-		adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", strings.TrimPrefix(err.Error(), "providerstore: "))
+		adminFieldError(c, http.StatusUnprocessableEntity, "credential", strings.TrimPrefix(err.Error(), "providerstore: "))
 	case errors.Is(err, providerstore.ErrMissingMasterKey):
 		adminAPIError(c, http.StatusInternalServerError, "master_key_missing", "provider key encryption is not configured")
 	default:
@@ -179,13 +171,13 @@ func adminKeyStoreError(c *gin.Context, err error) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, providerstore.ErrDuplicateKeyName):
-		adminKeyFieldError(c, http.StatusConflict, "name", "this name is already used in the same owner scope")
+		adminFieldError(c, http.StatusConflict, "name", "this name is already used in the same owner scope")
 	case errors.Is(err, providerstore.ErrDuplicateKeyAlias):
-		adminKeyFieldError(c, http.StatusConflict, "alias", "this alias is already used in the same owner scope")
+		adminFieldError(c, http.StatusConflict, "alias", "this alias is already used in the same owner scope")
 	case errors.Is(err, providerstore.ErrKeyNotFound), errors.Is(err, providerstore.ErrProviderNotFound):
 		adminNotFoundResponse(c)
 	case errors.As(err, &pgErr) && pgErr.Code == "23503":
-		adminKeyFieldError(c, http.StatusUnprocessableEntity, "owner_id", "owner does not exist")
+		adminFieldError(c, http.StatusUnprocessableEntity, "owner_id", "owner does not exist")
 	default:
 		adminAPIError(c, http.StatusInternalServerError, "internal_error", "provider key write failed")
 	}
@@ -234,15 +226,6 @@ func keyListJSON(records []providerstore.KeyRecord) gin.H {
 	return gin.H{"keys": keys}
 }
 
-func writeKeyAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action string, key *providerstore.KeyRow, ip string, details map[string]any) error {
-	entry := adminAuditActor(identity)
-	entry.Action, entry.TargetType, entry.TargetID = action, "provider_key", key.ID
-	entry.UserID, entry.KeyID, entry.ProviderID = key.OwnerID, key.ID, key.ProviderID
-	entry.IP = ip
-	entry.Details = details
-	return auth.WriteAudit(ctx, q, entry)
-}
-
 // loadKey resolves the :id/:keyID path pair and enforces row-level reach. A
 // caller with no reach gets the same 404 a missing key gets, so key ids cannot
 // be probed across subjects.
@@ -271,15 +254,18 @@ func handleAdminKeyList(state *authState) gin.HandlerFunc {
 		identity := adminIdentityOf(c)
 		providerID := strings.TrimSpace(c.Param("id"))
 		ctx := c.Request.Context()
-		if _, err := providerstore.GetProviderRow(ctx, state.pool, providerID); err != nil {
-			if errors.Is(err, providerstore.ErrProviderNotFound) {
-				adminNotFoundResponse(c)
-				return
-			}
+		if exists, err := providerstore.ProviderExists(ctx, state.pool, providerID); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "read provider failed")
 			return
+		} else if !exists {
+			adminNotFoundResponse(c)
+			return
 		}
-		records, err := providerstore.ListProviderKeys(ctx, state.pool, providerID)
+		ownerScope := ""
+		if identity != nil && identity.Role == auth.RoleUser {
+			ownerScope = identity.UserID
+		}
+		records, err := providerstore.ListProviderKeys(ctx, state.pool, providerID, ownerScope)
 		if err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "list provider keys failed")
 			return
@@ -313,12 +299,11 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 		if !decodeKeyRequest(c, &body) {
 			return
 		}
-		if _, err := providerstore.GetProviderRow(ctx, state.pool, providerID); err != nil {
-			if errors.Is(err, providerstore.ErrProviderNotFound) {
-				adminNotFoundResponse(c)
-				return
-			}
+		if exists, err := providerstore.ProviderExists(ctx, state.pool, providerID); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "read provider failed")
+			return
+		} else if !exists {
+			adminNotFoundResponse(c)
 			return
 		}
 		name := ""
@@ -326,7 +311,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			name = strings.TrimSpace(*body.Name)
 		}
 		if name == "" || len(name) > keyNameMaxLength {
-			adminKeyFieldError(c, http.StatusBadRequest, "name", "name must be 1-100 characters")
+			adminFieldError(c, http.StatusBadRequest, "name", "name must be 1-100 characters")
 			return
 		}
 		ownerID, ok := createKeyOwner(c, identity, &body)
@@ -338,14 +323,14 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 		case body.AuthScheme != nil:
 			scheme = strings.TrimSpace(*body.AuthScheme)
 		case body.AuthHeaderName != nil && strings.TrimSpace(*body.AuthHeaderName) != "":
-			adminKeyFieldError(c, http.StatusBadRequest, "auth_scheme", "auth_scheme is required with auth_header_name")
+			adminFieldError(c, http.StatusBadRequest, "auth_scheme", "auth_scheme is required with auth_header_name")
 			return
 		case body.carriesCredential():
 			// A credential without a scheme is the common bearer case.
 			scheme = providerstore.SchemeBearer
 		}
 		if noneSchemeRejectsCredential(scheme, &body) {
-			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
 			return
 		}
 		enabled := true
@@ -391,7 +376,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			"has_key_env": record.KeyEnv != "",
 			"has_key_ref": record.KeyRef != "",
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.create", &record.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeAdminAudit(ctx, tx, identity, "key.create", "provider_key", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -408,7 +393,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteRequest) (string, bool) {
 	present, shared, id, err := body.ownerScope()
 	if err != nil {
-		adminKeyFieldError(c, http.StatusBadRequest, "owner_id", err.Error())
+		adminFieldError(c, http.StatusBadRequest, "owner_id", err.Error())
 		return "", false
 	}
 	if !present {
@@ -437,7 +422,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			return
 		}
 		if len(body.OwnerID) > 0 {
-			adminKeyFieldError(c, http.StatusBadRequest, "owner_id", "ownership cannot be changed")
+			adminFieldError(c, http.StatusBadRequest, "owner_id", "ownership cannot be changed")
 			return
 		}
 		tx, err := state.pool.Begin(ctx)
@@ -456,7 +441,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 		}
 		patch := body.keyPatch(identity)
 		if noneSchemeRejectsCredential(patchScheme(record.AuthScheme, patch), &body) {
-			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
 			return
 		}
 		next, err := providerstore.ApplyKeyPatch(record.KeyRow, patch, state.keyring)
@@ -467,7 +452,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 		if body.Name != nil {
 			name := strings.TrimSpace(*body.Name)
 			if name == "" || len(name) > keyNameMaxLength {
-				adminKeyFieldError(c, http.StatusBadRequest, "name", "name must be 1-100 characters")
+				adminFieldError(c, http.StatusBadRequest, "name", "name must be 1-100 characters")
 				return
 			}
 			next.Name = name
@@ -485,7 +470,7 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			"has_key_env": updated.KeyEnv != "",
 			"has_key_ref": updated.KeyRef != "",
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.update", &updated.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeAdminAudit(ctx, tx, identity, "key.update", "provider_key", updated.ID, updated.OwnerID, updated.ID, updated.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -519,7 +504,7 @@ func handleAdminKeyDelete(state *authState) gin.HandlerFunc {
 			"name":        record.Name,
 			"auth_scheme": record.AuthScheme,
 		}
-		if err := writeKeyAudit(ctx, tx, identity, "key.delete", &record.KeyRow, c.ClientIP(), details); err != nil {
+		if err := writeAdminAudit(ctx, tx, identity, "key.delete", "provider_key", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), details); err != nil {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
 			return
 		}
@@ -550,12 +535,12 @@ func handleAdminKeyTest(state *authState) gin.HandlerFunc {
 			return
 		}
 		if record.AuthScheme == providerstore.SchemeNone {
-			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", "a key without a credential cannot be tested")
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "a key without a credential cannot be tested")
 			return
 		}
 		credential, err := providerstore.ResolveKeyCredential(ctx, record.KeyRow, state.keyring, nil)
 		if err != nil {
-			adminKeyFieldError(c, http.StatusUnprocessableEntity, "credential", strings.TrimPrefix(err.Error(), "providerstore: "))
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", strings.TrimPrefix(err.Error(), "providerstore: "))
 			return
 		}
 		providerRow, err := providerstore.GetProviderRow(ctx, state.pool, record.ProviderID)
@@ -569,7 +554,7 @@ func handleAdminKeyTest(state *authState) gin.HandlerFunc {
 		}
 		definition, err := providerstore.BuildProviderDefinition(providerRow)
 		if err != nil {
-			adminKeyFieldError(c, http.StatusUnprocessableEntity, "provider", "provider configuration is invalid")
+			adminFieldError(c, http.StatusUnprocessableEntity, "provider", "provider configuration is invalid")
 			return
 		}
 		c.JSON(http.StatusOK, probeKeyCredential(ctx, &definition, &record.KeyRow, credential))
@@ -656,6 +641,10 @@ func keyModelsJSON(models []providerstore.KeyModel) []gin.H {
 	return out
 }
 
+// validate only shapes the request (trim, column lengths and the one
+// cross-row rule the canonical validator cannot see). Every semantic rule
+// lives in providerstore.ValidateKeyModelRow, which ReplaceKeyModels runs
+// before writing.
 func (r keyModelsRequest) validate() (models []providerstore.KeyModel, field, problem string) {
 	models = make([]providerstore.KeyModel, 0, len(r.Models))
 	seen := make(map[string]bool, len(r.Models))
@@ -664,12 +653,6 @@ func (r keyModelsRequest) validate() (models []providerstore.KeyModel, field, pr
 		if alias == "" || len(alias) > 200 {
 			return nil, "alias", "alias must be 1-200 characters"
 		}
-		if strings.Contains(alias, "*") && (alias != "/*" && !strings.HasSuffix(alias, "/*")) {
-			return nil, "alias", "a wildcard alias must end in /*"
-		}
-		if alias == "/*" {
-			return nil, "alias", "/* is not a valid alias"
-		}
 		if seen[alias] {
 			return nil, "alias", "this alias is used twice in the request"
 		}
@@ -677,23 +660,6 @@ func (r keyModelsRequest) validate() (models []providerstore.KeyModel, field, pr
 		upstream := strings.TrimSpace(model.UpstreamModel)
 		if len(upstream) > 200 {
 			return nil, "upstream_model", "upstream_model must be at most 200 characters"
-		}
-		if upstream == "" && !strings.HasSuffix(alias, "/*") {
-			return nil, "upstream_model", "upstream_model is required unless the alias ends in /*"
-		}
-		if len(model.Fallbacks) > 16 {
-			return nil, "fallbacks", "at most 16 fallbacks are allowed"
-		}
-		for _, fallback := range model.Fallbacks {
-			if fallback == alias {
-				return nil, "fallbacks", "a fallback cannot name the alias itself"
-			}
-		}
-		if len(model.FallbackStatuses) > 32 {
-			return nil, "fallback_statuses", "at most 32 fallback statuses are allowed"
-		}
-		if model.LegacyPosition < 0 {
-			return nil, "legacy_position", "legacy_position must not be negative"
 		}
 		models = append(models, providerstore.KeyModel{
 			Alias:            alias,
@@ -717,7 +683,7 @@ func handleAdminKeyModelReplace(state *authState) gin.HandlerFunc {
 		}
 		models, field, problem := body.validate()
 		if field != "" {
-			adminKeyFieldError(c, http.StatusBadRequest, field, problem)
+			adminFieldError(c, http.StatusBadRequest, field, problem)
 			return
 		}
 		tx, err := state.pool.Begin(ctx)
@@ -735,6 +701,10 @@ func handleAdminKeyModelReplace(state *authState) gin.HandlerFunc {
 			return
 		}
 		if err := providerstore.ReplaceKeyModels(ctx, tx, record.KeyRow, models); err != nil {
+			if errors.Is(err, providerstore.ErrInvalidConfig) {
+				adminFieldError(c, http.StatusUnprocessableEntity, "models", strings.TrimPrefix(err.Error(), "providerstore: "))
+				return
+			}
 			adminKeyStoreError(c, err)
 			return
 		}

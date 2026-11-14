@@ -730,3 +730,44 @@ func TestDBAdminKeys_TestEndpoint(t *testing.T) {
 	}
 	assertFieldError(t, decodeBody(t, res), "credential")
 }
+
+// TestDBAdminKeys_ModelPayloadCanonicalValidation keeps rows that the snapshot
+// loader would reject out of the database: the canonical validator runs inside
+// ReplaceKeyModels, not a weaker request-local copy.
+func TestDBAdminKeys_ModelPayloadCanonicalValidation(t *testing.T) {
+	h := newDBAdminHarness(t)
+	insertTestProvider(t, h, keyTestProviderURL)
+	key := createTestKey(t, h, bearer(h.token), gin.H{"name": "canonical models", "secret": keyTestSecret})
+	keyID, _ := key["id"].(string)
+
+	res := makeRequest(t, h.engine, http.MethodPut, keysPath(keyID)+"/models", gin.H{
+		"models": []gin.H{{"alias": "gpt-issue203", "upstream_model": "gpt-4o"}},
+	}, bearer(h.token))
+	if res.Code != http.StatusOK {
+		t.Fatalf("seed models = %d, want 200 (body %s)", res.Code, res.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name  string
+		model gin.H
+	}{
+		{"alias with space", gin.H{"alias": "bad alias", "upstream_model": "m"}},
+		{"empty fallback", gin.H{"alias": "a", "upstream_model": "m", "fallbacks": []string{""}}},
+		{"wildcard fallback", gin.H{"alias": "a", "upstream_model": "m", "fallbacks": []string{"*"}}},
+		{"status out of range", gin.H{"alias": "a", "upstream_model": "m", "fallback_statuses": []int{99}}},
+		{"legacy position overflow", gin.H{"alias": "a", "upstream_model": "m", "legacy_position": 2147483648}},
+	} {
+		res = makeRequest(t, h.engine, http.MethodPut, keysPath(keyID)+"/models", gin.H{
+			"models": []gin.H{tc.model},
+		}, bearer(h.token))
+		if res.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s = %d, want 422 (body %s)", tc.name, res.Code, res.Body.String())
+		}
+		assertFieldError(t, decodeBody(t, res), "models")
+	}
+
+	res = makeRequest(t, h.engine, http.MethodGet, keysPath(keyID)+"/models", nil, bearer(h.token))
+	if items, _ := decodeBody(t, res)["models"].([]any); len(items) != 1 {
+		t.Fatalf("models after rejected writes = %v, want the seed mapping", items)
+	}
+}

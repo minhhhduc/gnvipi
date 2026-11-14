@@ -53,6 +53,22 @@ func TestSanitizeDetailsAllowlist(t *testing.T) {
 	}
 }
 
+func TestSanitizeDetailsKeepsProviderKeyAuditFields(t *testing.T) {
+	clean, err := SanitizeDetails(map[string]any{
+		"auth_scheme": "bearer",
+		"has_secret":  true,
+		"has_key_env": false,
+		"has_key_ref": false,
+	})
+	if err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	if clean["auth_scheme"] != "bearer" || clean["has_secret"] != true ||
+		clean["has_key_env"] != false || clean["has_key_ref"] != false {
+		t.Fatalf("provider key audit fields dropped: %#v", clean)
+	}
+}
+
 func TestSanitizeDetailsDropsUnsupportedAndRejectsOversized(t *testing.T) {
 	clean, err := SanitizeDetails(map[string]any{
 		"count": make(chan int), // allowed key, non-scalar value

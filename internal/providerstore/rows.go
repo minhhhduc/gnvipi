@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
@@ -326,7 +328,7 @@ func ValidateKeyRow(k KeyRow) error {
 		}
 	}
 	if k.KeyRef != "" {
-		if len(k.KeyRef) > 512 || strings.ContainsAny(k.KeyRef, "\x00\r\n") {
+		if len(k.KeyRef) > 512 || strings.IndexFunc(k.KeyRef, unicode.IsControl) >= 0 {
 			return fmt.Errorf("%w: key %s has invalid key_ref", ErrInvalidCredentialSource, k.ID)
 		}
 	}
@@ -359,8 +361,8 @@ func ValidateKeyModelRow(m KeyModelRow) error {
 	if _, err := decodeFallbackStatuses(m.FallbackStatuses); err != nil {
 		return fmt.Errorf("%w: alias %q: %w", ErrInvalidConfig, m.Alias, err)
 	}
-	if m.LegacyPosition < 0 {
-		return fmt.Errorf("%w: alias %q has negative legacy_position", ErrInvalidConfig, m.Alias)
+	if m.LegacyPosition < 0 || m.LegacyPosition > math.MaxInt32 {
+		return fmt.Errorf("%w: alias %q has out-of-range legacy_position", ErrInvalidConfig, m.Alias)
 	}
 	return nil
 }

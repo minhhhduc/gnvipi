@@ -80,6 +80,7 @@ var allowedAuditKeys = map[string]struct{}{
 	"action": {}, "status": {}, "role": {}, "kind": {}, "scope": {},
 	"enabled": {}, "disabled": {}, "success": {}, "hidden": {}, "deleted": {},
 	"must_change": {}, "active": {},
+	"auth_scheme": {}, "has_secret": {}, "has_key_env": {}, "has_key_ref": {},
 	"count": {}, "total": {}, "revoked_sessions": {}, "revoked_tokens": {},
 }
 

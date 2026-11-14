@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -89,6 +90,16 @@ func NewKeyID(ctx context.Context, q Querier) (string, error) {
 	return id, nil
 }
 
+// ProviderExists reports whether a provider id is configured without reading
+// the whole row.
+func ProviderExists(ctx context.Context, q Querier, providerID string) (bool, error) {
+	var exists bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM providers WHERE id = $1)`, providerID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("providerstore: check provider %s: %w", providerID, err)
+	}
+	return exists, nil
+}
+
 // GetProviderRow reads one providers row for credential probing.
 func GetProviderRow(ctx context.Context, q Querier, providerID string) (ProviderRow, error) {
 	var row ProviderRow
@@ -110,11 +121,18 @@ func GetProviderRow(ctx context.Context, q Querier, providerID string) (Provider
 	return row, nil
 }
 
-// ListProviderKeys reads every key of one provider, shared keys first.
-func ListProviderKeys(ctx context.Context, q Querier, providerID string) ([]KeyRecord, error) {
-	rows, err := q.Query(ctx, `SELECT `+keyRecordColumns+`
-		FROM provider_keys WHERE provider_id = $1
-		ORDER BY owner_id NULLS FIRST, name, id`, providerID)
+// ListProviderKeys reads the keys of one provider, shared keys first. A
+// non-empty ownerID limits the read to that user's keys, so a caller never
+// loads another owner's ciphertext.
+func ListProviderKeys(ctx context.Context, q Querier, providerID, ownerID string) ([]KeyRecord, error) {
+	query := `SELECT ` + keyRecordColumns + `
+		FROM provider_keys WHERE provider_id = $1`
+	args := []any{providerID}
+	if ownerID != "" {
+		query += ` AND owner_id = $2::uuid`
+		args = append(args, ownerID)
+	}
+	rows, err := q.Query(ctx, query+` ORDER BY owner_id NULLS FIRST, name, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("providerstore: list provider keys: %w", err)
 	}
@@ -246,12 +264,18 @@ func ListKeyModels(ctx context.Context, q Querier, keyID string) ([]KeyModel, er
 	return models, nil
 }
 
-// ReplaceKeyModels rewrites the whole alias set of one key in one statement
-// batch, so a duplicate alias leaves the previous mappings untouched.
+// keyModelsMaxPerRequest bounds one replace so a small body cannot open an
+// unbounded insert.
+const keyModelsMaxPerRequest = 500
+
+// ReplaceKeyModels rewrites the whole alias set of one key. Every row goes
+// through the snapshot's validator before the write, and the rows are inserted
+// in one multi-row statement, so a rejected row never reaches the database.
 func ReplaceKeyModels(ctx context.Context, q Querier, key KeyRow, models []KeyModel) error {
-	if _, err := q.Exec(ctx, `DELETE FROM key_models WHERE key_id = $1::uuid`, key.ID); err != nil {
-		return fmt.Errorf("providerstore: clear key models: %w", err)
+	if len(models) > keyModelsMaxPerRequest {
+		return fmt.Errorf("%w: at most %d models per request", ErrInvalidConfig, keyModelsMaxPerRequest)
 	}
+	rows := make([]KeyModelRow, 0, len(models))
 	for _, model := range models {
 		fallbacks, err := json.Marshal(model.Fallbacks)
 		if err != nil {
@@ -267,14 +291,46 @@ func ReplaceKeyModels(ctx context.Context, q Querier, key KeyRow, models []KeyMo
 		if model.FallbackStatuses == nil {
 			statuses = []byte(`[]`)
 		}
-		if _, err := q.Exec(ctx, `INSERT INTO key_models
-			(key_id, provider_id, owner_id, alias, upstream_model, hidden,
-			 fallbacks, fallback_statuses, allow_shadow, legacy_position)
-			VALUES ($1::uuid, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)`,
-			key.ID, key.ProviderID, key.OwnerID, model.Alias, model.UpstreamModel, model.Hidden,
-			string(fallbacks), string(statuses), model.AllowShadow, model.LegacyPosition); err != nil {
-			return keyModelConstraintError(err)
+		row := KeyModelRow{
+			KeyID:            key.ID,
+			ProviderID:       key.ProviderID,
+			OwnerID:          key.OwnerID,
+			Alias:            model.Alias,
+			UpstreamModel:    model.UpstreamModel,
+			Hidden:           model.Hidden,
+			Fallbacks:        fallbacks,
+			FallbackStatuses: statuses,
+			AllowShadow:      model.AllowShadow,
+			LegacyPosition:   model.LegacyPosition,
 		}
+		if err := ValidateKeyModelRow(row); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		}
+		rows = append(rows, row)
+	}
+	if _, err := q.Exec(ctx, `DELETE FROM key_models WHERE key_id = $1::uuid`, key.ID); err != nil {
+		return fmt.Errorf("providerstore: clear key models: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(rows))
+	args := make([]any, 0, len(rows)*10)
+	for i, row := range rows {
+		base := i * 10
+		values = append(values, fmt.Sprintf(
+			"($%d::uuid, $%d, NULLIF($%d, '')::uuid, $%d, $%d, $%d, $%d::jsonb, $%d::jsonb, $%d, $%d)",
+			base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8, base+9, base+10))
+		args = append(args, row.KeyID, row.ProviderID, row.OwnerID, row.Alias,
+			row.UpstreamModel, row.Hidden, string(row.Fallbacks), string(row.FallbackStatuses),
+			row.AllowShadow, row.LegacyPosition)
+	}
+	_, err := q.Exec(ctx, `INSERT INTO key_models
+		(key_id, provider_id, owner_id, alias, upstream_model, hidden,
+		 fallbacks, fallback_statuses, allow_shadow, legacy_position)
+		VALUES `+strings.Join(values, ", "), args...)
+	if err != nil {
+		return keyModelConstraintError(err)
 	}
 	return nil
 }

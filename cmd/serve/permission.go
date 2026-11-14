@@ -521,11 +521,16 @@ func adminUndeclaredRoute(c *gin.Context) {
 }
 
 // adminFieldError keeps field-level validation in the established envelope.
+// errors and field_errors carry the same single entry for callers that read
+// the list shape.
 func adminFieldError(c *gin.Context, status int, field, problem string) {
+	fields := []gin.H{{"field": field, "problem": problem}}
 	c.JSON(status, gin.H{
-		"error":  problem,
-		"field":  field,
-		"fields": map[string]string{field: problem},
+		"error":        problem,
+		"field":        field,
+		"fields":       map[string]string{field: problem},
+		"errors":       fields,
+		"field_errors": fields,
 	})
 }
 
@@ -567,9 +572,10 @@ func adminAuditActor(identity *adminIdentity) auth.AuditEntry {
 	return entry
 }
 
-func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID, userID string, details map[string]any) error {
+func writeAdminAudit(ctx context.Context, q auth.Querier, identity *adminIdentity, action, targetType, targetID, userID, keyID, providerID, ip string, details map[string]any) error {
 	entry := adminAuditActor(identity)
 	entry.Action, entry.TargetType, entry.TargetID = action, targetType, targetID
-	entry.UserID, entry.Details = userID, details
+	entry.UserID, entry.KeyID, entry.ProviderID = userID, keyID, providerID
+	entry.IP, entry.Details = ip, details
 	return auth.WriteAudit(ctx, q, entry)
 }
