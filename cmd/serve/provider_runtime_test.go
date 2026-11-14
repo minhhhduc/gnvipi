@@ -798,3 +798,75 @@ func TestProviderRuntimeLogsCredentialDiagnosticsAndAudits(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderRuntimeHealthReportsStaleConfigNotOutage covers criterion (d):
+// db_ok reports database reachability only. A reachable database whose version
+// read fails means the snapshot is stale, not that the database is unreachable.
+func TestProviderRuntimeHealthReportsStaleConfigNotOutage(t *testing.T) {
+	source := &stubSnapshotSource{version: 5, rows: stubSnapshotRows()}
+	failVersion := false
+	source.versionHook = func(context.Context) (int64, error) {
+		if failVersion {
+			return 0, errors.New(`relation "config_state" does not exist`)
+		}
+		return 5, nil
+	}
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	runtime.healthTTL = -1
+	t.Cleanup(runtime.Close)
+
+	failVersion = true
+	health := runtime.health(t.Context())
+	if !health.DBOK {
+		t.Fatal("db_ok = false while the database is reliably reachable")
+	}
+	if !health.Degraded {
+		t.Fatal("health is not degraded while the config version cannot be read")
+	}
+	if health.Detail != "reload failed" {
+		t.Fatalf("health detail = %q, want \"reload failed\" for a stale-config signal", health.Detail)
+	}
+}
+
+// TestProviderRuntimeCanceledWaiterReportsDegraded covers the canceled-waiter
+// path: with no completed probe yet, a canceled caller must not receive the
+// zero value that renders as ok=true/status="ok".
+func TestProviderRuntimeCanceledWaiterReportsDegraded(t *testing.T) {
+	source := &stubSnapshotSource{version: 5, rows: stubSnapshotRows()}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	probeDone := make(chan struct{})
+	runtime, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		Ping: func(context.Context) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtime.Close)
+
+	go func() {
+		defer close(probeDone)
+		runtime.health(context.Background())
+	}()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	health := runtime.health(ctx)
+
+	close(release)
+	<-probeDone
+
+	if !health.Degraded {
+		t.Fatalf("canceled waiter reported degraded=false (zero value): %+v", health)
+	}
+}

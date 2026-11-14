@@ -192,7 +192,8 @@ func (s *DBRowSource) Version(ctx context.Context) (int64, error) {
 
 // Watcher keeps a Store in sync through LISTEN gnvipi_config plus a 30-second
 // polling fallback. It reconnects with exponential backoff and reloads on
-// reconnect. Reload failures keep the last-known-good snapshot.
+// reconnect. Reload failures keep the last-known-good snapshot and are recorded
+// on the Store; OnError reports connection failures only.
 type Watcher struct {
 	Store          *Store
 	Pool           *pgxpool.Pool
@@ -200,8 +201,8 @@ type Watcher struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	OnError        func(error)
-	// OnHealthy runs after a successful connect/reload, clearing the
-	// "not refreshing" signal an earlier OnError reported.
+	// OnHealthy runs after a successful connect, clearing the "not refreshing"
+	// signal an earlier OnError reported.
 	OnHealthy func()
 }
 
@@ -236,7 +237,13 @@ func (w *Watcher) Run(ctx context.Context) error {
 			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
-		backoff = initial
+		connectedAt := time.Now()
+		// A successful connect clears the connection-failure signal. Reload
+		// failures are recorded on the Store, never here, so they cannot be
+		// mistaken for a dead listener.
+		if w.OnHealthy != nil {
+			w.OnHealthy()
+		}
 		// Reconnect is a possible lost-notification window: reload immediately.
 		w.reload(ctx)
 		listenErr := w.listen(ctx, conn, poll)
@@ -250,11 +257,25 @@ func (w *Watcher) Run(ctx context.Context) error {
 		if listenErr != nil {
 			w.report(listenErr)
 		}
+		// Reset the delay only after the listener proved stable: an
+		// accept-then-drop loop must keep backing off instead of reconnecting
+		// once per initial interval forever.
+		backoff = reconnectBackoff(backoff, initial, maxBackoff, time.Since(connectedAt))
 		if waitErr := sleepContext(ctx, backoff); waitErr != nil {
 			return waitErr
 		}
 		backoff = nextBackoff(backoff, maxBackoff)
 	}
+}
+
+// reconnectBackoff returns the delay before the next connect attempt after a
+// listener dropped. A connection that survived at least maxBackoff is stable and
+// starts over; otherwise the current delay is kept.
+func reconnectBackoff(current, initial, maxBackoff, uptime time.Duration) time.Duration {
+	if uptime >= maxBackoff {
+		return initial
+	}
+	return current
 }
 
 func (w *Watcher) connect(ctx context.Context) (*pgx.Conn, error) {
@@ -326,15 +347,10 @@ func (w *Watcher) listen(ctx context.Context, conn *pgx.Conn, poll time.Duration
 }
 
 // reload publishes the current configuration. A failure keeps the last good
-// snapshot and is reported; success clears the watcher's error signal.
+// snapshot and is recorded on the Store, where /healthz reports it as a reload
+// failure rather than a watcher connection failure.
 func (w *Watcher) reload(ctx context.Context) {
-	if err := w.Store.Reload(ctx); err != nil {
-		w.report(err)
-		return
-	}
-	if w.OnHealthy != nil {
-		w.OnHealthy()
-	}
+	_ = w.Store.Reload(ctx) //nolint:errcheck // Reload records the error; the poll tick retries it.
 }
 
 func (w *Watcher) report(err error) {

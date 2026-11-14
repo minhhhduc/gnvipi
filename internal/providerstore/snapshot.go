@@ -458,6 +458,13 @@ func (s *Store) Reload(ctx context.Context) error {
 			s.recordError(err)
 			return err
 		}
+		if current := s.Current(); current != nil && version == current.Version() {
+			// The published snapshot already reflects this version, so a rebuild
+			// would only repeat its audit and OnPublish side effects. A retry
+			// after a failed load still clears the recorded error.
+			s.recordError(nil)
+			return nil
+		}
 		snapshot, err := BuildSnapshot(rows, version, BuildOptions{
 			Keyring:     s.keyring,
 			Refs:        s.refs,

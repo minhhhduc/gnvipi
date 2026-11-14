@@ -291,8 +291,12 @@ func (r *providerRuntime) cachedHealth(ctx context.Context) snapshotHealth {
 		case <-ctx.Done():
 			r.healthMu.Lock()
 			result := r.healthResult
+			completed := !r.healthProbedAt.IsZero()
 			r.healthMu.Unlock()
-			return result
+			if completed {
+				return result
+			}
+			return snapshotHealth{SnapshotVersion: r.store.Version(), Degraded: true}
 		}
 		r.healthMu.Lock()
 		result := r.healthResult
@@ -345,12 +349,15 @@ func (r *providerRuntime) probeHealth() snapshotHealth {
 			r.logProbeError(healthDetailDatabaseUnreachable, err)
 		}
 	}
+	staleConfig := false
 	if health.DBOK {
 		version, err := r.source.Version(probeCtx)
 		if err != nil {
-			health.DBOK = false
-			health.Detail = healthDetailDatabaseUnreachable
-			r.logProbeError(healthDetailDatabaseUnreachable, err)
+			// db_ok means reachability only: a failed version read on a
+			// reachable database is a stale-config/reload failure, not an
+			// outage.
+			staleConfig = true
+			r.logProbeError(healthDetailReloadFailed, err)
 		} else if version > r.lastConfigVersion.Load() {
 			r.lastConfigVersion.Store(version)
 		}
@@ -369,14 +376,14 @@ func (r *providerRuntime) probeHealth() snapshotHealth {
 	lastErr := r.store.LastError()
 	if lastErr != nil {
 		r.logProbeError(healthDetailReloadFailed, lastErr)
-		if health.Detail == "" {
-			health.Detail = healthDetailReloadFailed
-		}
+	}
+	if health.Detail == "" && (lastErr != nil || staleConfig) {
+		health.Detail = healthDetailReloadFailed
 	}
 
 	// Derive every field from the snapshot captured above: a reload landing
 	// mid-probe must not produce a body that mixes two versions.
-	health.Degraded = !health.DBOK || snapshot == nil || !health.WatcherOK || lastErr != nil
+	health.Degraded = !health.DBOK || snapshot == nil || !health.WatcherOK || lastErr != nil || staleConfig
 	return health
 }
 
