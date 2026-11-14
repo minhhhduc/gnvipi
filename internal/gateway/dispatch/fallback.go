@@ -208,6 +208,12 @@ func (d *Dispatcher) finishAttempt(recorder *attemptRecorder, rc *core.RequestCo
 			rc.UpstreamModel = finished.UpstreamModel
 			rc.UpstreamProtocol = finished.UpstreamProtocol
 			rc.Stream = finished.Stream
+			if finished.UserID != "" {
+				rc.UserID = finished.UserID
+			}
+			if finished.KeyID != "" {
+				rc.KeyID = finished.KeyID
+			}
 			if rc.FirstByte.IsZero() {
 				rc.FirstByte = finished.FirstByte
 			}
@@ -314,6 +320,9 @@ func (d *Dispatcher) dispatchWithFallbacks(c *gin.Context, body []byte, payloadM
 			attemptRC.ClientModel = rc.ClientModel
 		}
 		attemptRC.InboundProtocol = protocol
+		attemptRC.UserID = rc.UserID
+		attemptRC.KeyID = cand.KeyID
+		rc.KeyID = cand.KeyID
 		attemptCtx := core.WithRequestContext(core.WithRecorder(c.Request.Context(), attemptRecorder), attemptRC)
 
 		attemptReq := c.Request.Clone(attemptCtx)

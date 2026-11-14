@@ -201,6 +201,10 @@ func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) (
 		}
 	}
 	if snapshot.aliasKnown(model) {
+		if providerID := snapshot.knownProvider(model); providerID != "" {
+			return nil, fmt.Errorf("%w: provider %q requires a key for alias %q; add an enabled provider key",
+				ErrKeyRequired, providerID, model)
+		}
 		return nil, ErrKeyRequired
 	}
 	return nil, ErrModelNotFound
@@ -285,6 +289,65 @@ func (s *Snapshot) aliasKnown(model string) bool {
 		}
 	}
 	return false
+}
+
+// knownProvider names the provider behind a known alias so the missing-key
+// error can tell the user what to configure. It follows resolution tier order
+// and returns only an identifier, never credential material.
+func (s *Snapshot) knownProvider(model string) string {
+	var personalExact *candidate
+	for _, byAlias := range s.personalEx {
+		if c := minCandidate(byAlias[model]); c != nil && (personalExact == nil || candidateLess(c, personalExact)) {
+			personalExact = c
+		}
+	}
+	if personalExact != nil {
+		return personalExact.providerID
+	}
+	var lists [][]*candidate
+	for _, list := range s.personalWc {
+		lists = append(lists, list)
+	}
+	if c := longestWildcard(lists, model); c != nil {
+		return c.providerID
+	}
+	if c := minCandidate(s.sharedEx[model]); c != nil {
+		return c.providerID
+	}
+	if c := longestWildcard([][]*candidate{s.sharedWc}, model); c != nil {
+		return c.providerID
+	}
+	return ""
+}
+
+func minCandidate(list []*candidate) *candidate {
+	var best *candidate
+	for _, c := range list {
+		if best == nil || candidateLess(c, best) {
+			best = c
+		}
+	}
+	return best
+}
+
+// longestWildcard returns the candidate with the longest matching prefix,
+// breaking ties with the normal candidate order.
+func longestWildcard(lists [][]*candidate, model string) *candidate {
+	bestLen := -1
+	var best *candidate
+	for _, list := range lists {
+		for _, c := range list {
+			prefix := strings.TrimSuffix(c.alias, "*")
+			if !strings.HasPrefix(model, prefix) || len(model) <= len(prefix) {
+				continue
+			}
+			if len(prefix) > bestLen || (len(prefix) == bestLen && (best == nil || candidateLess(c, best))) {
+				bestLen = len(prefix)
+				best = c
+			}
+		}
+	}
+	return best
 }
 
 func (r *Router) materialize(ctx context.Context, selection selected) (Route, error) {

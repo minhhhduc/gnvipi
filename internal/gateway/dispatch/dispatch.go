@@ -232,6 +232,9 @@ func (d *Dispatcher) Handle(c *gin.Context) {
 		writeDispatchError(c, protocol, err)
 		return
 	}
+	if route.KeyID != "" {
+		rc.KeyID = route.KeyID
+	}
 	if route.Kind == routing.Fallthrough || payload.Model == routing.VirtualAutoMode || payload.Model == routing.VirtualCycle {
 		restoreAndContinue(c, body)
 		return
