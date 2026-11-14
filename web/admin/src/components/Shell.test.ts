@@ -55,6 +55,12 @@ describe("Shell role navigation", () => {
     expect(text).not.toContain("Chrome");
   });
 
+  it("shows the owner-only Audit screen to owners only", () => {
+    expect(renderShell("owner")).toContain("Audit");
+    expect(renderShell("admin")).not.toContain("Audit");
+    expect(renderShell("user")).not.toContain("Audit");
+  });
+
   it("shows the signed-in identity and logout control", () => {
     const text = renderShell("admin");
     expect(text).toContain("admin-name");
