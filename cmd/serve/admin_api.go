@@ -243,6 +243,7 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 	registerAdminUserRoutes(engine, state)
 	registerAdminTokenRoutes(engine, state)
 	registerAdminAuditRoutes(engine, state)
+	registerAdminKeyRoutes(engine, state)
 }
 
 func handleAdminAPIDispatch(c *gin.Context, p *modelPrefs) {

@@ -56,6 +56,7 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 		t.Fatalf("load password hash configuration: %v", err)
 	}
 	state := newAuthState(pool, &password)
+	state.keyring = newAdminKeyring(t)
 	// The harness serves http://127.0.0.1:8080, i.e. a loopback bind, which is
 	// the one configuration where plaintext cookies are allowed.
 	state.loopbackBind = true
