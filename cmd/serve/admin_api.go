@@ -22,6 +22,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/redact"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
+	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
@@ -206,6 +207,7 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 
 	engine.GET("/admin/api/models", func(c *gin.Context) { handleAdminAPIListModels(c, p, catalog) })
 	engine.POST("/admin/api/models", func(c *gin.Context) { handleAdminAPISetModelMask(c, p) })
+	engine.POST("/admin/api/nvidia/models/rescan", handleAdminNvidiaRescan(p, state))
 	// Model ids contain a slash (publisher/model), so the id is a catch-all
 	// rather than a single path segment. The same handler serves
 	// /admin/api/models/retry-failed and /admin/api/models/<id>/restore.
@@ -998,6 +1000,9 @@ type adminAPIModel struct {
 }
 
 func handleAdminAPIListModels(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo) {
+	if catalog == nil {
+		catalog = nvidia.RegistryModels()
+	}
 	items := make([]adminAPIModel, 0, len(catalog))
 	seen := make(map[string]bool, len(catalog))
 	for _, m := range catalog {
@@ -1091,6 +1096,9 @@ func handleAdminAPIModelAction(c *gin.Context, p *modelPrefs) {
 }
 
 func handleAdminAPIGetCycle(c *gin.Context, p *modelPrefs, catalog []*cliproxy.ModelInfo) {
+	if catalog == nil {
+		catalog = nvidia.RegistryModels()
+	}
 	cfg, index := p.cycleSnapshot()
 	available := make(map[string]bool, len(catalog))
 	for _, m := range catalog {

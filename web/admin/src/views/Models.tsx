@@ -2,7 +2,7 @@ import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import type { AdminUser } from "../lib/auth";
-import type { KeyModel, Provider, ProviderKey, TestResult } from "../lib/types";
+import type { KeyModel, NvidiaRescanResult, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
 import {
@@ -47,6 +47,20 @@ type KeyDialogState =
   | { kind: "delete"; key: ProviderKey }
   | null;
 
+/** Owner/admin-only trigger for a live Playground catalog rescan. */
+export function NvidiaRescanButton({ role, busy, onClick }: { role: string; busy: boolean; onClick: () => void }) {
+  if (!canManageProviders(role)) return null;
+  return (
+    <button class="btn" disabled={busy} onClick={onClick}>
+      {busy ? "Rescanning…" : "Rescan NVIDIA models"}
+    </button>
+  );
+}
+
+export function rescanSummary(result: NvidiaRescanResult): string {
+  return `${result.added} added, ${result.updated} updated, ${result.removed} removed`;
+}
+
 export function ModelsView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
   const { navSeq } = useGateway();
@@ -65,6 +79,24 @@ export function ModelsView({ user }: { user: AdminUser }) {
   const [confirmDelete, setConfirmDelete] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
   const [tests, setTests] = useState<Record<string, TestResult>>({});
+  const [rescanBusy, setRescanBusy] = useState(false);
+  const [rescanResult, setRescanResult] = useState<NvidiaRescanResult | null>(null);
+  const [rescanError, setRescanError] = useState<string | null>(null);
+
+  const runRescan = async () => {
+    setRescanBusy(true);
+    setRescanError(null);
+    try {
+      const result = await api<NvidiaRescanResult>("/admin/api/nvidia/models/rescan", { method: "POST", body: {} });
+      setRescanResult(result);
+      await load();
+    } catch (err) {
+      setRescanResult(null);
+      setRescanError(message(err));
+    } finally {
+      setRescanBusy(false);
+    }
+  };
 
   const load = async () => {
     try {
@@ -148,8 +180,20 @@ export function ModelsView({ user }: { user: AdminUser }) {
       <PageHeader title="Models" sub="Providers, their API keys and per-key model selection">
         <HealthPill />
         <span class="text-xs text-dim">{providers.length} providers</span>
+        <NvidiaRescanButton role={user.role} busy={rescanBusy} onClick={() => void runRescan()} />
         {operator && <button class="btn btn-primary" onClick={() => setEditor({ open: true, provider: null })}>Add provider</button>}
       </PageHeader>
+
+      {operator && (rescanResult || rescanError) && (
+        <div
+          class={`mb-3 rounded-lg border px-3 py-2 text-xs ${rescanError ? "border-bad bg-bad-soft text-bad" : "border-line text-dim"}`}
+          role={rescanError ? "alert" : "status"}
+        >
+          {rescanError
+            ? `Rescan failed: ${rescanError}`
+            : `Rescan complete: ${rescanSummary(rescanResult!)} · ${new Date(rescanResult!.scanned_at).toLocaleString()}`}
+        </div>
+      )}
 
       <div class="mb-2.5 flex items-center justify-between">
         <h2 class="text-sm font-semibold">Upstream providers</h2>

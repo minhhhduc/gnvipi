@@ -70,6 +70,14 @@ export interface ModelsResponse {
   deleted?: string[];
 }
 
+/** Result of a live NVIDIA Playground catalog rescan. */
+export interface NvidiaRescanResult {
+  added: number;
+  updated: number;
+  removed: number;
+  scanned_at: string;
+}
+
 /** One provider API key. The server only ever returns metadata plus has_secret/last4. */
 export interface ProviderKey {
   id: string;

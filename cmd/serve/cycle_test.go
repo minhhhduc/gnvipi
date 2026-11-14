@@ -18,7 +18,7 @@ import (
 func TestCycleConfigPersists(t *testing.T) {
 	first := models.DefaultModel
 	second := ""
-	for id := range models.Models {
+	for id := range models.Snapshot() {
 		if id != first {
 			second = id
 			break

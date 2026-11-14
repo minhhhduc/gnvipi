@@ -78,7 +78,7 @@ func handleAdminAutomode(c *gin.Context) {
 	id := strings.TrimSpace(payload.Model)
 	valid := false
 	if id != "automode" && !prefs.isHidden(id) {
-		_, valid = models.Models[id]
+		_, valid = models.Get(id)
 		if cycle, _ := prefs.cycleSnapshot(); cycle.Name == id && id != "" {
 			valid = true
 		}

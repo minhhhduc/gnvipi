@@ -29,6 +29,9 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 
 	_ "embed"
 )
@@ -95,14 +98,49 @@ type PlaygroundRow struct {
 //go:embed playground_models.default.json
 var playgroundModelsJSON []byte
 
-// Models is the registry of all supported build.nvidia.com playground models,
-// loaded from the embedded playground_models.json.
+// registry is the runtime catalog of supported build.nvidia.com playground
+// models. Startup loads it from the embedded playground_models.json, then
+// -models-file groups are merged in; a rescan replaces it atomically so
+// in-flight request handlers never see a partial map.
 //
 // Function ids are almost always unique per model, but NVIDIA aliases some
 // backend versions to one NVCF function — e.g. nvidia/ising-calibration-1-35b-a3b
 // and nvidia/ising-calibration-1.5-31b share 499210d3. That is fine: the
 // predict endpoint is keyed by namespace/slug, which IS unique per registry key.
-var Models = loadModels()
+var (
+	registryMu sync.RWMutex
+	registry   = loadModels()
+)
+
+// Snapshot returns a copy of the current catalog for iteration.
+func Snapshot() map[string]ModelInfo {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	out := make(map[string]ModelInfo, len(registry))
+	for id, info := range registry {
+		out[id] = info
+	}
+	return out
+}
+
+// Get returns one catalog entry.
+func Get(model string) (ModelInfo, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	info, ok := registry[model]
+	return info, ok
+}
+
+// Replace publishes a complete catalog. Callers validate it first.
+func Replace(next map[string]ModelInfo) {
+	owned := make(map[string]ModelInfo, len(next))
+	for id, info := range next {
+		owned[id] = info
+	}
+	registryMu.Lock()
+	registry = owned
+	registryMu.Unlock()
+}
 
 func loadModels() map[string]ModelInfo {
 	var file playgroundModelsFile
@@ -149,15 +187,29 @@ func capabilityFor(model string) *ModelCapability {
 	return nil
 }
 
-// AllGroups returns the parsed registry structure for callers that need
-// publisher/slug pairs (e.g. cmd/serve's champion sampler). The result
-// is a copy so callers can sort / shuffle without mutating package state.
+// AllGroups returns the current registry grouped by publisher. The result is
+// a copy so callers can sort / shuffle without mutating package state.
 func AllGroups() []PlaygroundGroup {
-	var file playgroundModelsFile
-	if err := json.Unmarshal(playgroundModelsJSON, &file); err != nil {
-		return nil
+	byPublisher := make(map[string][]PlaygroundRow)
+	for id, info := range Snapshot() {
+		publisher, slug, found := strings.Cut(id, "/")
+		if !found {
+			continue
+		}
+		byPublisher[publisher] = append(byPublisher[publisher], PlaygroundRow{
+			Model:      id,
+			Slug:       slug,
+			Namespace:  info.Namespace,
+			FunctionID: info.FunctionID,
+		})
 	}
-	return file.Groups
+	groups := make([]PlaygroundGroup, 0, len(byPublisher))
+	for publisher, rows := range byPublisher {
+		sort.Slice(rows, func(i, j int) bool { return rows[i].Model < rows[j].Model })
+		groups = append(groups, PlaygroundGroup{Publisher: publisher, Models: rows})
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Publisher < groups[j].Publisher })
+	return groups
 }
 
 // ErrUnknownModel is returned when model is not in the registry.
@@ -173,7 +225,7 @@ func Lookup(model string) (ModelInfo, error) {
 	if model == "" {
 		model = DefaultModel
 	}
-	info, ok := Models[model]
+	info, ok := Get(model)
 	if !ok {
 		return ModelInfo{}, &ErrUnknownModel{Model: model}
 	}

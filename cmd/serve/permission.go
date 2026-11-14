@@ -264,6 +264,7 @@ var adminRoutePermissions = map[string]adminPermission{
 	"POST /admin/api/models":                          {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"DELETE /admin/api/models/*id":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/models/*id":                      {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
+	"POST /admin/api/nvidia/models/rescan":            {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"GET /admin/api/config/automode":                  {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/config/automode":                 {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"GET /admin/api/config/cycle":                     {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
