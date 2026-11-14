@@ -165,7 +165,7 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 		sort.Strings(file.MasksID)
 		sort.Strings(file.DeletedID)
 		doc.Providers = file.ProvidersV2
-		values := map[string]any{"masks_id": file.MasksID, "deleted_id": file.DeletedID, "auto_model": file.AutoModel, "auto_model_chat_responses": file.AutoModelChatResponses, "search_url": file.SearchURL, "cycle": file.Cycle}
+		values := map[string]any{"masks_id": file.MasksID, "deleted_id": file.DeletedID, "auto_model": file.AutoModel, "auto_model_chat_responses": file.AutoModelChatResponses, "search_url": file.SearchURL, "cycle": file.Cycle, "catalog_excluded": file.CatalogExcluded}
 		if _, exists := doc.Fields["groups"]; !exists {
 			groups, meta := initialCatalog()
 			values["groups"] = groups
