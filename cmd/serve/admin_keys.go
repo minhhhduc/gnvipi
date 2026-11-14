@@ -216,6 +216,8 @@ func keyJSON(record *providerstore.KeyRecord) gin.H {
 		"secret_last4":     record.SecretLast4,
 		"has_key_env":      record.KeyEnv != "",
 		"has_key_ref":      record.KeyRef != "",
+		"key_env":          record.KeyEnv,
+		"key_ref":          record.KeyRef,
 		"created_at":       record.CreatedAt,
 		"updated_at":       record.UpdatedAt,
 	}
