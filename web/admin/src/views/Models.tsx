@@ -6,7 +6,6 @@ import type { KeyModel, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
 import {
-  AUTH_SCHEMES,
   canDeleteKey,
   canEditKey,
   canEditKeyModels,
@@ -367,12 +366,6 @@ function ProviderKeys({
                         </div>
                         {tests[key.id] && <ProviderTestResultBadge result={tests[key.id]} className="mt-1" />}
                       </td>
-                      <td>
-                        <span class="chip">{key.auth_scheme}</span>
-                        {key.auth_scheme === "header" && key.auth_header_name && (
-                          <div class="mono mt-1 text-[11px] text-dim">{key.auth_header_name}</div>
-                        )}
-                      </td>
                       <td class="mono muted">{keyCredentialLabel(key)}</td>
                       <td>
                         <Switch
@@ -474,39 +467,22 @@ function KeyEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const allowKeyRef = canManageProviders(user.role);
   const canShare = target === null && user.role === "owner";
   const [name, setName] = useState(target?.name ?? "");
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
-  const [scheme, setScheme] = useState(target?.auth_scheme ?? "bearer");
-  const [headerName, setHeaderName] = useState(target?.auth_header_name ?? "");
   const [secret, setSecret] = useState("");
-  const [keyEnv, setKeyEnv] = useState(target?.key_env ?? "");
-  const [keyRef, setKeyRef] = useState(target?.key_ref ?? "");
   const [shared, setShared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const effectiveScheme = shared ? "none" : scheme;
+  const effectiveScheme = shared ? "none" : "bearer";
   const showCredential = effectiveScheme !== "none";
-  const mustReenter =
-    target != null &&
-    target.has_secret &&
-    effectiveScheme !== target.auth_scheme &&
-    effectiveScheme !== "none" &&
-    !secret &&
-    !keyEnv.trim() &&
-    !keyRef.trim();
 
   const submit = async () => {
     setError(null);
-    if (mustReenter) {
-      setError("Changing the auth scheme requires re-entering the secret.");
-      return;
-    }
     setBusy(true);
     try {
-      const input = { name, enabled, authScheme: effectiveScheme, authHeaderName: headerName, secret, keyEnv, keyRef, allowKeyRef };
+      const input = { name, enabled, authScheme: effectiveScheme, secret };
       if (target) {
         await api(`/admin/api/providers/${encodeURIComponent(provider.id)}/keys/${encodeURIComponent(target.id)}`, {
           method: "PUT",
@@ -553,52 +529,16 @@ function KeyEditorDialog({
             </span>
           </label>
         )}
-        {!shared && (
-          <label class="block text-xs font-semibold">
-            Auth scheme
-            <select class="input mt-1" value={scheme} disabled={busy}
-              onChange={(e) => setScheme((e.currentTarget as HTMLSelectElement).value)}>
-              {AUTH_SCHEMES.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
-          </label>
-        )}
         {showCredential && (
-          <>
-            {effectiveScheme === "header" && (
-              <label class="block text-xs font-semibold">
-                Header name
-                <input class="input mono mt-1" value={headerName} disabled={busy}
-                  onInput={(e) => setHeaderName((e.currentTarget as HTMLInputElement).value)} />
-              </label>
-            )}
-            <label class="block text-xs font-semibold">
-              {target?.has_secret ? "Replace secret" : "Secret"}
-              {effectiveScheme === "basic" ? (
-                <textarea class="input mono mt-1" rows={2} value={secret} disabled={busy}
-                  placeholder={target?.has_secret ? "leave blank to keep the stored secret" : '{"username":"…","password":"…"}'}
-                  onInput={(e) => setSecret((e.currentTarget as HTMLTextAreaElement).value)} />
-              ) : (
-                <input class="input mt-1" type="password" autoComplete="off" value={secret} disabled={busy}
-                  placeholder={target?.has_secret ? "leave blank to keep the stored secret" : "write-only"}
-                  onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)} />
-              )}
-              <span class="mt-1 block text-[11px] font-normal text-dim">
-                Secrets are write-only; only presence and the last four are shown.
-              </span>
-            </label>
-            <label class="block text-xs font-semibold">
-              Key env var
-              <input class="input mono mt-1" value={keyEnv} disabled={busy}
-                onInput={(e) => setKeyEnv((e.currentTarget as HTMLInputElement).value)} />
-            </label>
-            {allowKeyRef && (
-              <label class="block text-xs font-semibold">
-                Key ref
-                <input class="input mono mt-1" value={keyRef} disabled={busy}
-                  onInput={(e) => setKeyRef((e.currentTarget as HTMLInputElement).value)} />
-              </label>
-            )}
-          </>
+          <label class="block text-xs font-semibold">
+            API key
+            <input class="input mt-1" type="password" autoComplete="off" value={secret} disabled={busy}
+              placeholder={target?.has_secret ? "leave blank to keep the stored key" : "paste the provider API key"}
+              onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)} />
+            <span class="mt-1 block text-[11px] font-normal text-dim">
+              Write-only. The key is encrypted at rest; only the last four characters are shown.
+            </span>
+          </label>
         )}
         {error && <div role="alert" class="rounded-lg border border-bad bg-bad-soft px-3 py-2 text-xs text-bad">{error}</div>}
       </div>

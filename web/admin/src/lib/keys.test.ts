@@ -149,10 +149,9 @@ describe("key list parsing", () => {
 describe("secret masking", () => {
   it("renders metadata about the secret, never the secret", () => {
     expect(keyCredentialLabel(key())).toBe("•••• abcd");
-    expect(keyCredentialLabel(key({ secret_last4: null }))).toBe("Secret set");
-    expect(keyCredentialLabel(key({ has_secret: false, has_key_env: true, key_env: "OPENAI_KEY" }))).toBe("env OPENAI_KEY");
-    expect(keyCredentialLabel(key({ has_secret: false, has_key_ref: true, key_ref: "vault/key" }))).toBe("ref vault/key");
-    expect(keyCredentialLabel(key({ has_secret: false }))).toBe("No credential");
+    expect(keyCredentialLabel(key({ secret_last4: null }))).toBe("Key set");
+    expect(keyCredentialLabel(key({ has_secret: false, has_key_env: true, key_env: "OPENAI_KEY" }))).toBe("No key");
+    expect(keyCredentialLabel(key({ has_secret: false }))).toBe("No key");
   });
 });
 
