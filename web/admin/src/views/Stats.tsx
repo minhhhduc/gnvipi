@@ -227,7 +227,7 @@ export function StatsView() {
 
       <div class="mb-3 grid grid-cols-2 gap-3">
         <ChartCard title="Requests per minute" sub="last 60 min">
-          <LineChart series={[{ label: "requests / min", color: COLORS.req, values: seriesValues(series) }]} labels={labels} />
+          <LineChart series={[{ label: "requests / min", color: COLORS.req, values: seriesValues(series) }]} labels={labels} format={fmtInt} />
         </ChartCard>
         <ChartCard title="Tokens per minute" sub="input vs output">
           <LineChart
@@ -236,12 +236,14 @@ export function StatsView() {
               { label: "output tokens / min", color: COLORS.output, values: series.map((m) => m.output_tokens) },
             ]}
             labels={labels}
+            format={fmtInt}
           />
         </ChartCard>
         <ChartCard title="Average TTFB" sub="streamed requests · gaps = no streamed request">
           <LineChart
             series={[{ label: "avg TTFB / min", color: COLORS.ttfb, values: ttfbValues(series) }]}
             labels={labels}
+            format={fmtMs}
             emptyMessage="No streamed requests yet."
           />
         </ChartCard>
@@ -253,6 +255,7 @@ export function StatsView() {
               values: seriesValues(seriesByModel[model] || []),
             }))}
             labels={labels}
+            format={fmtInt}
           />
         </ChartCard>
       </div>
