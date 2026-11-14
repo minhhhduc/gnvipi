@@ -154,13 +154,10 @@ export function ProviderEditor({
     setErrors(errs);
     if (Object.keys(errs).length) return null;
 
-    const auth: Provider["auth"] = { scheme: f.scheme };
-    if (f.scheme !== "none") {
-      if (f.key.trim()) auth.key = f.key.trim();
-      if (f.keyEnv.trim()) auth.key_env = f.keyEnv.trim();
-      if (f.keyRef.trim()) auth.key_ref = f.keyRef.trim();
-      if (f.headerName.trim()) auth.header_name = f.headerName.trim();
-    }
+    // The web always sends the credential as a bearer token; the API key is the
+    // only auth input in this console.
+    const auth: Provider["auth"] = { scheme: provider?.auth?.scheme === "none" ? "none" : "bearer" };
+    if (auth.scheme !== "none" && f.key.trim()) auth.key = f.key.trim();
     const mapping = f.mappings
       .filter((m) => m.alias.trim())
       .map((m) => {
@@ -347,26 +344,13 @@ export function ProviderEditor({
             </label>
           </Section>
 
-          <Section title="Authentication">
-            <Field label="Auth scheme">
-              <select class="input" value={f.scheme} onChange={(e) => patch({ scheme: (e.target as HTMLSelectElement).value })}>
-                <option value="bearer">Bearer</option>
-                <option value="x-api-key">x-api-key</option>
-                <option value="none">None</option>
-              </select>
-            </Field>
+          <Section title="API key">
             <Field label="API key">
-              <input class="input" type="password" value={f.key} placeholder={isEdit ? "leave blank to keep existing key" : "write-only"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
+              <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "paste the provider API key"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
             </Field>
-            <Field label="API key env var">
-              <input class="input mono" value={f.keyEnv} onInput={(e) => patch({ keyEnv: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <Field label="Key ref">
-              <input class="input mono" value={f.keyRef} onInput={(e) => patch({ keyRef: (e.target as HTMLInputElement).value })} />
-            </Field>
-            <Field label="Header name">
-              <input class="input mono" value={f.headerName} onInput={(e) => patch({ headerName: (e.target as HTMLInputElement).value })} />
-            </Field>
+            <span class="block text-[11px] text-dim">
+              Sent as <code class="mono">Authorization: Bearer &lt;key&gt;</code>. Write-only: only the last four characters are shown later.
+            </span>
           </Section>
 
           <Section title="Model mappings">
