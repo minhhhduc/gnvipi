@@ -15,6 +15,8 @@ const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   tokens: ["owner", "admin", "user"],
   // Account administration is owner-only, including read access.
   users: ["owner"],
+  // The audit trail is readable by owners only.
+  audit: ["owner"],
 };
 
 export function pageAllowed(page: Page, role: AdminRole): boolean {
@@ -29,7 +31,8 @@ export function pageFromUrl(search: string, role?: AdminRole): Page {
     value === "config" ||
     value === "chromes" ||
     value === "tokens" ||
-    value === "users"
+    value === "users" ||
+    value === "audit"
       ? value
       : "stats";
   return role && !pageAllowed(page, role) ? "stats" : page;

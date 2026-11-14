@@ -23,6 +23,11 @@ export function isOperatorRole(value: unknown): boolean {
   return value === "owner" || value === "admin";
 }
 
+/** Exact comparison: a role lookup must never accept inherited object members. */
+export function isOwnerRole(value: unknown): value is "owner" {
+  return value === "owner";
+}
+
 export function parseAuthSession(value: unknown): AuthSession {
   if (!value || typeof value !== "object") throw new Error("Invalid admin session response");
   const session = value as Record<string, unknown>;
