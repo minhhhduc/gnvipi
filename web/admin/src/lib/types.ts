@@ -1,5 +1,3 @@
-import type { AdminRole } from "./auth";
-
 export type TestStatus = "success" | "auth_failure" | "connect_failure" | "error";
 
 export interface TestResult {
@@ -163,8 +161,8 @@ export interface AdminUserRecord {
   username: string;
   email: string | null;
   display_name: string | null;
-  role: AdminRole;
-  status: "active" | "disabled";
+  role: string;
+  status: string;
   must_change_password: boolean;
   failed_attempts: number;
   locked_until: string | null;

@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_TOKEN_LIMIT,
-  MAX_TOKEN_LIMIT,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
   clampLimit,
+  clampOffset,
   dateLabel,
+  pageWindow,
+} from "./admin";
+import {
+  defaultExpiryLabel,
   expiryLabel,
   lastUsedLabel,
-  pageWindow,
   parseCreatedToken,
   parseTokenList,
   tokenCreatePayload,
@@ -15,8 +19,8 @@ import {
 
 describe("token page size", () => {
   it("defaults to 50 and clamps oversized pages to 200", () => {
-    expect(DEFAULT_TOKEN_LIMIT).toBe(50);
-    expect(MAX_TOKEN_LIMIT).toBe(200);
+    expect(DEFAULT_LIMIT).toBe(50);
+    expect(MAX_LIMIT).toBe(200);
     expect(clampLimit(0)).toBe(50);
     expect(clampLimit(-10)).toBe(50);
     expect(clampLimit(Number.NaN)).toBe(50);
@@ -28,21 +32,18 @@ describe("token page size", () => {
 describe("pageWindow", () => {
   it("describes a full users page from a known total", () => {
     expect(pageWindow({ limit: 50, offset: 0, count: 50, total: 150 })).toEqual({
-      page: 1,
       from: 1,
       to: 50,
       hasPrev: false,
       hasNext: true,
     });
     expect(pageWindow({ limit: 50, offset: 100, count: 50, total: 150 })).toEqual({
-      page: 3,
       from: 101,
       to: 150,
       hasPrev: true,
       hasNext: false,
     });
     expect(pageWindow({ limit: 50, offset: 150, count: 0, total: 150 })).toEqual({
-      page: 4,
       from: 0,
       to: 0,
       hasPrev: true,
@@ -56,12 +57,19 @@ describe("pageWindow", () => {
       hasNext: true,
     });
     expect(pageWindow({ limit: 50, offset: 50, count: 3 })).toMatchObject({
-      page: 2,
       from: 51,
       to: 53,
       hasPrev: true,
       hasNext: false,
     });
+  });
+
+  it("clamps an offset past the last page after the result set shrinks", () => {
+    expect(clampOffset({ total: 50, limit: 50, offset: 50 })).toBe(0);
+    expect(clampOffset({ total: 51, limit: 50, offset: 100 })).toBe(50);
+    expect(clampOffset({ total: 0, limit: 50, offset: 50 })).toBe(0);
+    expect(clampOffset({ total: 120, limit: 50, offset: 100 })).toBe(100);
+    expect(clampOffset({ total: 120, limit: 50, offset: 0 })).toBe(0);
   });
 });
 
@@ -89,6 +97,11 @@ describe("expiry labels", () => {
   it("renders the calendar date of an expiry", () => {
     expect(expiryLabel("2027-03-04T05:06:07Z")).toMatch(/2027/);
     expect(expiryLabel("not-a-date")).toBe("—");
+  });
+
+  it("labels the server default per token kind", () => {
+    expect(defaultExpiryLabel("gateway")).toBe("365 days (default)");
+    expect(defaultExpiryLabel("admin")).toBe("90 days (default)");
   });
 });
 

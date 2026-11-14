@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, ApiError } from "../lib/api";
+import { api } from "../lib/api";
 import { useUi } from "../components/ui";
-import { Card, CardHead, Dialog, Empty, PageHeader } from "../components/ui";
-import type { AdminRole, AdminUser } from "../lib/auth";
+import { Card, CardHead, Dialog, Empty, PageHeader, Pager } from "../components/ui";
+import type { AdminUser } from "../lib/auth";
 import type { AdminUserRecord, TokenRecord } from "../lib/types";
 import {
-  clampLimit,
-  dateLabel,
+  defaultExpiryLabel,
   expiryChoiceAllowed,
   expiryLabel,
   lastUsedLabel,
-  pageWindow,
   parseCreatedToken,
   parseTokenList,
   tokenCreatePayload,
@@ -18,23 +16,14 @@ import {
   type ExpiryChoice,
   type TokenStatus,
 } from "../lib/tokens";
-import { parseUserList } from "../lib/users";
-
-const PAGE_SIZES = [25, 50, 100, 200];
-const GATEWAY_DEFAULT_LABEL = "365 days (default)";
+import { USER_LIST_MAX, parseUserList, userPickerNote } from "../lib/users";
+import { PAGE_SIZES, clampLimit, dateLabel, message, pageWindow } from "../lib/admin";
 
 type DialogState =
   | { kind: "create" }
   | { kind: "created"; token: string; name: string }
   | { kind: "revoke"; token: TokenRecord }
   | null;
-
-function message(err: unknown): string {
-  if (err instanceof ApiError) {
-    return err.body?.field ? `${err.body.field}: ${err.message}` : err.message;
-  }
-  return err instanceof Error ? err.message : "Request failed";
-}
 
 function statusPill(status: TokenStatus) {
   if (status === "active") return "pill pill-ok";
@@ -79,7 +68,7 @@ export function TokensView({ user }: { user: AdminUser }) {
 
   useEffect(() => {
     if (!owner) return;
-    api<unknown>("/admin/api/users?limit=200")
+    api<unknown>(`/admin/api/users?limit=${USER_LIST_MAX}`)
       .then((body) => setAccounts(parseUserList(body).users))
       // The token list still works for the caller's own account; the selector
       // just stays limited to "My tokens".
@@ -87,7 +76,8 @@ export function TokensView({ user }: { user: AdminUser }) {
   }, [owner]);
 
   const target = accountID ? accounts.find((account) => account.id === accountID) : undefined;
-  const targetRole: AdminRole = target?.role ?? user.role;
+  const targetRole = target?.role ?? user.role;
+  const pickerNote = userPickerNote(accounts.length);
   const window = pageWindow({ limit, offset, count: tokens.length });
 
   const changeLimit = (next: number) => {
@@ -107,24 +97,28 @@ export function TokensView({ user }: { user: AdminUser }) {
       <Card>
         <CardHead title={owner ? "All tokens" : "My tokens"}>
           {owner && (
-            <label class="flex items-center gap-1.5 text-xs text-dim">
-              Account
-              <select
-                class="input w-auto"
-                value={accountID}
-                onChange={(e) => {
-                  setAccountID((e.target as HTMLSelectElement).value);
-                  setOffset(0);
-                }}
-              >
-                <option value="">My tokens</option>
-                {accounts.filter((account) => account.id !== user.id).map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.display_name || account.username} (@{account.username})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label class="flex items-center gap-1.5 text-xs text-dim">
+                Account
+                <select
+                  class="input w-auto"
+                  value={accountID}
+                  title={pickerNote ?? undefined}
+                  onChange={(e) => {
+                    setAccountID((e.target as HTMLSelectElement).value);
+                    setOffset(0);
+                  }}
+                >
+                  <option value="">My tokens</option>
+                  {accounts.filter((account) => account.id !== user.id).map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.display_name || account.username} (@{account.username})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {pickerNote && <span class="text-[11px] text-dim">{pickerNote}</span>}
+            </>
           )}
           <label class="flex items-center gap-1.5 text-xs text-dim">
             Rows
@@ -180,13 +174,14 @@ export function TokensView({ user }: { user: AdminUser }) {
             </tbody>
           </table>
         )}
-        <div class="flex items-center gap-2 border-t border-line px-4 py-2.5 text-xs text-dim">
-          <span>Showing {window.from}–{window.to}</span>
-          <div class="ml-auto flex gap-2">
-            <button class="btn btn-sm" disabled={!window.hasPrev} onClick={() => setOffset(Math.max(0, offset - limit))}>Previous</button>
-            <button class="btn btn-sm" disabled={!window.hasNext} onClick={() => setOffset(offset + limit)}>Next</button>
-          </div>
-        </div>
+        <Pager
+          from={window.from}
+          to={window.to}
+          hasPrev={window.hasPrev}
+          hasNext={window.hasNext}
+          onPrev={() => setOffset(Math.max(0, offset - limit))}
+          onNext={() => setOffset(offset + limit)}
+        />
       </Card>
 
       {dialog?.kind === "create" && (
@@ -223,7 +218,7 @@ function CreateTokenDialog({
   onCreated,
 }: {
   owner: boolean;
-  targetRole: AdminRole;
+  targetRole: string;
   targetID: string;
   onClose: () => void;
   onCreated: (token: string, name: string) => void;
@@ -293,13 +288,13 @@ function CreateTokenDialog({
           Expiry
           <select class="input mt-1" value={expiry} disabled={busy}
             onChange={(e) => setExpiry((e.target as HTMLSelectElement).value as ExpiryChoice)}>
-            <option value="default">{GATEWAY_DEFAULT_LABEL}</option>
+            <option value="default">{defaultExpiryLabel(kind)}</option>
             <option value="none" disabled={!noExpiryAllowed}>No expiry</option>
           </select>
           <span class="mt-1 block text-[11px] font-normal text-dim">
             {noExpiryAllowed
               ? "The default expires one year from creation; no-expiry tokens never do."
-              : "Admin tokens always expire and cannot be issued without an expiry."}
+              : "Admin tokens always expire; the default is 90 days from creation."}
           </span>
         </label>
         {error && <div role="alert" class="rounded-lg border border-bad bg-bad-soft px-3 py-2 text-xs text-bad">{error}</div>}
@@ -319,7 +314,7 @@ function CreatedTokenDialog({ token, name, onClose }: { token: string; name: str
     }
   };
   return (
-    <Dialog title={`Token created · ${name}`} confirmLabel="Done" onConfirm={onClose} onCancel={onClose}>
+    <Dialog title={`Token created · ${name}`} confirmLabel="Done" onConfirm={onClose} onCancel={onClose} dismissible={false}>
       <div class="space-y-3">
         <p class="m-0">Copy this token now. It is stored hashed and cannot be shown again.</p>
         <textarea class="input mono h-20 select-all" readOnly value={token} aria-label="New token" />

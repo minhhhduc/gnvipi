@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, ApiError } from "../lib/api";
+import { api } from "../lib/api";
 import { useUi } from "../components/ui";
-import { Card, CardHead, Dialog, Empty, PageHeader } from "../components/ui";
+import { Card, CardHead, Dialog, Empty, PageHeader, Pager } from "../components/ui";
 import { HealthPill } from "../components/Shell";
-import type { AdminRole, AdminUser } from "../lib/auth";
+import type { AdminUser } from "../lib/auth";
 import type { AdminUserRecord } from "../lib/types";
-import { canManageUsers, parseUserList, validateNewPassword, validateNewUser, type FieldError } from "../lib/users";
-import { clampLimit, dateLabel, pageWindow } from "../lib/tokens";
+import {
+  ROLES,
+  canChangeRole,
+  canManageUsers,
+  parseUserList,
+  passwordResetBody,
+  roleError,
+  validateNewPassword,
+  validateNewUser,
+  type FieldError,
+} from "../lib/users";
+import { PAGE_SIZES, clampLimit, clampOffset, dateLabel, message, pageWindow } from "../lib/admin";
 
 type DialogState =
   | { kind: "create" }
@@ -15,19 +25,8 @@ type DialogState =
   | { kind: "delete"; user: AdminUserRecord }
   | null;
 
-const PAGE_SIZES = [25, 50, 100, 200];
-const ROLES: AdminRole[] = ["owner", "admin", "user"];
-
-function statusPill(status: AdminUserRecord["status"]) {
+function statusPill(status: string) {
   return status === "active" ? "pill pill-ok" : "pill pill-bad";
-}
-
-function serverFieldError(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.body?.field) return `${err.body.field}: ${err.message}`;
-    return err.message;
-  }
-  return err instanceof Error ? err.message : "Request failed";
 }
 
 export function UsersView({ user }: { user: AdminUser }) {
@@ -47,12 +46,19 @@ export function UsersView({ user }: { user: AdminUser }) {
       const body = await api<unknown>(`/admin/api/users?limit=${limit}&offset=${offset}`);
       if (thisRequest !== requestId.current) return;
       const parsed = parseUserList(body);
+      // Deleting the last row of a page shrinks the result set; move to the
+      // last page that still has rows instead of showing an empty page.
+      const nextOffset = clampOffset({ total: parsed.total, limit, offset });
+      if (nextOffset !== offset) {
+        setOffset(nextOffset);
+        return;
+      }
       setUsers(parsed.users);
       setTotal(parsed.total);
       setBanner(null, undefined, "users");
     } catch (err) {
       if (thisRequest !== requestId.current) return;
-      setBanner(`Users unavailable: ${serverFieldError(err)}`, () => void load(), "users");
+      setBanner(`Users unavailable: ${message(err)}`, () => void load(), "users");
     } finally {
       if (thisRequest === requestId.current) setLoading(false);
     }
@@ -142,7 +148,7 @@ export function UsersView({ user }: { user: AdminUser }) {
                         const status = record.status === "active" ? "disabled" : "active";
                         void mutate(`/admin/api/users/${record.id}`, "PUT", { status })
                           .then(() => toast(`User ${status}`))
-                          .catch((err) => toast(`Update failed: ${serverFieldError(err)}`, "bad"));
+                          .catch((err) => toast(`Update failed: ${message(err)}`, "bad"));
                       }}
                     >
                       {record.status === "active" ? "Disable" : "Enable"}
@@ -161,18 +167,21 @@ export function UsersView({ user }: { user: AdminUser }) {
             </tbody>
           </table>
         )}
-        <div class="flex items-center gap-2 border-t border-line px-4 py-2.5 text-xs text-dim">
-          <span>Showing {window.from}–{window.to} of {total}</span>
-          <div class="ml-auto flex gap-2">
-            <button class="btn btn-sm" disabled={!window.hasPrev} onClick={() => setOffset(Math.max(0, offset - limit))}>Previous</button>
-            <button class="btn btn-sm" disabled={!window.hasNext} onClick={() => setOffset(offset + limit)}>Next</button>
-          </div>
-        </div>
+        <Pager
+          from={window.from}
+          to={window.to}
+          total={total}
+          hasPrev={window.hasPrev}
+          hasNext={window.hasNext}
+          onPrev={() => setOffset(Math.max(0, offset - limit))}
+          onNext={() => setOffset(offset + limit)}
+        />
       </Card>
 
       {dialog?.kind === "create" && (
         <UserFormDialog
           mode="create"
+          viewerID={user.id}
           onClose={() => setDialog(null)}
           onSaved={() => { setDialog(null); toast("User created"); void load(); }}
         />
@@ -181,6 +190,7 @@ export function UsersView({ user }: { user: AdminUser }) {
         <UserFormDialog
           mode="edit"
           target={dialog.user}
+          viewerID={user.id}
           onClose={() => setDialog(null)}
           onSaved={() => { setDialog(null); toast("User updated"); void load(); }}
         />
@@ -188,8 +198,13 @@ export function UsersView({ user }: { user: AdminUser }) {
       {dialog?.kind === "password" && (
         <ResetPasswordDialog
           target={dialog.user}
+          currentUserID={user.id}
           onClose={() => setDialog(null)}
-          onSaved={() => { setDialog(null); toast("Password reset — the user must change it at next sign-in"); void load(); }}
+          onSaved={() => {
+            setDialog(null);
+            toast(dialog.user.id === user.id ? "Password changed" : "Password reset — the user must change it at next sign-in");
+            void load();
+          }}
         />
       )}
       {dialog?.kind === "delete" && (
@@ -206,21 +221,24 @@ export function UsersView({ user }: { user: AdminUser }) {
 function UserFormDialog({
   mode,
   target,
+  viewerID,
   onClose,
   onSaved,
 }: {
   mode: "create" | "edit";
   target?: AdminUserRecord;
+  viewerID: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [username, setUsername] = useState(target?.username ?? "");
   const [displayName, setDisplayName] = useState(target?.display_name ?? "");
   const [email, setEmail] = useState(target?.email ?? "");
-  const [role, setRole] = useState<AdminRole>(target?.role ?? "user");
+  const [role, setRole] = useState(target?.role ?? "user");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const roleLocked = target != null && !canChangeRole(target.id, viewerID);
 
   const submit = async () => {
     setError(null);
@@ -232,6 +250,14 @@ function UserFormDialog({
         role,
         password,
       });
+      if (field) {
+        setError(field.message);
+        return;
+      }
+    } else {
+      // An unknown server role is preserved on load; require resolving it
+      // before saving so the PUT cannot rewrite it.
+      const field = roleError(role);
       if (field) {
         setError(field.message);
         return;
@@ -252,7 +278,7 @@ function UserFormDialog({
       }
       onSaved();
     } catch (err) {
-      setError(serverFieldError(err));
+      setError(message(err));
     } finally {
       setBusy(false);
     }
@@ -286,10 +312,12 @@ function UserFormDialog({
         </label>
         <label class="block text-xs font-semibold">
           Role
-          <select class="input mt-1" value={role} disabled={busy}
-            onChange={(e) => setRole((e.target as HTMLSelectElement).value as AdminRole)}>
+          <select class="input mt-1" value={role} disabled={busy || roleLocked}
+            onChange={(e) => setRole((e.target as HTMLSelectElement).value)}>
+            {!ROLES.includes(role) && <option value={role}>{role} (unknown)</option>}
             {ROLES.map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
+          {roleLocked && <span class="mt-1 block text-[11px] font-normal text-dim">You cannot change your own role.</span>}
         </label>
         {mode === "create" && (
           <label class="block text-xs font-semibold">
@@ -307,19 +335,27 @@ function UserFormDialog({
 
 function ResetPasswordDialog({
   target,
+  currentUserID,
   onClose,
   onSaved,
 }: {
   target: AdminUserRecord;
+  currentUserID: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const self = target.id === currentUserID;
+  const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
+    if (self && !currentPassword) {
+      setError("Current password is required");
+      return;
+    }
     const invalid = validateNewPassword(password, confirmation);
     if (invalid) {
       setError(invalid);
@@ -328,10 +364,13 @@ function ResetPasswordDialog({
     setBusy(true);
     setError(null);
     try {
-      await api(`/admin/api/users/${target.id}/password`, { method: "POST", body: { password } });
+      await api(`/admin/api/users/${target.id}/password`, {
+        method: "POST",
+        body: passwordResetBody({ self, password, currentPassword }),
+      });
       onSaved();
     } catch (err) {
-      setError(serverFieldError(err));
+      setError(message(err));
     } finally {
       setBusy(false);
     }
@@ -340,10 +379,21 @@ function ResetPasswordDialog({
   return (
     <Dialog title={`Reset password · @${target.username}`} confirmLabel="Reset" onConfirm={() => void submit()} onCancel={onClose} busy={busy}>
       <div class="space-y-3">
-        <p class="m-0">The current password stops working immediately. The account must change this temporary one at next sign-in.</p>
+        <p class="m-0">
+          {self
+            ? "Your password changes immediately and other sessions are signed out."
+            : "The current password stops working immediately. The account must change this temporary one at next sign-in."}
+        </p>
+        {self && (
+          <label class="block text-xs font-semibold">
+            Current password
+            <input class="input mt-1" type="password" autoComplete="current-password" value={currentPassword} disabled={busy} autoFocus
+              onInput={(e) => setCurrentPassword((e.currentTarget as HTMLInputElement).value)} />
+          </label>
+        )}
         <label class="block text-xs font-semibold">
           New password
-          <input class="input mt-1" type="password" autoComplete="new-password" value={password} disabled={busy} autoFocus
+          <input class="input mt-1" type="password" autoComplete="new-password" value={password} disabled={busy} autoFocus={!self}
             onInput={(e) => setPassword((e.currentTarget as HTMLInputElement).value)} />
         </label>
         <label class="block text-xs font-semibold">
@@ -376,7 +426,7 @@ function DeleteUserDialog({
       await api(`/admin/api/users/${target.id}`, { method: "DELETE" });
       onDeleted();
     } catch (err) {
-      setError(serverFieldError(err));
+      setError(message(err));
       setBusy(false);
     }
   };

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  canChangeRole,
   canManageUsers,
   parseUserList,
+  passwordResetBody,
+  roleError,
+  userPickerNote,
   validateNewPassword,
   validateNewUser,
 } from "./users";
@@ -37,12 +41,13 @@ describe("user list parsing", () => {
     expect(JSON.stringify(parsed)).not.toContain("super-secret");
   });
 
-  it("normalizes nullable timestamps and unknown roles", () => {
+  it("normalizes nullable timestamps and preserves values the console does not know", () => {
     const parsed = parseUserList({
-      users: [{ ...user, role: "superuser", locked_until: null, last_login_at: null }],
+      users: [{ ...user, role: "superuser", status: "suspended", locked_until: null, last_login_at: null }],
       total: 1,
     });
-    expect(parsed.users[0].role).toBe("admin");
+    expect(parsed.users[0].role).toBe("superuser");
+    expect(parsed.users[0].status).toBe("suspended");
     expect(parsed.users[0].locked_until).toBeNull();
     expect(parsed.users[0].last_login_at).toBeNull();
   });
@@ -85,6 +90,38 @@ describe("new user validation", () => {
   ])("rejects %j on %s", (patch, field, message) => {
     expect(validateNewUser({ ...valid, ...patch })).toEqual({ field, message });
   });
+
+  it("counts code points like the server's rune count", () => {
+    expect(validateNewUser({ ...valid, username: "😀".repeat(40) })).toBeNull();
+    expect(validateNewUser({ ...valid, display_name: "😀".repeat(200) })).toBeNull();
+  });
+});
+
+describe("edit safeguards", () => {
+  it("blocks a save until an unknown role is resolved", () => {
+    expect(roleError("admin")).toBeNull();
+    expect(roleError("superuser")).toEqual({ field: "role", message: "Role must be owner, admin or user" });
+  });
+
+  it("never edits the signed-in account's own role", () => {
+    expect(canChangeRole("user-1", "user-1")).toBe(false);
+    expect(canChangeRole("user-2", "user-1")).toBe(true);
+  });
+
+  it("sends the current password on the self reset path", () => {
+    expect(passwordResetBody({ self: true, password: "correct-horse-battery", currentPassword: "old-secret" })).toEqual({
+      password: "correct-horse-battery",
+      current_password: "old-secret",
+    });
+    expect(passwordResetBody({ self: false, password: "correct-horse-battery" })).toEqual({
+      password: "correct-horse-battery",
+    });
+  });
+
+  it("states the account picker ceiling once its page fills", () => {
+    expect(userPickerNote(3)).toBeNull();
+    expect(userPickerNote(200)).toContain("200");
+  });
 });
 
 describe("password reset validation", () => {
@@ -92,5 +129,6 @@ describe("password reset validation", () => {
     expect(validateNewPassword("short", "short")).toBe("Password must be 12–128 characters");
     expect(validateNewPassword("correct-horse-battery", "different-horse")).toBe("Passwords do not match");
     expect(validateNewPassword("correct-horse-battery", "correct-horse-battery")).toBeNull();
+    expect(validateNewPassword("😀".repeat(70), "😀".repeat(70))).toBeNull();
   });
 });

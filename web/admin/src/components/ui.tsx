@@ -162,6 +162,7 @@ export function Dialog({
   onCancel,
   danger,
   busy,
+  dismissible = true,
 }: {
   title: string;
   children: ComponentChildren;
@@ -170,17 +171,20 @@ export function Dialog({
   onCancel: () => void;
   danger?: boolean;
   busy?: boolean;
+  /** When false, only the confirm button closes the dialog (no backdrop/Escape). */
+  dismissible?: boolean;
 }) {
   useEffect(() => {
+    if (!dismissible) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  }, [dismissible, onCancel]);
 
   return (
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-6" onClick={onCancel}>
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-6" onClick={dismissible ? onCancel : undefined}>
       <div
         class="w-[420px] max-w-full rounded-xl border border-line bg-panel shadow-xl"
         role="dialog"
@@ -191,13 +195,43 @@ export function Dialog({
         <div class="border-b border-line px-4 py-3.5 font-bold">{title}</div>
         <div class="px-4 py-3.5 text-[13px] text-dim">{children}</div>
         <div class="flex justify-end gap-2 border-t border-line px-4 py-2.5">
-          <button class="btn" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
+          {dismissible && (
+            <button class="btn" onClick={onCancel} disabled={busy}>
+              Cancel
+            </button>
+          )}
           <button class={`btn ${danger ? "btn-danger" : "btn-primary"}`} onClick={onConfirm} disabled={busy}>
             {busy ? "Working…" : confirmLabel}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function Pager({
+  from,
+  to,
+  total,
+  hasPrev,
+  hasNext,
+  onPrev,
+  onNext,
+}: {
+  from: number;
+  to: number;
+  total?: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div class="flex items-center gap-2 border-t border-line px-4 py-2.5 text-xs text-dim">
+      <span>Showing {from}–{to}{total != null ? ` of ${total}` : ""}</span>
+      <div class="ml-auto flex gap-2">
+        <button class="btn btn-sm" disabled={!hasPrev} onClick={onPrev}>Previous</button>
+        <button class="btn btn-sm" disabled={!hasNext} onClick={onNext}>Next</button>
       </div>
     </div>
   );

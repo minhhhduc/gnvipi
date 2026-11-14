@@ -1,47 +1,5 @@
 import type { TokenList, TokenRecord } from "./types";
-
-/** The console never asks for more than the API will serve in one page. */
-export const DEFAULT_TOKEN_LIMIT = 50;
-export const MAX_TOKEN_LIMIT = 200;
-
-/** A page size from the UI or the URL, normalized to the API's range. */
-export function clampLimit(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_TOKEN_LIMIT;
-  const whole = Math.floor(value);
-  if (whole < 1) return DEFAULT_TOKEN_LIMIT;
-  return Math.min(whole, MAX_TOKEN_LIMIT);
-}
-
-export interface PageWindow {
-  page: number;
-  from: number;
-  to: number;
-  hasPrev: boolean;
-  hasNext: boolean;
-}
-
-/**
- * The visible page window for a limit/offset list. The users endpoint reports a
- * total; the tokens endpoint does not, so a full page is the only signal that
- * another page may exist.
- */
-export function pageWindow(input: {
-  limit: number;
-  offset: number;
-  count: number;
-  total?: number | null;
-}): PageWindow {
-  const { limit, offset, count } = input;
-  const total = input.total ?? null;
-  const empty = count === 0;
-  return {
-    page: Math.floor(offset / limit) + 1,
-    from: empty ? 0 : offset + 1,
-    to: empty ? 0 : offset + count,
-    hasPrev: offset > 0,
-    hasNext: total == null ? count === limit : offset + count < total,
-  };
-}
+import { DEFAULT_LIMIT, dateLabel, optionalString } from "./admin";
 
 export type TokenStatus = "active" | "expired" | "revoked";
 
@@ -55,26 +13,13 @@ export function tokenStatus(
   return "active";
 }
 
-function calendarDate(value: string): string {
-  const t = Date.parse(value);
-  if (!Number.isFinite(t)) return "—";
-  return new Date(t).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
-}
-
 /** A gateway token without an expiry is shown as such, not as an empty cell. */
 export function expiryLabel(expiresAt?: string | null): string {
-  if (!expiresAt) return "Never";
-  return calendarDate(expiresAt);
-}
-
-export function dateLabel(value?: string | null): string {
-  if (!value) return "—";
-  return calendarDate(value);
+  return expiresAt ? dateLabel(expiresAt) : "Never";
 }
 
 export function lastUsedLabel(value?: string | null): string {
-  if (!value) return "Never used";
-  return calendarDate(value);
+  return value ? dateLabel(value) : "Never used";
 }
 
 export type ExpiryChoice = "default" | "none";
@@ -82,6 +27,11 @@ export type ExpiryChoice = "default" | "none";
 /** Admin tokens always expire; only gateway tokens may opt out. */
 export function expiryChoiceAllowed(kind: string, choice: ExpiryChoice): boolean {
   return choice === "default" || kind === "gateway";
+}
+
+/** The label for the "default" option; the server picks a different one per kind. */
+export function defaultExpiryLabel(kind: string): string {
+  return kind === "admin" ? "90 days (default)" : "365 days (default)";
 }
 
 export function tokenCreatePayload(input: {
@@ -98,14 +48,11 @@ export function tokenCreatePayload(input: {
   }
   const body: Record<string, unknown> = { name, kind: input.kind };
   if (input.kind === "admin") body.scope = input.scope;
-  // Omitting both fields leaves the 365-day gateway default in place.
+  // Omitting both fields leaves the server default in place (365 days gateway,
+  // 90 days admin).
   if (input.expiry === "none") body.no_expiry = true;
   if (input.userId) body.user_id = input.userId;
   return body;
-}
-
-function optionalString(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -137,7 +84,7 @@ export function parseTokenList(value: unknown): TokenList {
   if (!Array.isArray(body.tokens)) throw new Error("Invalid tokens response");
   return {
     tokens: body.tokens.map(tokenRecord),
-    limit: typeof body.limit === "number" ? body.limit : DEFAULT_TOKEN_LIMIT,
+    limit: typeof body.limit === "number" ? body.limit : DEFAULT_LIMIT,
     offset: typeof body.offset === "number" ? body.offset : 0,
   };
 }

@@ -1,5 +1,6 @@
 import type { AdminRole } from "./auth";
 import type { AdminUserRecord, UserList } from "./types";
+import { optionalString } from "./admin";
 
 /**
  * Account administration is owner-only. The router gates the page as well; this
@@ -14,7 +15,20 @@ export interface FieldError {
   message: string;
 }
 
-const ROLES: readonly string[] = ["owner", "admin", "user"];
+export const ROLES: readonly string[] = ["owner", "admin", "user"];
+
+/** The owner account picker loads one server-capped page. */
+export const USER_LIST_MAX = 200;
+
+/** The server validates lengths with utf8.RuneCountInString, so count runes. */
+function runeLength(value: string): number {
+  return [...value].length;
+}
+
+export function roleError(role: string): FieldError | null {
+  if (ROLES.includes(role)) return null;
+  return { field: "role", message: "Role must be owner, admin or user" };
+}
 
 /** Mirrors the server's create-user checks so the operator sees them inline. */
 export function validateNewUser(input: {
@@ -26,16 +40,15 @@ export function validateNewUser(input: {
 }): FieldError | null {
   const username = input.username.trim();
   if (!username) return { field: "username", message: "Username is required" };
-  if (username.length < 3 || username.length > 64) {
+  if (runeLength(username) < 3 || runeLength(username) > 64) {
     return { field: "username", message: "Username must be 3–64 characters" };
   }
-  if (input.display_name.trim().length > 200) {
+  if (runeLength(input.display_name.trim()) > 200) {
     return { field: "display_name", message: "Display name must be at most 200 characters" };
   }
-  if (!ROLES.includes(input.role)) {
-    return { field: "role", message: "Role must be owner, admin or user" };
-  }
-  if (input.password.length < 12 || input.password.length > 128) {
+  const invalidRole = roleError(input.role);
+  if (invalidRole) return invalidRole;
+  if (runeLength(input.password) < 12 || runeLength(input.password) > 128) {
     return { field: "password", message: "Password must be 12–128 characters" };
   }
   return null;
@@ -43,13 +56,30 @@ export function validateNewUser(input: {
 
 /** A reset issues a temporary secret under the same login policy. */
 export function validateNewPassword(password: string, confirmation: string): string | null {
-  if (password.length < 12 || password.length > 128) return "Password must be 12–128 characters";
+  if (runeLength(password) < 12 || runeLength(password) > 128) return "Password must be 12–128 characters";
   if (password !== confirmation) return "Passwords do not match";
   return null;
 }
 
-function optionalString(value: unknown): string | null {
-  return typeof value === "string" && value ? value : null;
+/** The self path of the password endpoint also demands the current secret. */
+export function passwordResetBody(input: {
+  self: boolean;
+  password: string;
+  currentPassword?: string;
+}): Record<string, unknown> {
+  return input.self
+    ? { password: input.password, current_password: input.currentPassword ?? "" }
+    : { password: input.password };
+}
+
+/** Editing your own role would leave the SPA on a stale session. */
+export function canChangeRole(targetID: string, viewerID: string): boolean {
+  return targetID !== viewerID;
+}
+
+/** The picker cannot page; say so when its single page is full. */
+export function userPickerNote(count: number): string | null {
+  return count >= USER_LIST_MAX ? `Only the first ${USER_LIST_MAX} accounts are listed.` : null;
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -64,14 +94,15 @@ function requiredString(value: unknown, field: string): string {
 function userRecord(value: unknown): AdminUserRecord {
   if (!value || typeof value !== "object") throw new Error("Invalid users response: user");
   const raw = value as Record<string, unknown>;
-  const role = requiredString(raw.role, "role");
   return {
     id: requiredString(raw.id, "id"),
     username: requiredString(raw.username, "username"),
     email: optionalString(raw.email),
     display_name: optionalString(raw.display_name),
-    role: ROLES.includes(role) ? (role as AdminRole) : "admin",
-    status: raw.status === "disabled" ? "disabled" : "active",
+    // Unknown roles and statuses are preserved so an edit cannot silently
+    // rewrite them; the view blocks a save until the role is known.
+    role: requiredString(raw.role, "role"),
+    status: typeof raw.status === "string" && raw.status ? raw.status : "active",
     must_change_password: raw.must_change_password === true,
     failed_attempts: typeof raw.failed_attempts === "number" ? raw.failed_attempts : 0,
     locked_until: optionalString(raw.locked_until),
