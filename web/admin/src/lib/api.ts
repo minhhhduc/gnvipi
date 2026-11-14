@@ -21,22 +21,49 @@ export function modelPath(id: string): string {
     .join("/");
 }
 
-export async function api<T>(path: string, init: Omit<RequestInit, "body"> & { body?: unknown } = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  let body = init.body as BodyInit | undefined;
-  if (init.body !== undefined && typeof init.body !== "string") {
+export type ApiRequestInit = Omit<RequestInit, "body"> & {
+  body?: unknown;
+  redirectOn401?: boolean;
+};
+
+const SAFE_METHODS: Record<string, true> = { GET: true, HEAD: true, OPTIONS: true };
+
+function cookieValue(name: string): string {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  const pair = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  if (!pair) return "";
+  const value = pair.slice(prefix.length);
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  const { body: inputBody, redirectOn401 = true, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
+  let body = inputBody as BodyInit | undefined;
+  if (inputBody !== undefined && typeof inputBody !== "string") {
     headers.set("Content-Type", "application/json");
-    body = JSON.stringify(init.body);
+    body = JSON.stringify(inputBody);
+  }
+  const method = (requestInit.method || "GET").toUpperCase();
+  const bearerRequest = /^Bearer\s+\S+$/i.test(headers.get("Authorization")?.trim() || "");
+  if (!SAFE_METHODS[method] && !bearerRequest && !headers.has("X-CSRF-Token")) {
+    const csrf = cookieValue("gw_csrf");
+    if (csrf) headers.set("X-CSRF-Token", csrf);
   }
   const res = await fetch(path, {
-    ...init,
+    ...requestInit,
     body,
     headers,
     credentials: "same-origin",
   });
 
   if (res.status === 401) {
-    location.assign("/admin/login");
+    if (redirectOn401) location.assign("/admin/login");
     throw new ApiError("Unauthorized", 401);
   }
 
