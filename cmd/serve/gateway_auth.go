@@ -32,6 +32,11 @@ func withInternalGatewayUser(ctx context.Context, userID string) context.Context
 // gatewayTokenCache avoids one database round trip per authenticated request.
 var gatewayTokenCache = auth.NewTokenCache(auth.TokenCacheTTL, 4096)
 
+// isSearchPath reports the search surfaces: the MCP server and the JSON API.
+func isSearchPath(path string) bool {
+	return path == "/mcp" || path == "/mcp/" || path == "/v2/search"
+}
+
 func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 	var keys [][sha256.Size]byte
 	for _, key := range strings.Split(keyList, ",") {
@@ -49,7 +54,7 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if !clientAPIPath(path) && path != "/mcp" && path != "/mcp/" {
+		if !clientAPIPath(path) && !isSearchPath(path) {
 			c.Next()
 			return
 		}
@@ -164,6 +169,10 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 				"id":      nil,
 				"error":   gin.H{"code": -32000, "message": message},
 			})
+			return
+		}
+		if path == "/v2/search" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": message})
 			return
 		}
 		proto := gwerr.ProtocolOpenAIChat

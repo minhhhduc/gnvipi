@@ -133,6 +133,38 @@ func nodeText(n *html.Node) string {
 	return b.String()
 }
 
+// searchHTTP exposes the same ranked search as plain JSON for clients that do
+// not speak MCP. The MCP tool at /mcp is unchanged.
+func searchHTTP(c *gin.Context) {
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(maxBytesReader(c.Request.Body, 64<<10)).Decode(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "expected a JSON object with query"})
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
+		return
+	}
+	items, err := searchWebRanked(query)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	type result struct {
+		Title   string `json:"title"`
+		URL     string `json:"url"`
+		Snippet string `json:"snippet,omitempty"`
+	}
+	results := make([]result, 0, len(items))
+	for i := range items {
+		results = append(results, result{Title: items[i].Title, URL: items[i].URL, Snippet: items[i].Snippet})
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
 // searchMCP exposes the configured search page as a stateless Streamable HTTP MCP tool.
 func searchMCP(c *gin.Context) {
 	if c.Request.Method != http.MethodPost {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,59 @@ func TestSearchConfigPersists(t *testing.T) {
 	}
 	if got := loaded.searchTemplate(); got != searchURL {
 		t.Fatalf("loaded search URL = %q", got)
+	}
+}
+
+func TestSearchHTTPJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/v2/search", searchHTTP)
+
+	oldPrefs := prefs
+	defer func() { prefs = oldPrefs }()
+	prefs = &modelPrefs{}
+
+	for _, body := range []string{"not json", `{"query":"  "}`} {
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v2/search", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %q: status = %d, want 400", body, w.Code)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v2/search", strings.NewReader(`{"query":"colab"}`)))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("unconfigured search status = %d, want 502", w.Code)
+	}
+
+	prefs = &modelPrefs{searchURL: "https://www.bing.com/search?q={query}"}
+	oldClient := searchClient
+	defer func() { searchClient = oldClient }()
+	searchClient = &http.Client{Transport: searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `<html><li class=b_algo><h2><a href="https://example.com/guide">Example guide</a></h2></li></html>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	})}
+	gw := searchGatewayInstance
+	defer gw.setTestTransport(nil)
+	gw.setTestTransport(searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `<html><li class=b_algo><h2><a href="https://example.com/guide">Example guide</a></h2></li></html>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	}))
+
+	w = httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v2/search", strings.NewReader(`{"query":"colab mcp"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Results []struct{ Title, URL string } `json:"results"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Results) == 0 || got.Results[0].URL != "https://example.com/guide" {
+		t.Fatalf("results = %+v", got.Results)
 	}
 }
 

@@ -525,6 +525,8 @@ func runServer() (err error) {
 				}
 				engine.POST("/mcp", searchMCP)
 				engine.GET("/mcp", searchMCP)
+				// Plain JSON search for clients that are not MCP.
+				engine.POST("/v2/search", searchHTTP)
 
 				// Dummy endpoint for Claude Code ping/connection check
 				engine.HEAD("/v1/api/hello", func(c *gin.Context) { c.Status(http.StatusOK) })

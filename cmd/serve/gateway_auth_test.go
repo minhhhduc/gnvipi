@@ -115,6 +115,7 @@ func TestGatewayAuthRouteCoverage(t *testing.T) {
 		{http.MethodPost, "/mcp", true},
 		{http.MethodDelete, "/mcp", true},
 		{http.MethodPost, "/mcp/", true},
+		{http.MethodPost, "/v2/search", true},
 		{http.MethodGet, "/healthz", false},
 		{http.MethodHead, "/healthz", false},
 		{http.MethodGet, "/admin", false},
@@ -156,7 +157,7 @@ func TestGatewayAuthRouteCoverage(t *testing.T) {
 }
 
 func TestGatewayAuthProtocolErrors(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/models", "/mcp"} {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/chat/completions", "/v1/responses", "/v1/models", "/mcp", "/v2/search"} {
 		t.Run(path, func(t *testing.T) {
 			engine := gatewayAuthTestEngine("gateway-one")
 			engine.POST(path, gatewayAuthConsumer)
@@ -171,6 +172,15 @@ func TestGatewayAuthProtocolErrors(t *testing.T) {
 			var got map[string]json.RawMessage
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
+			}
+			if path == "/v2/search" {
+				var detail struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil || detail.Error == "" || got["jsonrpc"] != nil {
+					t.Fatalf("invalid /v2/search authentication error: %s", w.Body.String())
+				}
+				return
 			}
 			var detail struct {
 				Type    string `json:"type"`
