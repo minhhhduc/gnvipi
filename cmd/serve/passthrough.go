@@ -22,7 +22,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/gateway/core"
-	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	gwprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	utls "github.com/refraction-networking/utls"
@@ -218,7 +217,7 @@ func setCustomProviderHeaders(dst, src *http.Request, prov *customProvider) {
 func forwardConfiguredHeaders(dst, src *http.Request, prov *customProvider) {
 	for _, name := range prov.ForwardHeaders {
 		canonical := http.CanonicalHeaderKey(strings.TrimSpace(name))
-		if canonical == "" || gatewayprovider.ForbiddenForwardHeader(canonical) {
+		if canonical == "" || gwprovider.ForbiddenForwardHeader(canonical) {
 			continue
 		}
 		for _, value := range src.Header.Values(canonical) {
