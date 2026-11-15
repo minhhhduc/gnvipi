@@ -10,7 +10,7 @@ import (
 // days and audit rows for a year.
 const (
 	DefaultLoginAttemptRetention = 30 * 24 * time.Hour
-	DefaultAuditRetention        = 365 * 24 * time.Hour
+	DefaultAuditRetention        = 30 * 24 * time.Hour
 )
 
 // retentionLockSQL is the single-flight lock for the retention pass. The
@@ -22,11 +22,20 @@ const retentionLockSQL = `SELECT pg_try_advisory_xact_lock(hashtext('gnvipi:rete
 // retention lock. The loser of the race skips its turn; it is not a failure.
 var ErrRetentionBusy = errors.New("auth: retention pass is running in another process")
 
+// DefaultAuditMaxRows caps the audit table at a rolling window regardless of age.
+const DefaultAuditMaxRows = 5000
+
+// AuditCapFloor protects recent evidence: the row cap only evicts rows older
+// than this, so a flood of audit writes cannot push out yesterday's trail.
+const AuditCapFloor = 7 * 24 * time.Hour
+
 // RetentionConfig bounds how long session, lockout and audit evidence is kept.
 type RetentionConfig struct {
 	Sessions      SessionConfig
 	LoginAttempts time.Duration
 	Audit         time.Duration
+	// AuditMaxRows keeps at most this many newest audit rows.
+	AuditMaxRows int64
 }
 
 // DefaultRetentionConfig returns the design defaults: 30 days of lockout
@@ -36,6 +45,7 @@ func DefaultRetentionConfig() RetentionConfig {
 		Sessions:      DefaultSessionConfig(),
 		LoginAttempts: DefaultLoginAttemptRetention,
 		Audit:         DefaultAuditRetention,
+		AuditMaxRows:  DefaultAuditMaxRows,
 	}
 }
 
@@ -46,6 +56,9 @@ func (c RetentionConfig) normalized() RetentionConfig {
 	}
 	if c.Audit <= 0 {
 		c.Audit = DefaultAuditRetention
+	}
+	if c.AuditMaxRows <= 0 {
+		c.AuditMaxRows = DefaultAuditMaxRows
 	}
 	return c
 }
@@ -112,7 +125,7 @@ func RunRetention(ctx context.Context, app, maintenance DB, now time.Time, cfg R
 	}
 	if maintenance == nil {
 		res.AuditSkipped = true
-	} else if res.Audit, err = CleanupAudit(ctx, lockTx, now.Add(-cfg.Audit)); err != nil {
+	} else if res.Audit, err = CleanupAudit(ctx, lockTx, now.Add(-cfg.Audit), now.Add(-AuditCapFloor), cfg.AuditMaxRows); err != nil {
 		return res, err
 	}
 	if err := lockTx.Commit(ctx); err != nil {
@@ -142,11 +155,20 @@ func pruneAuthEvidence(ctx context.Context, app DB, now time.Time, cfg Retention
 	return sessions, attempts, nil
 }
 
-// CleanupAudit deletes audit rows older than the retention cutoff. It must run
+// CleanupAudit keeps a rolling window: it deletes rows older than the age cutoff,
+// plus surplus rows that are already older than capFloor. Recent rows are never
+// evicted by the cap, so a burst of audit writes cannot erase fresh evidence.
+// It must run
 // as the maintenance role: the application role holds neither UPDATE nor DELETE
 // on audit_log.
-func CleanupAudit(ctx context.Context, q Querier, before time.Time) (int64, error) {
-	tag, err := q.Exec(ctx, `DELETE FROM audit_log WHERE ts < $1`, before)
+func CleanupAudit(ctx context.Context, q Querier, before, capFloor time.Time, maxRows int64) (int64, error) {
+	if maxRows <= 0 {
+		maxRows = DefaultAuditMaxRows
+	}
+	tag, err := q.Exec(ctx, `DELETE FROM audit_log
+		WHERE ts < $1
+		   OR (ts < $2 AND id NOT IN (
+			SELECT id FROM audit_log ORDER BY ts DESC, id DESC LIMIT $3))`, before, capFloor, maxRows)
 	if err != nil {
 		return 0, err
 	}
