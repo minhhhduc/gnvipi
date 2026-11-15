@@ -9,6 +9,7 @@ import { LoginScreen, PasswordChangeScreen } from "./components/Login";
 import { Shell } from "./components/Shell";
 import { Card, Empty, PageHeader, ThemeContext, UiContext, type UiApi } from "./components/ui";
 import { StatsView } from "./views/Stats";
+import { UsageLogView } from "./views/UsageLog";
 import { PlaygroundView } from "./views/Playground";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
@@ -20,6 +21,13 @@ import { AuditView } from "./views/Audit";
 /** Stats refresh cadence, and the point at which a request counts as stalled. */
 const STATS_POLL_INTERVAL_MS = 2000;
 const STATS_POLL_TIMEOUT_MS = 15000;
+
+/** Display labels where the URL value is not the page title. */
+const PAGE_TITLES: Partial<Record<Page, string>> = {
+  stats: "Dashboard",
+  usage: "Usage log",
+  chromes: "Chrome",
+};
 
 const LEGACY_ADMIN_USER: AdminUser = {
   id: "legacy-admin",
@@ -116,7 +124,7 @@ export function App() {
     const raw = rawPageFromUrl(location.search);
     const next = pageFromUrl(location.search, user.role);
     setPage(next);
-    if (raw && raw !== next) toast(`Page “${raw}” is not available for ${user.role} accounts — showing Stats`, "bad");
+    if (raw && raw !== next) toast(`Page “${raw}” is not available for ${user.role} accounts — showing Dashboard`, "bad");
   }, [toast, user]);
 
   useEffect(() => {
@@ -132,7 +140,7 @@ export function App() {
         ? "Sign in"
         : user.must_change_password
           ? "Change password"
-          : effectivePage === "chromes" ? "Chrome" : effectivePage[0].toUpperCase() + effectivePage.slice(1);
+          : PAGE_TITLES[effectivePage] ?? effectivePage[0].toUpperCase() + effectivePage.slice(1);
     document.title = `${title} · Gateway Admin`;
   }, [authChecked, effectivePage, user]);
 
@@ -243,9 +251,10 @@ export function App() {
     effectivePage === "models" ? <ModelsView user={user} /> :
     effectivePage === "playground" ? <PlaygroundView user={user} /> :
     effectivePage === "audit" ? <AuditView user={user} /> :
+    effectivePage === "usage" ? <UsageLogView /> :
     !operator ? (
       <>
-        <PageHeader title="Stats" sub="Usage for this gateway account" />
+        <PageHeader title="Dashboard" sub="Usage for this gateway account" />
         <Card>
           <Empty
             title="Per-user stats are not available yet"
