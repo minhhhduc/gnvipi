@@ -3,6 +3,7 @@ package providerstore
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -125,7 +126,7 @@ func (s *Snapshot) AvailableModels(userID string, allOwners bool) []AvailableMod
 		for owner := range s.personalEx {
 			owners = append(owners, owner)
 		}
-		sort.Strings(owners)
+		slices.Sort(owners)
 	}
 	type ownerList struct {
 		owner string

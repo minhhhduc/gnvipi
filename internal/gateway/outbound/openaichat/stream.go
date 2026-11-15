@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -112,7 +112,7 @@ func (s *chatStream) closeOpenBlocks() {
 		for _, tb := range s.toolBlocks {
 			indices = append(indices, tb.blockIndex)
 		}
-		sort.Ints(indices)
+		slices.Sort(indices)
 		for _, bIdx := range indices {
 			s.pending = append(s.pending, ir.NewBlockStop(bIdx))
 		}

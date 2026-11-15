@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"html"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -240,7 +241,7 @@ func adminHTML(page string, catalog []*cliproxy.ModelInfo) string {
 			ids = append(ids, m.ID)
 		}
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 
 	providers := prefs.listProviders()
 	providersV2, err := prefs.listProvidersV2()

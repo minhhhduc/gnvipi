@@ -1,7 +1,7 @@
 package nvidia
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/models"
@@ -16,7 +16,7 @@ func RegistryModels() []*cliproxy.ModelInfo {
 	for id := range registry {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	out := make([]*cliproxy.ModelInfo, 0, len(ids))
 	for _, id := range ids {
 		org, _, _ := strings.Cut(id, "/")

@@ -10,7 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -285,7 +285,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 
 	// ModeStrict: return 400 InvalidRequest error detailing all unsupported features.
 	if mode == ModeStrict {
-		sort.Strings(unsupported)
+		slices.Sort(unsupported)
 		var msg string
 		if len(unsupported) == 1 {
 			msg = fmt.Sprintf("unsupported feature for target upstream: %s", unsupported[0])
@@ -348,7 +348,7 @@ func Validate(req *ir.Request, caps adapter.Capabilities, mode Mode) (*Result, e
 		}
 	}
 
-	sort.Strings(dropped)
+	slices.Sort(dropped)
 	log.Printf("[gateway] dropped unsupported parameters: %s", strings.Join(dropped, ", "))
 	if err := validateImages(req, caps.MaxImageBytes, caps.AllowedMediaTypes); err != nil {
 		return nil, err
