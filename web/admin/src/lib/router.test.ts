@@ -5,6 +5,7 @@ import type { Page } from "./context";
 describe("pageFromUrl", () => {
   it.each([
     ["?page=stats", "stats"],
+    ["?page=usage", "usage"],
     ["?page=playground", "playground"],
     ["?page=models", "models"],
     ["?page=config", "config"],
@@ -33,6 +34,17 @@ describe("pageFromUrl", () => {
     expect(forRole("?page=models", "user")).toBe("models");
     expect(forRole("?page=config", "user")).toBe("stats");
     expect(forRole("?page=chromes", "user")).toBe("stats");
+  });
+
+  it("opens the usage log to operators and sends users back to the dashboard", () => {
+    const forRole = pageFromUrl as (
+      search: string,
+      role: "owner" | "admin" | "user",
+    ) => Page;
+
+    expect(forRole("?page=usage", "owner")).toBe("usage");
+    expect(forRole("?page=usage", "admin")).toBe("usage");
+    expect(forRole("?page=usage", "user")).toBe("stats");
   });
 
   it("keeps the users screen owner-only and the tokens screen open to every role", () => {
@@ -66,6 +78,13 @@ describe("pageAllowed", () => {
     expect(pageAllowed("tokens", "owner")).toBe(true);
     expect(pageAllowed("tokens", "admin")).toBe(true);
     expect(pageAllowed("tokens", "user")).toBe(true);
+  });
+
+  it("keeps the usage log and dashboard straight", () => {
+    expect(pageAllowed("usage", "owner")).toBe(true);
+    expect(pageAllowed("usage", "admin")).toBe(true);
+    expect(pageAllowed("usage", "user")).toBe(false);
+    expect(pageAllowed("stats", "user")).toBe(true);
   });
 
   it("opens the playground to every role", () => {

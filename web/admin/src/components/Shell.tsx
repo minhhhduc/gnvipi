@@ -4,7 +4,8 @@ import { totals, useGateway, type Page } from "../lib/context";
 import { pageAllowed } from "../lib/router";
 
 const NAV: { page: Page; label: string }[] = [
-  { page: "stats", label: "Stats" },
+  { page: "stats", label: "Dashboard" },
+  { page: "usage", label: "Usage log" },
   { page: "playground", label: "Playground" },
   { page: "models", label: "Models" },
   { page: "config", label: "Config" },

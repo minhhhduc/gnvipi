@@ -41,7 +41,8 @@ function renderShell(role: TestRole): string {
 describe("Shell role navigation", () => {
   it.each(["owner", "admin"] as const)("shows operator screens to %s", (role) => {
     const text = renderShell(role);
-    expect(text).toContain("Stats");
+    expect(text).toContain("Dashboard");
+    expect(text).toContain("Usage log");
     expect(text).toContain("Models");
     expect(text).toContain("Config");
     expect(text).toContain("Chrome");
@@ -49,8 +50,9 @@ describe("Shell role navigation", () => {
 
   it("shows Models to users and hides the other operator-only screens", () => {
     const text = renderShell("user");
-    expect(text).toContain("Stats");
+    expect(text).toContain("Dashboard");
     expect(text).toContain("Models");
+    expect(text).not.toContain("Usage log");
     expect(text).not.toContain("Config");
     expect(text).not.toContain("Chrome");
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectStatsEvents } from "../views/Stats";
+import { selectLogEvents } from "../views/UsageLog";
 import type { RequestEvent } from "./types";
 
 function event(ms: number): RequestEvent {
@@ -14,18 +14,13 @@ function event(ms: number): RequestEvent {
   };
 }
 
-describe("stats event selection", () => {
-  it("keeps live events for KPIs while a frame supplies the request log", () => {
+describe("usage log event selection", () => {
+  it("reads the open frame and falls back to the live ring", () => {
     const live = [event(100), event(200)];
     const frame = [event(900)];
 
-    expect(selectStatsEvents(live, frame)).toEqual({
-      kpiEvents: live,
-      logEvents: frame,
-    });
-    expect(selectStatsEvents(live, undefined)).toEqual({
-      kpiEvents: live,
-      logEvents: live,
-    });
+    expect(selectLogEvents(live, frame)).toEqual(frame);
+    expect(selectLogEvents(live, undefined)).toEqual(live);
+    expect(selectLogEvents(undefined, undefined)).toEqual([]);
   });
 });
