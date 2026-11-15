@@ -16,8 +16,11 @@ func TestDefaultRetentionConfig(t *testing.T) {
 	if cfg.LoginAttempts != 30*24*time.Hour {
 		t.Fatalf("login attempt retention = %v, want 30 days", cfg.LoginAttempts)
 	}
-	if cfg.Audit != 365*24*time.Hour {
-		t.Fatalf("audit retention = %v, want 365 days", cfg.Audit)
+	if cfg.Audit != 30*24*time.Hour {
+		t.Fatalf("audit retention = %v, want 30 days", cfg.Audit)
+	}
+	if cfg.AuditMaxRows != DefaultAuditMaxRows {
+		t.Fatalf("audit cap = %d, want %d", cfg.AuditMaxRows, DefaultAuditMaxRows)
 	}
 	if cfg.Sessions.IdleTimeout != 12*time.Hour || cfg.Sessions.AbsoluteTimeout != 7*24*time.Hour {
 		t.Fatalf("session config not carried: %+v", cfg.Sessions)
@@ -296,7 +299,7 @@ func TestCleanupAuditDB(t *testing.T) {
 			t.Fatalf("insert audit %s: %v", row.target, err)
 		}
 	}
-	deleted, err := CleanupAudit(ctx, db, cutoff, DefaultAuditMaxRows)
+	deleted, err := CleanupAudit(ctx, db, cutoff, cutoff.Add(AuditCapFloor), DefaultAuditMaxRows)
 	if err != nil {
 		t.Fatalf("cleanup audit: %v", err)
 	}
