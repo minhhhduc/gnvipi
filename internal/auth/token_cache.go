@@ -31,15 +31,15 @@ type TokenCache struct {
 	order   *list.List // most recently used at the front
 }
 
-// NewTokenCache builds a cache holding at most max identities for ttl.
-func NewTokenCache(ttl time.Duration, max int) *TokenCache {
+// NewTokenCache builds a cache holding at most limit identities for ttl.
+func NewTokenCache(ttl time.Duration, limit int) *TokenCache {
 	if ttl <= 0 {
 		ttl = TokenCacheTTL
 	}
-	if max <= 0 {
-		max = 4096
+	if limit <= 0 {
+		limit = 4096
 	}
-	return &TokenCache{ttl: ttl, max: max, entries: make(map[string]*list.Element), order: list.New()}
+	return &TokenCache{ttl: ttl, max: limit, entries: make(map[string]*list.Element), order: list.New()}
 }
 
 func cacheKey(raw string, kind TokenKind) string {

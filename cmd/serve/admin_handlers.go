@@ -39,9 +39,9 @@ func userStatsView(data gin.H, userID string) gin.H {
 				continue
 			}
 			scoped := make([]nvidia.RequestEvent, 0, len(events))
-			for _, event := range events {
-				if event.UserID == userID {
-					scoped = append(scoped, event)
+			for i := range events {
+				if events[i].UserID == userID {
+					scoped = append(scoped, events[i])
 				}
 			}
 			out[key] = scoped
@@ -58,9 +58,9 @@ func scopeEvents(events []nvidia.RequestEvent, userID string) []nvidia.RequestEv
 		return events
 	}
 	scoped := make([]nvidia.RequestEvent, 0, len(events))
-	for _, event := range events {
-		if event.UserID == userID {
-			scoped = append(scoped, event)
+	for i := range events {
+		if events[i].UserID == userID {
+			scoped = append(scoped, events[i])
 		}
 	}
 	return scoped
