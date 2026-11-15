@@ -646,15 +646,16 @@ function KeyEditorDialog({
   // Auth key -> bearer; API key -> x-api-key header. One credential per key.
   const effectiveScheme = shared ? "none" : trimmedAuth ? "bearer" : trimmedAPI ? "header" : target?.auth_scheme ?? "bearer";
   const showCredential = effectiveScheme !== "none";
+  // Both credentials travel in one encrypted secret; the server sends auth_key
+  // as Authorization: Bearer and api_key to the header named here.
+  const secretValue = trimmedAuth && trimmedAPI
+    ? JSON.stringify({ auth_key: trimmedAuth, api_key: trimmedAPI, api_key_header: "x-api-key" })
+    : trimmedAuth || trimmedAPI || undefined;
 
   const submit = async () => {
     setError(null);
     if (!shared && !target && !trimmedAuth && !trimmedAPI) {
       setError("Fill at least one of Auth key or API key");
-      return;
-    }
-    if (!shared && trimmedAuth && trimmedAPI) {
-      setError("Fill one of Auth key or API key, not both");
       return;
     }
     setBusy(true);
@@ -663,8 +664,10 @@ function KeyEditorDialog({
         name,
         enabled,
         authScheme: effectiveScheme,
-        authHeaderName: shared ? undefined : trimmedAPI ? "x-api-key" : target?.auth_scheme === "header" ? target.auth_header_name : undefined,
-        secret: trimmedAuth || trimmedAPI || undefined,
+        // A paired api_key names its own header inside the secret, so the key
+        // column stays reserved for header-scheme keys.
+        authHeaderName: shared ? undefined : trimmedAPI && !trimmedAuth ? "x-api-key" : target?.auth_scheme === "header" ? target.auth_header_name : undefined,
+        secret: secretValue,
       };
       let keyID = target?.id;
       if (target) {
@@ -730,7 +733,7 @@ function KeyEditorDialog({
                 onInput={(e) => setApiKey((e.currentTarget as HTMLInputElement).value)} />
             </label>
             <span class="block text-[11px] font-normal text-dim">
-              Fill at least one. Editing with both blank keeps the stored credential. Write-only: only the last four characters are shown later.
+              Fill either or both. Sent as Authorization: Bearer (auth key) and x-api-key (api key). Editing with both blank keeps the stored credential. Write-only: only the last four characters are shown later.
             </span>
           </>
         )}

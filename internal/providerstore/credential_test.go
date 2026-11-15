@@ -315,3 +315,38 @@ func TestKeyEnvAllowlist(t *testing.T) {
 		t.Fatalf("reserved env patch error = %v", err)
 	}
 }
+
+func TestCredentialPairEnvelope(t *testing.T) {
+	// Both upstream credentials travel in one encrypted secret: auth_key goes
+	// to Authorization, api_key to the header the key names.
+	key, ring := sealedKey(t, SchemeBearer, `{"auth_key":"sk-auth","api_key":"sk-api","api_key_header":"x-second-key"}`)
+	credential, err := ResolveKeyCredential(context.Background(), key, ring, nil)
+	if err != nil {
+		t.Fatalf("resolve pair: %v", err)
+	}
+	if credential.Raw != "sk-auth" || credential.APIKey != "sk-api" || credential.APIKeyHeader != "x-second-key" {
+		t.Fatalf("pair = %+v, want auth=sk-auth api=sk-api header=x-second-key", credential)
+	}
+
+	// A paired api_key without a usable destination header is refused, never
+	// guessed, and can never target routing headers.
+	for _, secret := range []string{
+		`{"auth_key":"sk-auth","api_key":"sk-api"}`,
+		`{"auth_key":"sk-auth","api_key":"sk-api","api_key_header":"Host"}`,
+	} {
+		bad, ring := sealedKey(t, SchemeBearer, secret)
+		if _, err := ResolveKeyCredential(context.Background(), bad, ring, nil); !errors.Is(err, ErrInvalidCredentialSource) {
+			t.Fatalf("%s error = %v, want ErrInvalidCredentialSource", secret, err)
+		}
+	}
+
+	// A single secret still resolves as one header value.
+	single, ring := sealedKey(t, SchemeBearer, "sk-single")
+	credential, err = ResolveKeyCredential(context.Background(), single, ring, nil)
+	if err != nil {
+		t.Fatalf("resolve single: %v", err)
+	}
+	if credential.Raw != "sk-single" || credential.APIKey != "" || credential.APIKeyHeader != "" {
+		t.Fatalf("single = %+v, want raw only", credential)
+	}
+}

@@ -417,7 +417,7 @@ func (r *Router) materialize(ctx context.Context, selection selected) (Route, er
 			if !c.hasResolved {
 				return Route{}, ErrCredentialUnavailable
 			}
-			credential = ResolvedCredential{Raw: c.secretRaw, Basic: c.basic}
+			credential = c.resolved
 		} else {
 			resolved, err := ResolveKeyCredential(ctx, c.key, r.store.Keyring(), r.store.Refs())
 			if err != nil {
@@ -430,6 +430,14 @@ func (r *Router) materialize(ctx context.Context, selection selected) (Route, er
 	}
 
 	definition := provider.Clone(c.definition)
+	// The paired api_key travels alongside the auth key, in the header the key
+	// names in auth_header_name.
+	if credential.APIKey != "" {
+		if definition.Headers == nil {
+			definition.Headers = map[string]string{}
+		}
+		definition.Headers[credential.APIKeyHeader] = credential.APIKey
+	}
 	switch c.key.AuthScheme {
 	case SchemeNone:
 		definition.Auth = provider.Auth{Scheme: provider.AuthNone}

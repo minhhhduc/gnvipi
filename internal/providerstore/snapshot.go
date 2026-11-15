@@ -39,8 +39,7 @@ type candidate struct {
 	legacyPosition   int
 
 	key         KeyRow
-	secretRaw   string
-	basic       BasicSecret
+	resolved    ResolvedCredential
 	credential  error
 	hasResolved bool
 }
@@ -378,8 +377,7 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 
 func (c *candidate) applyCredential(credential ResolvedCredential) {
 	c.hasResolved = true
-	c.secretRaw = credential.Raw
-	c.basic = credential.Basic
+	c.resolved = credential
 }
 
 func (s *Snapshot) index(c *candidate) {

@@ -605,6 +605,12 @@ func probeKeyCredential(ctx context.Context, definition *gatewayprovider.Provide
 	default:
 		return ConnectionTestResult{OK: false, Status: "error", Message: "unsupported auth scheme"}
 	}
+	if credential.APIKey != "" {
+		if definition.Headers == nil {
+			definition.Headers = map[string]string{}
+		}
+		definition.Headers[credential.APIKeyHeader] = credential.APIKey
+	}
 	return testProviderConnection(ctx, definition)
 }
 
