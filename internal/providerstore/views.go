@@ -2,9 +2,12 @@ package providerstore
 
 import (
 	"container/list"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Account views are cached per (user, config version) for a short TTL. They are
@@ -261,28 +264,28 @@ type viewKey struct {
 	version int64
 }
 
+// groupKey is the singleflight key for one (user, version) pair.
+func (k viewKey) groupKey() string {
+	return k.userID + "\x00" + strconv.FormatInt(k.version, 10)
+}
+
 type viewEntry struct {
 	view     *accountView
 	storedAt time.Time
 	elem     *list.Element
 }
 
-type viewCall struct {
-	done chan struct{}
-	view *accountView
-}
-
 // viewCache is a bounded LRU of account views with a TTL backstop. Single-flight
 // per key makes a burst of requests build a view once; unrelated users never
 // wait on each other.
 type viewCache struct {
-	mu       sync.Mutex
-	max      int
-	ttl      time.Duration
-	now      func() time.Time
-	entries  map[viewKey]*viewEntry
-	order    *list.List
-	inflight map[viewKey]*viewCall
+	mu      sync.Mutex
+	max     int
+	ttl     time.Duration
+	now     func() time.Time
+	entries map[viewKey]*viewEntry
+	order   *list.List
+	group   singleflight.Group
 }
 
 func newViewCache(capacity int, now func() time.Time) *viewCache {
@@ -290,12 +293,11 @@ func newViewCache(capacity int, now func() time.Time) *viewCache {
 		now = time.Now
 	}
 	return &viewCache{
-		max:      capacity,
-		ttl:      accountViewTTL,
-		now:      now,
-		entries:  make(map[viewKey]*viewEntry),
-		order:    list.New(),
-		inflight: make(map[viewKey]*viewCall),
+		max:     capacity,
+		ttl:     accountViewTTL,
+		now:     now,
+		entries: make(map[viewKey]*viewEntry),
+		order:   list.New(),
 	}
 }
 
@@ -322,29 +324,47 @@ func (c *viewCache) previous(userID string) *accountView {
 
 func (c *viewCache) get(key viewKey, build func() *accountView) *accountView {
 	c.mu.Lock()
-	if entry, ok := c.entries[key]; ok {
-		if c.now().Sub(entry.storedAt) < c.ttl {
-			c.order.MoveToFront(entry.elem)
-			view := entry.view
-			c.mu.Unlock()
-			return view
-		}
-		delete(c.entries, key)
-		c.order.Remove(entry.elem)
-	}
-	if call, ok := c.inflight[key]; ok {
+	if view := c.cached(key); view != nil {
 		c.mu.Unlock()
-		<-call.done
-		return call.view
+		return view
 	}
-	call := &viewCall{done: make(chan struct{})}
-	c.inflight[key] = call
 	c.mu.Unlock()
 
-	view := build()
+	// One build per (user, version); waiters share the result.
+	value, _, _ := c.group.Do(key.groupKey(), func() (any, error) { //nolint:errcheck // the build never fails
+		c.mu.Lock()
+		view := c.cached(key) // a flight may have filled it while we waited
+		c.mu.Unlock()
+		if view != nil {
+			return view, nil
+		}
+		view = build() // build takes the cache lock itself (previous), so run unlocked
+		c.mu.Lock()
+		c.store(key, view)
+		c.mu.Unlock()
+		return view, nil
+	})
+	return value.(*accountView)
+}
 
-	c.mu.Lock()
-	delete(c.inflight, key)
+// cached returns a fresh entry and marks it most recently used; the caller
+// holds the lock.
+func (c *viewCache) cached(key viewKey) *accountView {
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil
+	}
+	if c.now().Sub(entry.storedAt) >= c.ttl {
+		delete(c.entries, key)
+		c.order.Remove(entry.elem)
+		return nil
+	}
+	c.order.MoveToFront(entry.elem)
+	return entry.view
+}
+
+// store records a built view and evicts the least recently used entry.
+func (c *viewCache) store(key viewKey, view *accountView) {
 	entry := &viewEntry{view: view, storedAt: c.now()}
 	entry.elem = c.order.PushFront(key)
 	c.entries[key] = entry
@@ -356,10 +376,6 @@ func (c *viewCache) get(key viewKey, build func() *accountView) *accountView {
 		delete(c.entries, oldest.Value.(viewKey))
 		c.order.Remove(oldest)
 	}
-	call.view = view
-	close(call.done)
-	c.mu.Unlock()
-	return view
 }
 
 // accountView returns the cached view for this account and the snapshot's

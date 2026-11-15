@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestArxivIdentifierPrefersDirectLookup checks an arXiv ID routes to arXiv
 // first and becomes an id: lookup rather than a web search.
@@ -23,7 +26,7 @@ func TestArxivIdentifierPrefersDirectLookup(t *testing.T) {
 	}
 	bing := gw.backends[bingName].Adapt(ctx)
 	for _, q := range bing.Queries {
-		if !containsString(q, "2608.14210") {
+		if !strings.Contains(q, "2608.14210") {
 			t.Fatalf("Bing must include the identifier, got %q", q)
 		}
 	}
@@ -52,21 +55,21 @@ func TestLegalQueryAdaptationDiffers(t *testing.T) {
 	if len(bing.Queries) < 2 {
 		t.Fatalf("Bing legal plan = %v, want broad + authoritative variants", bing.Queries)
 	}
-	if !containsString(bing.Queries[0], `"CISG"`) || !containsString(bing.Queries[0], `"Article 79"`) {
+	if !strings.Contains(bing.Queries[0], `"CISG"`) || !strings.Contains(bing.Queries[0], `"Article 79"`) {
 		t.Fatalf("Bing broad query = %q", bing.Queries[0])
 	}
-	if !containsString(bing.Queries[1], "site:uncitral.un.org") {
+	if !strings.Contains(bing.Queries[1], "site:uncitral.un.org") {
 		t.Fatalf("Bing authoritative query = %q", bing.Queries[1])
 	}
 	academic := gw.backends[arxivName].Adapt(ctx).Queries
-	if len(academic) == 0 || containsString(academic[0], "site:") {
+	if len(academic) == 0 || strings.Contains(academic[0], "site:") {
 		t.Fatalf("arXiv plan must not carry Bing site: syntax: %v", academic)
 	}
-	if !containsString(academic[0], "Article 79") {
+	if !strings.Contains(academic[0], "Article 79") {
 		t.Fatalf("arXiv plan must target the provision: %v", academic)
 	}
 	crossref := gw.backends[crossrefName].Adapt(ctx).Queries
-	if !containsString(crossref[0], "Article 79") {
+	if !strings.Contains(crossref[0], "Article 79") {
 		t.Fatalf("Crossref plan = %v", crossref)
 	}
 }
@@ -83,10 +86,10 @@ func TestUNCLOSLegalRouting(t *testing.T) {
 	}
 	gw := newSearchGateway()
 	bing := gw.backends[bingName].Adapt(ctx)
-	if !containsString(bing.Queries[0], `"UNCLOS"`) || !containsString(bing.Queries[0], `"Article 76"`) {
+	if !strings.Contains(bing.Queries[0], `"UNCLOS"`) || !strings.Contains(bing.Queries[0], `"Article 76"`) {
 		t.Fatalf("Bing broad query = %q", bing.Queries[0])
 	}
-	if !containsString(bing.Queries[1], "site:un.org") || containsString(bing.Queries[1], "site:cisg-online.org") {
+	if !strings.Contains(bing.Queries[1], "site:un.org") || strings.Contains(bing.Queries[1], "site:cisg-online.org") {
 		t.Fatalf("Bing UNCLOS authoritative query = %q", bing.Queries[1])
 	}
 }
@@ -107,11 +110,11 @@ func TestAcademicQueryAdaptation(t *testing.T) {
 	if len(arxiv.Queries) < 2 {
 		t.Fatalf("arXiv plan = %v, want exact + loose variants", arxiv.Queries)
 	}
-	if !containsString(arxiv.Queries[0], `"document-level"`) && !containsString(arxiv.Queries[0], "document") {
+	if !strings.Contains(arxiv.Queries[0], `"document-level"`) && !strings.Contains(arxiv.Queries[0], "document") {
 		t.Fatalf("arXiv exact plan = %v", arxiv.Queries)
 	}
 	crossref := gw.backends[crossrefName].Adapt(ctx).Queries
-	if !containsString(crossref[0], "document-level") && !containsString(crossref[0], "document level") {
+	if !strings.Contains(crossref[0], "document-level") && !strings.Contains(crossref[0], "document level") {
 		t.Fatalf("Crossref plan = %v", crossref)
 	}
 	// A general query must not route to scholarly providers.
@@ -128,17 +131,4 @@ func TestAcademicQueryAdaptation(t *testing.T) {
 			t.Fatalf("general chain must exclude scholarly backends: %v", genChain)
 		}
 	}
-}
-
-func containsString(haystack, needle string) bool {
-	return haystack != "" && needle != "" && indexOf(haystack, needle) >= 0
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }
