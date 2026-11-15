@@ -9,7 +9,7 @@ export function rawPageFromUrl(search: string): string {
 const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   stats: ["owner", "admin", "user"],
   // The per-request audit view stays with operators; users keep the dashboard.
-  usage: ["owner", "admin"],
+  usage: ["owner", "admin", "user"],
   // Every role can test the models it can actually reach.
   playground: ["owner", "admin", "user"],
   // Every role reaches Models, because that is where users manage their own
