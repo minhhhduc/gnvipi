@@ -13,7 +13,7 @@ captcha pool for the free NVIDIA Playground models (DeepSeek-V4, Kimi, GLM,
 Nemotron, GPT-OSS, and more).
 
 Client API-key authentication is optional: set `-gateway-key` or
-`GNVIPI_GATEWAY_KEY` to protect `/v1/*`, `/mcp`, and SDK inference aliases. See
+`GNVIPI_GATEWAY_KEY` to protect `/v1/*`, `/mcp`, `/v2/search`, and SDK inference aliases. See
 [Security](#security) below before exposing the gateway beyond localhost.
 
 ---
@@ -44,6 +44,7 @@ Client API-key authentication is optional: set `-gateway-key` or
 | `POST /v1/messages/count_tokens` | Anthropic Token Counting | Accurate token counting across custom providers and local estimation |
 | `GET /v1/models` | Unified Model Catalog | Dynamic catalog listing across all custom providers and NVIDIA Playground |
 | `POST /mcp` | HTTP Streamable MCP | Model Context Protocol search tool (`search_web`) |
+| `POST /v2/search` | JSON | Same ranked search as `search_web`, plain `{"query"}` in / `{"results"}` out |
 | `/admin` | Admin Console | Web console for providers, model masks, Chrome workers, and metrics |
 | `GET /healthz` | Health Check | Gateway liveness and captcha pool status |
 
@@ -68,7 +69,7 @@ On Windows:
 .\scripts\run.ps1 -NoCaptcha
 ```
 
-Add your providers via the Admin Console at `http://localhost:8080/admin?page=models`
+Add your providers via the Admin Console at `http://localhost:8080/models`: create the provider (name, base URL, protocol), then open it and add keys — Auth key (bearer) and/or API key (`x-api-key`)
 or directly in `-models-file` (default: `internal/models/playground_models.json`).
 
 ### 2. NVIDIA Playground (With Headless Chrome Captcha Solvers)
@@ -80,7 +81,7 @@ To serve free models from the NVIDIA Playground (e.g.
    ```bash
    go run ./cmd/serve -addr 127.0.0.1:8080
    ```
-2. Open `http://localhost:8080/admin?page=chromes` and click **Turn On / Start All**.
+2. Open `http://localhost:8080/chromes` and click **Turn On / Start All**.
    *Startup is always idle and never launches Chrome automatically until activated.*
 3. On Windows, you can also use:
    ```powershell
@@ -187,7 +188,7 @@ Node/TypeScript, Codex CLI, OpenCode, and the full compatibility matrix are in
 ## Provider Configuration
 
 Providers are declared with the typed v2 schema, either in the configured models
-file (`-models-file`) or from the Admin UI at `/admin?page=models`. From the UI:
+file (`-models-file`) or from the Admin UI at `/models`. From the UI:
 give the provider an **ID** and **base URL**, pick the **wire protocol**
 (`openai-chat`, `anthropic-messages`, or `openai-responses`), map model aliases
 (upstream IDs or wildcards such as `openrouter/*`), add the **API key**, then
@@ -221,12 +222,12 @@ SSRF policy, and legacy migration — is in [docs/providers.md](docs/providers.m
 
 > [!WARNING]
 > The default `-addr` is `127.0.0.1:8080`, so the gateway listens on **loopback
-> only**. With no `-gateway-key` configured, `/v1/*` and `/mcp` accept
+> only**. With no `-gateway-key` configured, `/v1/*`, `/mcp` and `/v2/search` accept
 > **unauthenticated** requests from anything that can reach the port; placeholder
 > values such as `local-gateway` do not secure it.
 >
 > Binding to a wildcard address (`-addr :8080`, `docker run -p 8080:8080`) exposes
-> it on **all interfaces**. `/v1/*` and `/mcp` then stay open until you set
+> it on **all interfaces**. `/v1/*`, `/mcp` and `/v2/search` then stay open until you set
 > `-gateway-key`, and `/admin` answers **HTTP 403** until you set `-admin-token` or
 > `GNVIPI_ADMIN_TOKEN`. For any non-loopback deployment, set both and prefer a
 > firewall or an authenticated reverse proxy over direct exposure.
