@@ -616,7 +616,8 @@ function KeyEditorDialog({
   const canShare = target === null && user.role === "owner";
   const [name, setName] = useState(target?.name ?? "");
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
-  const [secret, setSecret] = useState("");
+  const [authKey, setAuthKey] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [shared, setShared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -640,14 +641,31 @@ function KeyEditorDialog({
     setModelAlias("");
   };
 
-  const effectiveScheme = shared ? "none" : "bearer";
+  const trimmedAuth = authKey.trim();
+  const trimmedAPI = apiKey.trim();
+  // Auth key -> bearer; API key -> x-api-key header. One credential per key.
+  const effectiveScheme = shared ? "none" : trimmedAuth ? "bearer" : trimmedAPI ? "header" : target?.auth_scheme ?? "bearer";
   const showCredential = effectiveScheme !== "none";
 
   const submit = async () => {
     setError(null);
+    if (!shared && !target && !trimmedAuth && !trimmedAPI) {
+      setError("Fill at least one of Auth key or API key");
+      return;
+    }
+    if (!shared && trimmedAuth && trimmedAPI) {
+      setError("Fill one of Auth key or API key, not both");
+      return;
+    }
     setBusy(true);
     try {
-      const input = { name, enabled, authScheme: effectiveScheme, secret };
+      const input = {
+        name,
+        enabled,
+        authScheme: effectiveScheme,
+        authHeaderName: !shared && trimmedAPI ? "x-api-key" : undefined,
+        secret: trimmedAuth || trimmedAPI || undefined,
+      };
       let keyID = target?.id;
       if (target) {
         await api(`${base}/${encodeURIComponent(target.id)}`, {
@@ -698,15 +716,23 @@ function KeyEditorDialog({
           </label>
         )}
         {showCredential && (
-          <label class="block text-xs font-semibold">
-            API key
-            <input class="input mt-1" type="password" autoComplete="off" value={secret} disabled={busy}
-              placeholder={target?.has_secret ? "leave blank to keep the stored key" : "paste the provider API key"}
-              onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value)} />
-            <span class="mt-1 block text-[11px] font-normal text-dim">
-              Write-only. The key is encrypted at rest; only the last four characters are shown.
+          <>
+            <label class="block text-xs font-semibold">
+              Auth key
+              <input class="input mt-1" type="password" autoComplete="off" value={authKey} disabled={busy}
+                placeholder={target?.has_secret ? "leave blank to keep the stored key" : "sent as Authorization: Bearer"}
+                onInput={(e) => setAuthKey((e.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <label class="block text-xs font-semibold">
+              API key
+              <input class="input mt-1" type="password" autoComplete="off" value={apiKey} disabled={busy}
+                placeholder="sent as x-api-key"
+                onInput={(e) => setApiKey((e.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <span class="block text-[11px] font-normal text-dim">
+              Fill at least one. Editing with both blank keeps the stored credential. Write-only: only the last four characters are shown later.
             </span>
-          </label>
+          </>
         )}
         {rows !== null && (
           <div class="space-y-2 border-t border-line pt-3">
