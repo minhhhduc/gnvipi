@@ -23,8 +23,9 @@ import (
 const databaseEnv = "GNVIPI_DATABASE_URL"
 
 const (
-	// authRetentionInterval is the daily phase-2 retention cadence.
-	authRetentionInterval = 24 * time.Hour
+	// authRetentionInterval keeps the audit window current without a heavy
+	// pass: each tick deletes a small batch, so a backlog drains gradually.
+	authRetentionInterval = 10 * time.Minute
 	// auditRetentionDaysEnv overrides the audit retention window in days.
 	auditRetentionDaysEnv = "GNVIPI_AUDIT_RETENTION_DAYS"
 	// auditMaxRowsEnv caps the audit table at the newest N rows.
