@@ -663,7 +663,7 @@ function KeyEditorDialog({
         name,
         enabled,
         authScheme: effectiveScheme,
-        authHeaderName: !shared && trimmedAPI ? "x-api-key" : undefined,
+        authHeaderName: shared ? undefined : trimmedAPI ? "x-api-key" : target?.auth_scheme === "header" ? target.auth_header_name : undefined,
         secret: trimmedAuth || trimmedAPI || undefined,
       };
       let keyID = target?.id;
