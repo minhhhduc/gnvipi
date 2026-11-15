@@ -72,7 +72,7 @@ export function ModelsView({ user }: { user: AdminUser }) {
   const [nvidiaOpen, setNvidiaOpen] = useState(false);
   const [nvidiaModels, setNvidiaModels] = useState<ModelInfo[]>([]);
   const [nvidiaLoading, setNvidiaLoading] = useState(false);
-  const [nvidiaGuide, setNvidiaGuide] = useState<string | null>(null);
+  const [callModel, setCallModel] = useState<string | null>(null);
 
   // Clicking Models in the nav returns to the provider list, even when the
   // view is already on screen with a provider open.
@@ -183,6 +183,10 @@ export function ModelsView({ user }: { user: AdminUser }) {
     }
   };
 
+  if (callModel) {
+    return <ModelCallView model={callModel} onBack={() => setCallModel(null)} />;
+  }
+
   if (nvidiaOpen) {
     return (
       <>
@@ -214,25 +218,18 @@ export function ModelsView({ user }: { user: AdminUser }) {
               </thead>
               <tbody>
                 {nvidiaModels.map((model) => (
-                  <Fragment key={model.id}>
-                    <tr>
-                      <td class="mono text-[12px]">{model.id}</td>
-                      <td class="muted">{model.publisher || "—"}</td>
-                      <td class="muted">{model.hidden ? "hidden" : "available"}</td>
-                      <td class="whitespace-nowrap text-right">
-                        <button class="btn btn-sm" aria-label={`Call ${model.id}`} onClick={() => setNvidiaGuide(nvidiaGuide === model.id ? null : model.id)}>
-                          {nvidiaGuide === model.id ? "Hide call" : "Call"}
-                        </button>
-                      </td>
-                    </tr>
-                    {nvidiaGuide === model.id && (
-                      <tr>
-                        <td colSpan={4} class="bg-panel2">
-                          <ModelApiGuide model={model.id} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                  <tr key={model.id}>
+                    <td>
+                      <button type="button" class="mono text-left text-[12px] hover:text-accent" aria-label={`Call ${model.id}`} onClick={() => setCallModel(model.id)}>
+                        {model.id}
+                      </button>
+                    </td>
+                    <td class="muted">{model.publisher || "—"}</td>
+                    <td class="muted">{model.hidden ? "hidden" : "available"}</td>
+                    <td class="whitespace-nowrap text-right">
+                      <button class="btn btn-sm" onClick={() => setCallModel(model.id)}>Call</button>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -248,6 +245,7 @@ export function ModelsView({ user }: { user: AdminUser }) {
         provider={selected}
         user={user}
         onBack={() => setSelectedID(null)}
+        onCall={setCallModel}
         onCopyBaseUrl={() => void copyProviderBaseUrl(selected)}
       />
     );
@@ -258,6 +256,7 @@ export function ModelsView({ user }: { user: AdminUser }) {
       <PageHeader title="Models" sub="Providers, their API keys and per-key model selection">
         <HealthPill />
         <span class="text-xs text-dim">{providers.length} providers</span>
+        <button class="btn" onClick={() => setCallModel("automode")}>Call API</button>
         <NvidiaRescanButton role={user.role} busy={rescanBusy} onClick={() => void runRescan()} />
         {operator && <button class="btn btn-primary" onClick={() => setEditor({ open: true, provider: null })}>Add provider</button>}
       </PageHeader>
@@ -363,11 +362,13 @@ function ProviderKeys({
   provider,
   user,
   onBack,
+  onCall,
   onCopyBaseUrl,
 }: {
   provider: Provider;
   user: AdminUser;
   onBack: () => void;
+  onCall: (alias: string) => void;
   onCopyBaseUrl: () => void;
 }) {
   const { toast, setBanner } = useUi();
@@ -547,6 +548,7 @@ function ProviderKeys({
                               endpoint={`${keyPath(key)}/models`}
                               provider={provider}
                               initial={keyModels[key.id] ?? []}
+                              onCall={onCall}
                               onSaved={(next) => {
                                 setKeyModels((prev) => ({ ...prev, [key.id]: next }));
                                 toast(`Models saved for ${key.name}`);
@@ -751,11 +753,13 @@ function KeyModelsPanel({
   provider,
   initial,
   onSaved,
+  onCall,
 }: {
   endpoint: string;
   provider: Provider;
   initial: KeyModel[];
   onSaved: (models: KeyModel[]) => void;
+  onCall: (alias: string) => void;
 }) {
   const [rows, setRows] = useState<KeyModel[]>(initial);
   const [alias, setAlias] = useState("");
@@ -763,7 +767,6 @@ function KeyModelsPanel({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<KeyModel>>({});
-  const [guide, setGuide] = useState<string | null>(null);
   const choices = modelChoices(provider.models, rows);
 
   // Every change is persisted immediately; Enter commits the row being edited.
@@ -837,18 +840,11 @@ function KeyModelsPanel({
               <span class="mono w-[220px] truncate text-[11px] text-dim" title={item.upstream_model}>{item.upstream_model}</span>
               {item.hidden && <span class="text-[11px] text-dim">hidden</span>}
               <button class="btn btn-sm" disabled={busy} aria-label={`Edit ${item.alias}`} onClick={() => startEdit(item)}>Edit</button>
-              <button class="btn btn-sm" aria-label={`Call ${item.alias}`} onClick={() => setGuide(guide === item.alias ? null : item.alias)}>
-                {guide === item.alias ? "Hide call" : "Call"}
-              </button>
+              <button class="btn btn-sm" aria-label={`Call ${item.alias}`} onClick={() => onCall(item.alias)}>Call</button>
               <button class="btn btn-sm" disabled={busy} aria-label={`Remove ${item.alias}`} onClick={() => void persist(rows.filter((row) => row.alias !== item.alias))}>
                 <IconX />
               </button>
             </div>
-            {guide === item.alias && (
-              <div class="rounded-lg border border-line bg-panel2 p-2.5">
-                <ModelApiGuide model={item.alias} />
-              </div>
-            )}
           </Fragment>
         ),
       )}
@@ -872,6 +868,23 @@ function KeyModelsPanel({
       )}
       {error && <div role="alert" class="rounded-lg border border-bad bg-bad-soft px-3 py-2 text-xs text-bad">{error}</div>}
     </div>
+  );
+}
+
+/** Full-width call view: the shared guide for one model alias. */
+function ModelCallView({ model, onBack }: { model: string; onBack: () => void }) {
+  return (
+    <>
+      <PageHeader title={`Call ${model}`} sub="Sample code and agent setup for this model">
+        <button class="btn" onClick={onBack}>Back</button>
+      </PageHeader>
+      <Card>
+        <CardHead title="Sample code" sub="Switch the protocol, then copy any block." />
+        <div class="px-[15px] py-3.5">
+          <ModelApiGuide model={model} />
+        </div>
+      </Card>
+    </>
   );
 }
 

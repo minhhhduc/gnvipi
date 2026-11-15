@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { useUi } from "./ui";
 import { useGateway } from "../lib/context";
-import { PROTOCOLS, claudeCodeEnv, codexConfig, curlSample, guideOrigin, openCodeConfig, type Protocol } from "../lib/apiGuide";
+import { PROTOCOLS, claudeCodeSettings, codexConfig, curlSample, guideOrigin, openCodeConfig, type Protocol } from "../lib/apiGuide";
 
 export function Snippet({ label, code }: { label: string; code: string }) {
   const { toast } = useUi();
@@ -34,8 +34,8 @@ export function AutomodeNote() {
         and choose the <span class="font-semibold text-fg">Auto model</span> that <span class="mono">model: "automode"</span> is routed to. Each account has its own target.
       </div>
       <div>
-        2. Claude Code: put <span class="mono">CLAUDE_CODE_AUTO_MODE_MODEL="automode"</span> in the agent environment
-        (<span class="mono">env</span> in <span class="mono">~/.claude/settings.json</span>). It sets the auto-mode classifier model; the main model stays what the agent picks.
+        2. Claude Code: add the <span class="mono">env</span> block below to <span class="mono">~/.claude/settings.json</span> — it is gateway-wide and applies to every project.
+        <span class="mono">CLAUDE_CODE_AUTO_MODE_MODEL</span> sets the auto-mode classifier model; the main model stays what the agent picks.
       </div>
     </div>
   );
@@ -64,7 +64,7 @@ export function ModelApiGuide({ model }: { model: string }) {
       </div>
       <Snippet label={`cURL · ${path}`} code={curlSample(protocol, alias)} />
       <AutomodeNote />
-      <Snippet label="Claude Code · shell profile" code={claudeCodeEnv(guideOrigin)} />
+      <Snippet label="Claude Code · ~/.claude/settings.json" code={claudeCodeSettings(guideOrigin)} />
       <Snippet label="Codex · ~/.codex/config.toml" code={codexConfig(alias)} />
       <Snippet label="OpenCode · ~/.config/opencode/config.json" code={openCodeConfig(alias)} />
     </div>
