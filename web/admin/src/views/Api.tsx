@@ -12,6 +12,14 @@ const PROTOCOLS: [Protocol, string, string][] = [
 
 const origin = typeof window === "undefined" ? "http://localhost:8080" : window.location.origin;
 
+/** Claude Code env: automode plugs into auto-mode classification, not the main model. */
+export function claudeCodeEnv(origin: string): string {
+  return `export ANTHROPIC_BASE_URL="${origin}"
+export ANTHROPIC_API_KEY="$GNVIPI_API_KEY"
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
+export CLAUDE_CODE_AUTO_MODE_MODEL="automode"`;
+}
+
 export function curlSample(protocol: Protocol, model: string): string {
   if (protocol === "messages") {
     return `curl ${origin}/v1/messages \\
@@ -117,12 +125,12 @@ export function ApiView() {
       <Card>
         <CardHead title="Use in your tools" sub="Point coding agents at this gateway with your own key." />
         <div class="px-[15px] py-3.5">
-          <Snippet
-            label="Claude Code · shell profile"
-            code={`export ANTHROPIC_BASE_URL="${origin}"
-export ANTHROPIC_API_KEY="$GNVIPI_API_KEY"
-export ANTHROPIC_MODEL="${model.trim() || "automode"}"`}
-          />
+          <p class="mb-3 text-[11px] text-dim">
+            <span class="mono">automode</span> is the gateway's virtual model, routed to the target set on the{" "}
+            <a href="/config" onClick={(e) => { e.preventDefault(); navigate("config"); }}>Config</a> page. In Claude Code it plugs into auto-mode
+            classification; your main model stays what the client picks.
+          </p>
+          <Snippet label="Claude Code · shell profile" code={claudeCodeEnv(origin)} />
           <Snippet
             label="Codex · ~/.codex/config.toml"
             code={`[model_providers.gnvipi]
