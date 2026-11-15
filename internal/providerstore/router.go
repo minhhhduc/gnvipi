@@ -33,6 +33,7 @@ type Route struct {
 type Router struct {
 	store *Store
 	audit AuditFunc
+	views *viewCache
 }
 
 // RouterOptions configures routing. Audit overrides the Store callback.
@@ -42,7 +43,10 @@ type RouterOptions struct {
 
 // NewRouter constructs a key-aware router over a snapshot store.
 func NewRouter(store *Store) *Router {
-	router := &Router{store: store}
+	router := &Router{
+		store: store,
+		views: newViewCache(accountViewCapacity, nil),
+	}
 	if store != nil {
 		router.audit = store.audit
 	}
@@ -103,8 +107,24 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 	if snapshot == nil {
 		return nil, ErrNoSnapshot
 	}
+	view := r.accountView(snapshot, userID)
+	_, servingKey, visible := view.lookup(clientModel, snapshot.isProtected)
 	primary, err := selectPrimary(snapshot, userID, clientModel)
 	if err != nil {
+		if errors.Is(err, ErrModelNotFound) {
+			// The view is the account's visibility record. A typo was never in
+			// it and stays a plain 404; an alias it served (or served in the
+			// previous version) is lazily evicted and answers with one typed
+			// 404 whose message never says whether it exists for someone else.
+			if visible {
+				view.evict(servingKey)
+				return nil, ErrModelNotAvailable
+			}
+			if retiredKey, ok := view.retiredKey(clientModel); ok {
+				view.evict(retiredKey)
+				return nil, ErrModelNotAvailable
+			}
+		}
 		return nil, err
 	}
 	chain := append([]selected(nil), primary...)
@@ -277,13 +297,7 @@ func pickWildcard(list []*candidate, model string, isProtected func(string) bool
 }
 
 func wildcardUpstream(c *candidate, suffix string) string {
-	if c.upstreamModel == "" || c.upstreamModel == "*" {
-		return suffix
-	}
-	if strings.HasSuffix(c.upstreamModel, "/*") {
-		return strings.TrimSuffix(c.upstreamModel, "*") + suffix
-	}
-	return c.upstreamModel
+	return wildcardUpstreamValue(c.upstreamModel, suffix)
 }
 
 func (s *Snapshot) aliasKnown(model string) bool {

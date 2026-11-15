@@ -125,6 +125,13 @@ func keyAwareRoutingRoute(route *providerstore.Route) Route {
 func keyAwareRouteError(err error) error {
 	message := strings.TrimPrefix(err.Error(), "providerstore: ")
 	switch {
+	case errors.Is(err, providerstore.ErrModelNotAvailable):
+		return &gwerr.Error{
+			Kind:    gwerr.KindNotFound,
+			Status:  http.StatusNotFound,
+			Code:    "model_not_available",
+			Message: message,
+		}
 	case errors.Is(err, providerstore.ErrModelNotFound), errors.Is(err, providerstore.ErrModelHidden):
 		return &gwerr.Error{Kind: gwerr.KindNotFound, Status: http.StatusNotFound, Message: message}
 	case errors.Is(err, providerstore.ErrKeyRequired):
