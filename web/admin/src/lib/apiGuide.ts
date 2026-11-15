@@ -8,12 +8,20 @@ export const PROTOCOLS: [Protocol, string, string][] = [
 
 export const guideOrigin = typeof window === "undefined" ? "http://localhost:8080" : window.location.origin;
 
-/** Claude Code env: automode plugs into auto-mode classification, not the main model. */
-export function claudeCodeEnv(origin: string): string {
-  return `export ANTHROPIC_BASE_URL="${origin}"
-export ANTHROPIC_API_KEY="$GNVIPI_API_KEY"
-export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
-export CLAUDE_CODE_AUTO_MODE_MODEL="automode"`;
+/**
+ * Claude Code setup as a gateway-wide block for ~/.claude/settings.json.
+ * automode plugs into auto-mode classification; the main model is untouched.
+ */
+export function claudeCodeSettings(origin: string): string {
+  return `{
+  "env": {
+    "ANTHROPIC_BASE_URL": "${origin}",
+    "ANTHROPIC_AUTH_TOKEN": "$GNVIPI_API_KEY",
+    "ANTHROPIC_API_KEY": "",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_AUTO_MODE_MODEL": "automode"
+  }
+}`;
 }
 
 export function curlSample(protocol: Protocol, model: string, origin = guideOrigin): string {

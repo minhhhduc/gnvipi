@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeCodeEnv, codexConfig, curlSample, openCodeConfig } from "../lib/apiGuide";
+import { claudeCodeSettings, codexConfig, curlSample, openCodeConfig } from "../lib/apiGuide";
 
 describe("curlSample", () => {
   it("sends OpenAI protocols to their paths with a bearer token", () => {
@@ -10,12 +10,12 @@ describe("curlSample", () => {
     expect(curlSample("responses", "x")).toContain("/v1/responses");
   });
 
-  it("sets automode as Claude Code's auto-mode model, never the main model", () => {
-    const env = claudeCodeEnv("http://gw:8081");
-    expect(env).toContain('CLAUDE_CODE_AUTO_MODE_MODEL="automode"');
-    expect(env).toContain('CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"');
-    expect(env).toContain('ANTHROPIC_BASE_URL="http://gw:8081"');
-    expect(env).not.toContain("ANTHROPIC_MODEL");
+  it("puts automode in the gateway-wide Claude Code settings env", () => {
+    const settings = JSON.parse(claudeCodeSettings("http://gw:8081"));
+    expect(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL).toBe("automode");
+    expect(settings.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
+    expect(settings.env.ANTHROPIC_BASE_URL).toBe("http://gw:8081");
+    expect(settings.env).not.toHaveProperty("ANTHROPIC_MODEL");
   });
 
   it("uses x-api-key for Anthropic messages", () => {
