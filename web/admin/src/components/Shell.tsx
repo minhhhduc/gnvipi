@@ -5,13 +5,14 @@ import { pageAllowed } from "../lib/router";
 
 const NAV: { page: Page; label: string }[] = [
   { page: "stats", label: "Dashboard" },
-  { page: "usage", label: "Usage log" },
   { page: "playground", label: "Playground" },
   { page: "models", label: "Models" },
   { page: "config", label: "Config" },
   { page: "chromes", label: "Chrome" },
   { page: "tokens", label: "API Keys" },
   { page: "users", label: "Users" },
+  // Logs sit together at the end of the rail.
+  { page: "usage", label: "Usage log" },
   { page: "audit", label: "Audit" },
 ];
 
