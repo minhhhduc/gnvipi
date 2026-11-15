@@ -22,6 +22,9 @@ func TestAdminUI_ServesEmbeddedSPA(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	registerAdminUI(engine)
+	engine.Use(adminConsoleRoot)
+	// CLIProxyAPI owns GET / and the console middleware answers it first.
+	engine.GET("/", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"message": "CLI Proxy API Server"}) })
 
 	for _, tc := range []struct{ path, ctype string }{
 		{"/", "text/html"},
@@ -86,6 +89,8 @@ func TestAdminUI_CoexistsWithJSONAPI(t *testing.T) {
 	engine := gin.New()
 	registerAdminAPIRoutes(engine, p, nil, nil, nil)
 	registerAdminUI(engine)
+	engine.Use(adminConsoleRoot)
+	engine.GET("/", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"message": "CLI Proxy API Server"}) })
 
 	if res := adminUIGet(t, engine, "/"); res.Code != http.StatusOK {
 		t.Fatalf("GET / = %d, want 200", res.Code)
