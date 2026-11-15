@@ -37,8 +37,8 @@ func TestAccountViewPerUserIsolation(t *testing.T) {
 	if u1.version != snapshot.Version() || u2.version != snapshot.Version() {
 		t.Fatalf("view versions = %d, %d want %d", u1.version, u2.version, snapshot.Version())
 	}
-	if model, ok := u1.snapshot()["alpha"]; !ok || model.ProviderID != "p1" || model.UpstreamModel != "up-alpha" {
-		t.Fatalf("u1 alpha = %+v, %v", model, ok)
+	if model, key, ok := u1.lookup("alpha", nil); !ok || key != "alpha" || model.ProviderID != "p1" || model.UpstreamModel != "up-alpha" {
+		t.Fatalf("u1 alpha = %+v, %q, %v", model, key, ok)
 	}
 	if u1.contains("beta") {
 		t.Fatal("u1 view leaked u2's personal alias")
@@ -47,9 +47,78 @@ func TestAccountViewPerUserIsolation(t *testing.T) {
 		t.Fatal("u2 view is not isolated to its own keys")
 	}
 	for _, view := range []*accountView{u1, u2} {
-		if !view.contains("shared") || !view.contains("fam/*") {
+		if !view.contains("shared") || !view.contains("fam/*") || !view.contains("fam/child") {
 			t.Fatal("shared mappings missing from account view")
 		}
+	}
+}
+
+func TestAccountViewPersonalWildcardPrecedesSharedExact(t *testing.T) {
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true), validProviderRow("p2", true)},
+		Keys: []KeyRow{
+			testKey("k-personal", "p1", "u1", SchemeNone),
+			testKey("k-shared", "p2", "", SchemeNone),
+		},
+		KeyModels: []KeyModelRow{
+			wildcardModel("k-personal", "p1", "u1", "fam/*", "*"),
+			exactModel("k-shared", "p2", "", "fam/x", "up-shared"),
+		},
+	}
+	router := routerFor(t, rows, StoreOptions{})
+	entry, key, ok := router.accountView(router.store.Current(), "u1").lookup("fam/x", nil)
+	if !ok || key != "fam/*" || entry.ProviderID != "p1" || entry.UpstreamModel != "x" {
+		t.Fatalf("lookup = %+v, %q, %v; personal wildcard must win", entry, key, ok)
+	}
+	route, err := router.Resolve(context.Background(), "u1", "fam/x", "openai-chat")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if route.ProviderID != "p1" || route.UpstreamModel != "x" {
+		t.Fatalf("route = %+v, want personal wildcard", route)
+	}
+}
+
+func TestAccountViewFiltersHiddenModelState(t *testing.T) {
+	rows := viewRows()
+	rows.ModelState = []ModelStateRow{{ModelID: "alpha", Hidden: true}}
+	router := routerFor(t, rows, StoreOptions{})
+	view := router.accountView(router.store.Current(), "u1")
+	if view.contains("alpha") {
+		t.Fatal("hidden model_state alias stayed visible")
+	}
+	if _, err := router.Resolve(context.Background(), "u1", "alpha", "openai-chat"); !errors.Is(err, ErrModelHidden) {
+		t.Fatalf("resolve error = %v, want ErrModelHidden", err)
+	}
+}
+
+func TestAccountViewEvictsServingWildcardPattern(t *testing.T) {
+	router := routerFor(t, viewRows(), StoreOptions{})
+	view := router.accountView(router.store.Current(), "u1")
+	view.personalWildcard = append(view.personalWildcard, VisibleModel{
+		Alias: "legacy/*", ProviderID: "p1", UpstreamModel: "*", allowShadow: true,
+	})
+
+	_, err := router.Resolve(context.Background(), "u1", "legacy/thing", "openai-chat")
+	if !errors.Is(err, ErrModelNotAvailable) {
+		t.Fatalf("error = %v, want ErrModelNotAvailable", err)
+	}
+	if view.hasPattern("legacy/*") {
+		t.Fatal("eviction dropped the literal alias instead of the serving pattern")
+	}
+}
+
+func TestAccountViewTyped404OnlyForPreviouslyMappedAliases(t *testing.T) {
+	router := routerFor(t, viewRows(), StoreOptions{})
+	_, err := router.Resolve(context.Background(), "u1", "typo-alias", "openai-chat")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("error = %v, want ErrModelNotFound", err)
+	}
+	if errors.Is(err, ErrModelNotAvailable) {
+		t.Fatalf("never-mapped alias answered typed 404: %v", err)
+	}
+	if err.Error() != ErrModelNotFound.Error() {
+		t.Fatalf("never-mapped alias message = %q", err)
 	}
 }
 
@@ -76,7 +145,7 @@ func TestAccountViewVersionInvalidationAndTyped404(t *testing.T) {
 
 	_, err := router.Resolve(context.Background(), "u1", "shared", "openai-chat")
 	if !errors.Is(err, ErrModelNotAvailable) || !errors.Is(err, ErrModelNotFound) {
-		t.Fatalf("stale alias error = %v, want ErrModelNotAvailable wrapping ErrModelNotFound", err)
+		t.Fatalf("stale alias error = %v, want ErrModelNotAvailable matching ErrModelNotFound", err)
 	}
 	if !strings.Contains(err.Error(), "no longer available for this account") {
 		t.Fatalf("error %q does not explain the model is gone for this account", err)
@@ -88,23 +157,35 @@ func TestAccountViewVersionInvalidationAndTyped404(t *testing.T) {
 	if view.contains("shared") {
 		t.Fatal("new version view still contains the removed alias")
 	}
+	if _, ok := view.retiredKey("shared"); ok {
+		t.Fatal("typed 404 did not lazily drop the retired alias")
+	}
+
+	// Once the retired alias is consumed, the same request is a plain 404.
+	_, again := router.Resolve(context.Background(), "u1", "shared", "openai-chat")
+	if !errors.Is(again, ErrModelNotFound) || errors.Is(again, ErrModelNotAvailable) {
+		t.Fatalf("repeat error = %v, want plain ErrModelNotFound", again)
+	}
 	if !view.contains("alpha") {
 		t.Fatal("unaffected aliases must survive a version change")
 	}
 }
 
-func TestAccountViewLazyAliasEviction(t *testing.T) {
-	router := routerFor(t, viewRows(), StoreOptions{})
-	view := router.accountView(router.store.Current(), "u1")
-	// Simulate a view entry whose mapping stopped resolving for this account.
-	view.models["stale"] = VisibleModel{Alias: "stale", ProviderID: "p1", UpstreamModel: "up"}
-
-	_, err := router.Resolve(context.Background(), "u1", "stale", "openai-chat")
-	if !errors.Is(err, ErrModelNotAvailable) {
-		t.Fatalf("error = %v, want ErrModelNotAvailable", err)
+func TestAccountViewProtectedShadowChecksRequestedModel(t *testing.T) {
+	protected := func(model string) bool { return model == "nvidia/llama-x" }
+	rows := Rows{
+		Providers: []ProviderRow{validProviderRow("p1", true)},
+		Keys:      []KeyRow{testKey("k-u1", "p1", "u1", SchemeNone)},
+		KeyModels: []KeyModelRow{wildcardModel("k-u1", "p1", "u1", "nvidia/*", "*")},
 	}
-	if view.contains("stale") {
-		t.Fatal("lazy eviction did not drop the stale alias from the view")
+	router := routerFor(t, rows, StoreOptions{IsProtected: protected})
+	view := router.accountView(router.store.Current(), "u1")
+
+	if _, _, ok := view.lookup("nvidia/llama-x", protected); ok {
+		t.Fatal("lookup ignored the protected-shadow rule")
+	}
+	if _, _, ok := view.lookup("nvidia/other", protected); !ok {
+		t.Fatal("unprotected model must stay visible through the wildcard")
 	}
 }
 
@@ -112,15 +193,15 @@ func TestAccountViewTyped404DoesNotRevealOtherAccounts(t *testing.T) {
 	router := routerFor(t, viewRows(), StoreOptions{})
 	_, first := router.Resolve(context.Background(), "u1", "no-such-alias", "openai-chat")
 	_, second := router.Resolve(context.Background(), "u1", "another-unknown", "openai-chat")
-	if !errors.Is(first, ErrModelNotAvailable) || !errors.Is(second, ErrModelNotAvailable) {
+	if !errors.Is(first, ErrModelNotFound) || !errors.Is(second, ErrModelNotFound) {
 		t.Fatalf("errors = %v, %v", first, second)
 	}
 	if first.Error() != second.Error() {
-		t.Fatalf("typed 404 differs between aliases: %q vs %q", first, second)
+		t.Fatalf("answers differ: %q vs %q", first, second)
 	}
 	for _, hidden := range []string{"beta", "up-beta", "p1"} {
 		if strings.Contains(first.Error(), hidden) {
-			t.Fatalf("typed 404 reveals %q: %v", hidden, first)
+			t.Fatalf("404 reveals %q: %v", hidden, first)
 		}
 	}
 }
@@ -131,7 +212,7 @@ func TestViewCacheSingleFlight(t *testing.T) {
 	build := func() *accountView {
 		builds.Add(1)
 		time.Sleep(time.Millisecond)
-		return newAccountView(0, map[string]VisibleModel{"a": {Alias: "a"}})
+		return &accountView{version: 0, personalExact: map[string]VisibleModel{"a": {Alias: "a"}}}
 	}
 	key := viewKey{userID: "u1", version: 1}
 
@@ -163,7 +244,7 @@ func TestViewCacheTTLExpiry(t *testing.T) {
 	var builds int
 	build := func() *accountView {
 		builds++
-		return newAccountView(0, nil)
+		return &accountView{version: 0}
 	}
 	key := viewKey{userID: "u1", version: 1}
 
@@ -182,7 +263,7 @@ func TestViewCacheTTLExpiry(t *testing.T) {
 
 func TestViewCacheIsBounded(t *testing.T) {
 	cache := newViewCache(2, nil)
-	build := func() *accountView { return newAccountView(0, nil) }
+	build := func() *accountView { return &accountView{version: 0} }
 	sameVersion := func(user string) viewKey { return viewKey{userID: user, version: 1} }
 
 	cache.get(sameVersion("u1"), build)

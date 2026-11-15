@@ -1,9 +1,6 @@
 package providerstore
 
-import (
-	"errors"
-	"fmt"
-)
+import "errors"
 
 // Auth scheme names as stored in provider_keys.auth_scheme.
 const (
@@ -19,9 +16,10 @@ var (
 	// ErrModelHidden means the model or mapping is hidden or soft-deleted.
 	ErrModelHidden = errors.New("providerstore: model is hidden")
 	// ErrModelNotAvailable means an alias this account used to reach no longer
-	// maps for it. It wraps ErrModelNotFound so the 404 and delegation paths are
-	// unchanged, and its message never says whether the alias exists elsewhere.
-	ErrModelNotAvailable = fmt.Errorf("%w: this model is no longer available for this account", ErrModelNotFound)
+	// maps for it. Typed so callers need not parse a message; it matches
+	// ErrModelNotFound so the 404 and delegation paths are unchanged, and its
+	// message never says whether the alias exists for anyone else.
+	ErrModelNotAvailable error = modelNotAvailableError{}
 	// ErrKeyRequired means the alias is known but the user has no usable key.
 	ErrKeyRequired = errors.New("providerstore: provider key required")
 	// ErrCredentialUnavailable means configured candidates exist but none has
@@ -44,3 +42,17 @@ var (
 	// ErrInvalidConfig reports a row or JSONB contract violation.
 	ErrInvalidConfig = errors.New("providerstore: invalid configuration")
 )
+
+// modelNotAvailableError is the typed 404 for an alias whose mapping stopped
+// resolving for one account.
+type modelNotAvailableError struct{}
+
+func (modelNotAvailableError) Error() string {
+	return "providerstore: this model is no longer available for this account"
+}
+
+// Is matches ErrModelNotFound so StatusForError and key-aware delegation keep
+// their existing behavior, and matches ErrModelNotAvailable itself.
+func (modelNotAvailableError) Is(target error) bool {
+	return errors.Is(target, ErrModelNotFound) || errors.Is(target, ErrModelNotAvailable)
+}

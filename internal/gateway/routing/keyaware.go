@@ -130,7 +130,7 @@ func keyAwareRouteError(err error) error {
 			Kind:    gwerr.KindNotFound,
 			Status:  http.StatusNotFound,
 			Code:    "model_not_available",
-			Message: strings.TrimSpace(strings.TrimPrefix(message, "model not found:")),
+			Message: message,
 		}
 	case errors.Is(err, providerstore.ErrModelNotFound), errors.Is(err, providerstore.ErrModelHidden):
 		return &gwerr.Error{Kind: gwerr.KindNotFound, Status: http.StatusNotFound, Message: message}

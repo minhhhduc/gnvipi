@@ -108,14 +108,22 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 		return nil, ErrNoSnapshot
 	}
 	view := r.accountView(snapshot, userID)
+	_, servingKey, visible := view.lookup(clientModel, snapshot.isProtected)
 	primary, err := selectPrimary(snapshot, userID, clientModel)
 	if err != nil {
 		if errors.Is(err, ErrModelNotFound) {
-			// Lazy eviction: the alias no longer maps for this account. Drop it
-			// from the cached view and answer with one typed 404. The message is
-			// identical whether or not the alias exists for someone else.
-			view.evict(clientModel)
-			return nil, ErrModelNotAvailable
+			// The view is the account's visibility record. A typo was never in
+			// it and stays a plain 404; an alias it served (or served in the
+			// previous version) is lazily evicted and answers with one typed
+			// 404 whose message never says whether it exists for someone else.
+			if visible {
+				view.evict(servingKey)
+				return nil, ErrModelNotAvailable
+			}
+			if retiredKey, ok := view.retiredKey(clientModel); ok {
+				view.evict(retiredKey)
+				return nil, ErrModelNotAvailable
+			}
 		}
 		return nil, err
 	}
@@ -289,13 +297,7 @@ func pickWildcard(list []*candidate, model string, isProtected func(string) bool
 }
 
 func wildcardUpstream(c *candidate, suffix string) string {
-	if c.upstreamModel == "" || c.upstreamModel == "*" {
-		return suffix
-	}
-	if strings.HasSuffix(c.upstreamModel, "/*") {
-		return strings.TrimSuffix(c.upstreamModel, "*") + suffix
-	}
-	return c.upstreamModel
+	return wildcardUpstreamValue(c.upstreamModel, suffix)
 }
 
 func (s *Snapshot) aliasKnown(model string) bool {
