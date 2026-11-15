@@ -52,7 +52,7 @@ describe("Shell role navigation", () => {
     const text = renderShell("user");
     expect(text).toContain("Dashboard");
     expect(text).toContain("Models");
-    expect(text).not.toContain("Usage log");
+    expect(text).toContain("Usage log");
     expect(text).not.toContain("Config");
     expect(text).not.toContain("Chrome");
   });

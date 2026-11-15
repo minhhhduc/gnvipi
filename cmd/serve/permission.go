@@ -264,7 +264,7 @@ var adminRoutePermissions = map[string]adminPermission{
 	"PUT /admin/api/providers/:id":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"DELETE /admin/api/providers/:id":                 {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/providers/:id/test":              {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/stats":                            {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
+	"GET /admin/api/stats":                            {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
 	"GET /admin/api/models":                           {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"POST /admin/api/models":                          {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
 	"DELETE /admin/api/models/*id":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},

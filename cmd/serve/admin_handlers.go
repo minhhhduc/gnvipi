@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
@@ -20,7 +21,56 @@ func handleAdminDashboard(c *gin.Context, catalog []*cliproxy.ModelInfo) {
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(adminHTML(page, catalog)))
 }
 
+// userStatsView trims the shared stats payload to the caller's own events.
+// Aggregate views (models/series) are global, so a user gets them empty rather
+// than seeing other accounts' traffic.
+func userStatsView(data gin.H, userID string) gin.H {
+	out := make(gin.H, len(data))
+	for key, value := range data {
+		switch key {
+		case "models", "series_by_model":
+			out[key] = map[string]any{}
+		case "series":
+			out[key] = []any{}
+		case "events":
+			events, ok := value.([]nvidia.RequestEvent)
+			if !ok {
+				out[key] = []any{}
+				continue
+			}
+			scoped := make([]nvidia.RequestEvent, 0, len(events))
+			for i := range events {
+				if events[i].UserID == userID {
+					scoped = append(scoped, events[i])
+				}
+			}
+			out[key] = scoped
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+// scopeEvents drops events that belong to another account.
+func scopeEvents(events []nvidia.RequestEvent, userID string) []nvidia.RequestEvent {
+	if userID == "" {
+		return events
+	}
+	scoped := make([]nvidia.RequestEvent, 0, len(events))
+	for i := range events {
+		if events[i].UserID == userID {
+			scoped = append(scoped, events[i])
+		}
+	}
+	return scoped
+}
+
 func handleAdminStats(c *gin.Context) {
+	userID := ""
+	if identity := adminIdentityOf(c); identity != nil && identity.Role == auth.RoleUser {
+		userID = identity.UserID
+	}
 	interval := nvidia.StatsReadInterval()
 	if n, err := strconv.Atoi(c.Query("frames")); err == nil && n >= 1 {
 		ev, tf, err := nvidia.ReadFrame(n)
@@ -33,7 +83,7 @@ func handleAdminStats(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"frame": n, "total_frames": tf, "events": ev})
+		c.JSON(http.StatusOK, gin.H{"frame": n, "total_frames": tf, "events": scopeEvents(ev, userID)})
 		return
 	}
 	adminStatsCache.Lock()
@@ -50,6 +100,10 @@ func handleAdminStats(c *gin.Context) {
 	}
 	data := adminStatsCache.data
 	adminStatsCache.Unlock()
+	if userID != "" {
+		c.JSON(http.StatusOK, userStatsView(data, userID))
+		return
+	}
 	c.JSON(http.StatusOK, data)
 }
 

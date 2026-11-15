@@ -68,7 +68,7 @@ func currentAdminRouteMatrix() map[string]uint8 {
 		"POST /admin/api/providers/:id/keys/:keyID/test":  permissionAll,
 		"GET /admin/api/providers/:id/keys/:keyID/models": permissionAll,
 		"PUT /admin/api/providers/:id/keys/:keyID/models": permissionAll,
-		"GET /admin/api/stats":                            operator,
+		"GET /admin/api/stats":                            permissionAll,
 		"GET /admin/api/models":                           operator,
 		"POST /admin/api/models":                          operator,
 		"DELETE /admin/api/models/*id":                    operator,

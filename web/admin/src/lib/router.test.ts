@@ -36,7 +36,7 @@ describe("pageFromUrl", () => {
     expect(forRole("?page=chromes", "user")).toBe("stats");
   });
 
-  it("opens the usage log to operators and sends users back to the dashboard", () => {
+  it("opens the usage log to every role", () => {
     const forRole = pageFromUrl as (
       search: string,
       role: "owner" | "admin" | "user",
@@ -44,7 +44,7 @@ describe("pageFromUrl", () => {
 
     expect(forRole("?page=usage", "owner")).toBe("usage");
     expect(forRole("?page=usage", "admin")).toBe("usage");
-    expect(forRole("?page=usage", "user")).toBe("stats");
+    expect(forRole("?page=usage", "user")).toBe("usage");
   });
 
   it("keeps the users screen owner-only and the tokens screen open to every role", () => {
@@ -83,7 +83,7 @@ describe("pageAllowed", () => {
   it("keeps the usage log and dashboard straight", () => {
     expect(pageAllowed("usage", "owner")).toBe(true);
     expect(pageAllowed("usage", "admin")).toBe(true);
-    expect(pageAllowed("usage", "user")).toBe(false);
+    expect(pageAllowed("usage", "user")).toBe(true);
     expect(pageAllowed("stats", "user")).toBe(true);
   });
 
