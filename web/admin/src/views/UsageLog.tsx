@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { useGateway } from "../lib/context";
 import { clock, fmtInt, fmtMs } from "../lib/format";
-import { clampFrame, getFrameNavState } from "../lib/helpers";
+import { clampFrame, usagePageWindow } from "../lib/helpers";
 import { sortRequestEvents } from "../lib/chart";
 import type { RequestSortKey, SortDirection } from "../lib/chart";
 import type { FrameResponse, RequestEvent, Stats as StatsData } from "../lib/types";
-import { Card, CardHead, Empty, PageHeader } from "../components/ui";
+import { Card, CardHead, Empty, PageHeader, Pager } from "../components/ui";
 import { HealthPill } from "../components/Shell";
 
 const NO_EVENTS: RequestEvent[] = [];
@@ -160,34 +160,9 @@ export function UsageLogView() {
           title="Request log"
           sub={throttled ? "throttled" : frameData ? `frame ${frameData.frame} of ${totalFrames}` : `${logEvents.length} recent events`}
         >
-          <div class="flex items-center gap-1">
-            {(() => {
-              const nav = getFrameNavState(frame, totalFrames);
-              return (
-                <>
-                  <button
-                    class="btn btn-sm"
-                    disabled={!nav.canPrev}
-                    onClick={() => nav.prevTarget != null && setFrame(nav.prevTarget)}
-                    aria-label="Previous frame"
-                  >
-                    «
-                  </button>
-                  <button class="btn btn-sm" onClick={() => setFrame(null)} disabled={!nav.canLatest}>
-                    Latest
-                  </button>
-                  <button
-                    class="btn btn-sm"
-                    disabled={!nav.canNext}
-                    onClick={() => setFrame(nav.nextTarget)}
-                    aria-label="Next frame"
-                  >
-                    »
-                  </button>
-                </>
-              );
-            })()}
-          </div>
+          <button class="btn btn-sm" onClick={() => setFrame(null)} disabled={frame == null}>
+            Latest
+          </button>
         </CardHead>
         {frameError && (
           <div class="border-b border-bad bg-bad-soft px-[15px] py-2 text-xs text-bad">
@@ -229,6 +204,24 @@ export function UsageLogView() {
             </tbody>
           </table>
         )}
+        {logEvents.length > 0 && (() => {
+          // Label the frame the rows actually came from while the next fetch is in flight.
+          const shown = frame == null ? null : frameData?.frame ?? frame;
+          const w = usagePageWindow(shown, totalFrames, logEvents.length);
+          // Navigate from the requested frame, not the rows still on screen.
+          const page = frame ?? 1;
+          return (
+            <Pager
+              from={w.from}
+              to={w.to}
+              note={w.note}
+              hasPrev={frame != null && page > 1}
+              hasNext={totalFrames > page}
+              onPrev={() => setFrame(page - 1)}
+              onNext={() => setFrame(page + 1)}
+            />
+          );
+        })()}
       </Card>
     </>
   );

@@ -9,6 +9,7 @@ import {
   getFrameNavState,
   getProtocolOptions,
   runningWorkersRatio,
+  usagePageWindow,
 } from "./helpers";
 
 describe("buildUpstreamModel", () => {
@@ -151,6 +152,27 @@ describe("getFrameNavState", () => {
     expect(f3.canPrev).toBe(true);
     expect(f3.prevTarget).toBe(2);
     expect(f3.canNext).toBe(false);
+  });
+});
+
+describe("usagePageWindow", () => {
+  it("labels the live view as frame 1", () => {
+    expect(usagePageWindow(null, 3, 200)).toMatchObject({ from: 1, to: 200 });
+    expect(usagePageWindow(null, 3, 200).note).toContain("live");
+  });
+
+  it("counts the global range from the open frame", () => {
+    expect(usagePageWindow(3, 12, 200)).toMatchObject({ from: 401, to: 600 });
+    expect(usagePageWindow(2, 3, 57)).toMatchObject({ from: 201, to: 257 });
+    expect(usagePageWindow(2, 3, 57).note).toBe("frame 2 of 3");
+  });
+
+  it("clamps a frame beyond the last page", () => {
+    expect(usagePageWindow(12, 12, 200)).toMatchObject({ from: 2201, to: 2400 });
+  });
+
+  it("reports no range when the page has no events", () => {
+    expect(usagePageWindow(1, 0, 0)).toMatchObject({ from: 0, to: 0 });
   });
 });
 
