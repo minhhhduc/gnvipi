@@ -44,16 +44,28 @@ type candidate struct {
 	hasResolved bool
 }
 
+// sharedID is one shared mapping's caller-facing identity. The alias and the
+// upstream model stay server-side: a caller that presents the id is routed to
+// the shared candidates without learning either.
+type sharedID struct {
+	alias string
+	list  []*candidate
+}
+
 // Snapshot is one fully validated, immutable configuration snapshot. Published
 // snapshots are never modified; a reload builds a new value.
 type Snapshot struct {
-	version     int64
-	loadedAt    time.Time
-	providers   map[string]*provider.Provider
-	personalEx  map[string]map[string][]*candidate
-	personalWc  map[string][]*candidate
-	sharedEx    map[string][]*candidate
-	sharedWc    []*candidate
+	version    int64
+	loadedAt   time.Time
+	providers  map[string]*provider.Provider
+	personalEx map[string]map[string][]*candidate
+	personalWc map[string][]*candidate
+	sharedEx   map[string][]*candidate
+	sharedWc   []*candidate
+	// sharedIDs maps a shared mapping's public id to the shared candidates that
+	// answer it. Personal mappings never appear here: an id addresses a shared
+	// mapping only.
+	sharedIDs   map[string]*sharedID
 	knownEx     map[string]bool
 	knownWc     []string
 	modelState  map[string]ModelStateRow
@@ -108,6 +120,9 @@ type AvailableModel struct {
 	ProviderID    string
 	Alias         string
 	UpstreamModel string
+	// PublicID is set for a shared mapping: the id a caller selects instead of
+	// the alias. It is empty for the caller's own mappings.
+	PublicID string
 }
 
 // AvailableModels lists the concrete aliases a caller can resolve, with the
@@ -151,12 +166,16 @@ func (s *Snapshot) AvailableModels(userID string, allOwners bool) []AvailableMod
 			return
 		}
 		seen[key] = struct{}{}
-		out = append(out, AvailableModel{
+		model := AvailableModel{
 			OwnerID:       owner,
 			ProviderID:    c.providerID,
 			Alias:         c.alias,
 			UpstreamModel: c.upstreamModel,
-		})
+		}
+		if c.shared {
+			model.PublicID = PublicModelID(c.providerID, c.alias)
+		}
+		out = append(out, model)
 	}
 	// eligible applies the same hidden/protected rules as pickExact. A
 	// credential failure still counts as a personal match: request-time
@@ -261,6 +280,7 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 		personalEx:  make(map[string]map[string][]*candidate),
 		personalWc:  make(map[string][]*candidate),
 		sharedEx:    make(map[string][]*candidate),
+		sharedIDs:   make(map[string]*sharedID),
 		knownEx:     make(map[string]bool),
 		modelState:  make(map[string]ModelStateRow, len(rows.ModelState)),
 		isProtected: opts.IsProtected,
@@ -393,6 +413,13 @@ func (s *Snapshot) index(c *candidate) {
 	s.knownEx[c.alias] = true
 	if c.shared {
 		s.sharedEx[c.alias] = append(s.sharedEx[c.alias], c)
+		id := PublicModelID(c.providerID, c.alias)
+		entry := s.sharedIDs[id]
+		if entry == nil {
+			entry = &sharedID{alias: c.alias}
+			s.sharedIDs[id] = entry
+		}
+		entry.list = append(entry.list, c)
 		return
 	}
 	byAlias := s.personalEx[c.ownerID]
@@ -414,6 +441,9 @@ func (s *Snapshot) sort() {
 	}
 	for alias := range s.sharedEx {
 		sortCandidates(s.sharedEx[alias])
+	}
+	for _, entry := range s.sharedIDs {
+		sortCandidates(entry.list)
 	}
 	sortWildcards(s.sharedWc)
 	sort.SliceStable(s.knownWc, func(i, j int) bool {

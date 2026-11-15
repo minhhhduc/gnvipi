@@ -513,3 +513,60 @@ func TestDBAdminUsers_LastOwnerConcurrentDemotions(t *testing.T) {
 		t.Fatalf("last owner role = %q, want owner", role)
 	}
 }
+
+// TestDBAdminProviders_SharedKeyModelsAreOpaque pins the shared-key contract on
+// the console: a caller selects a shared mapping by the id the gateway derives,
+// and the operator's alias and upstream model never reach the response. The
+// owner still reads the mapping as written.
+func TestDBAdminProviders_SharedKeyModelsAreOpaque(t *testing.T) {
+	h := newDBAdminHarness(t)
+	const providerID = "shared-opaque"
+	createDBProvider(t, h, gin.H{
+		"id": providerID, "name": "Shared opaque", "protocol": "openai-chat",
+		"base_url": "https://shared-opaque.example/v1", "enabled": true,
+	})
+	shared := createDBProviderKey(t, h, providerID, gin.H{
+		"name": "operator shared", "auth_scheme": "none", "owner_id": nil,
+	})
+	sharedID, _ := shared["id"].(string)
+	modelsPath := "/admin/api/providers/" + providerID + "/keys/" + sharedID + "/models"
+	res := makeRequest(t, h.engine, http.MethodPut, modelsPath, gin.H{
+		"models": []gin.H{{"alias": "operator-alias", "upstream_model": "operator-upstream"}},
+	}, bearer(h.token))
+	if res.Code != http.StatusOK {
+		t.Fatalf("write shared key models = %d, want 200 (body %s)", res.Code, res.Body.String())
+	}
+
+	user := prepareKeyActor(t, h, "shared-opaque-user", auth.RoleUser)
+	res = makeRequest(t, h.engine, http.MethodGet, providersAPIPath(providerID), nil, user.headers)
+	if res.Code != http.StatusOK {
+		t.Fatalf("user get provider = %d, want 200 (body %s)", res.Code, res.Body.String())
+	}
+	models, _ := decodeBody(t, res)["models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("user models = %v, want the shared mapping", models)
+	}
+	entry, _ := models[0].(map[string]any)
+	if want := providerstore.PublicModelID(providerID, "operator-alias"); entry["alias"] != want {
+		t.Fatalf("user alias = %v, want the derived id %q", entry["alias"], want)
+	}
+	if upstream, _ := entry["upstream_model"].(string); upstream != "" {
+		t.Fatalf("user upstream_model = %q, want empty so the operator's upstream stays unsaid", upstream)
+	}
+	if bytes.Contains(res.Body.Bytes(), []byte("operator-alias")) || bytes.Contains(res.Body.Bytes(), []byte("operator-upstream")) {
+		t.Fatalf("user provider view leaks the shared mapping's configuration: %s", res.Body.String())
+	}
+
+	res = makeRequest(t, h.engine, http.MethodGet, providersAPIPath(providerID), nil, bearer(h.token))
+	if res.Code != http.StatusOK {
+		t.Fatalf("owner get provider = %d, want 200 (body %s)", res.Code, res.Body.String())
+	}
+	ownerModels, _ := decodeBody(t, res)["models"].([]any)
+	if len(ownerModels) != 1 {
+		t.Fatalf("owner models = %v, want the written mapping", ownerModels)
+	}
+	ownerEntry, _ := ownerModels[0].(map[string]any)
+	if ownerEntry["alias"] != "operator-alias" || ownerEntry["upstream_model"] != "operator-upstream" {
+		t.Fatalf("owner mapping = %v, want the alias and upstream as written", ownerEntry)
+	}
+}

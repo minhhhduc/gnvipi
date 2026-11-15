@@ -42,6 +42,37 @@ providers and keys are excluded. Fallback expansion stops at 8 candidates;
 fallbacks resolve with the same user, so a fallback can never cross into another
 account's key.
 
+### Shared key model ids
+
+A shared key belongs to the operator, so its mappings are not the caller's
+configuration to read. A caller selects a shared exact mapping by an id derived
+from the provider and the alias:
+
+```
+id = base32(sha256(provider_id + NUL + alias))[0:26], lowercase
+```
+
+The console (provider view and playground picker) shows that id in place of the
+alias and omits the upstream model and the fallbacks; a request naming the id
+routes to the shared mapping, and the id, not the alias, is echoed back in
+`model` and in stats. Personal mappings keep their alias: their owner supplies
+the credential, so nothing there is the operator's to hide. Alias uniqueness
+stays per provider, and the provider ID is part of the derivation, so the same
+alias on two providers yields two different ids.
+
+The id is stable across restarts and instances because it is derived, never
+stored. Consequences:
+
+- A caller can address a shared mapping without the operator's alias being
+  advertised, and the alias is not returned by any console or inference response.
+- A shared mapping hidden behind `hidden`, a `model_state` hide, or a retired
+  mapping returns 404 by id exactly as it does by alias.
+- Once the account has a personal mapping for the same alias, the shared id
+  stops resolving: personal precedence is the same rule for ids and aliases.
+- Wildcard patterns (`vendor/*`) stay patterns, not ids: a pattern has no single
+  upstream model to derive an id from, so only exact shared mappings are
+  addressed this way.
+
 ## Roles
 
 | Capability | Owner | Admin | User |
