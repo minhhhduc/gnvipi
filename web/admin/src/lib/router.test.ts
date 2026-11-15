@@ -7,6 +7,7 @@ describe("pageFromUrl", () => {
     ["?page=stats", "stats"],
     ["?page=usage", "usage"],
     ["?page=playground", "playground"],
+    ["?page=api", "api"],
     ["?page=models", "models"],
     ["?page=config", "config"],
     ["?page=chromes", "chromes"],
@@ -91,5 +92,11 @@ describe("pageAllowed", () => {
     expect(pageAllowed("playground", "owner")).toBe(true);
     expect(pageAllowed("playground", "admin")).toBe(true);
     expect(pageAllowed("playground", "user")).toBe(true);
+  });
+
+  it("opens the API guide to every role", () => {
+    expect(pageAllowed("api", "owner")).toBe(true);
+    expect(pageAllowed("api", "admin")).toBe(true);
+    expect(pageAllowed("api", "user")).toBe(true);
   });
 });
