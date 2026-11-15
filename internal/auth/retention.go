@@ -29,6 +29,10 @@ const DefaultAuditMaxRows = 5000
 // than this, so a flood of audit writes cannot push out yesterday's trail.
 const AuditCapFloor = 7 * 24 * time.Hour
 
+// auditDeleteBatch bounds one prune pass so a backlog drains over several
+// ticks instead of a single large delete.
+const auditDeleteBatch = 500
+
 // RetentionConfig bounds how long session, lockout and audit evidence is kept.
 type RetentionConfig struct {
 	Sessions      SessionConfig
@@ -166,9 +170,12 @@ func CleanupAudit(ctx context.Context, q Querier, before, capFloor time.Time, ma
 		maxRows = DefaultAuditMaxRows
 	}
 	tag, err := q.Exec(ctx, `DELETE FROM audit_log
-		WHERE ts < $1
-		   OR (ts < $2 AND id NOT IN (
-			SELECT id FROM audit_log ORDER BY ts DESC, id DESC LIMIT $3))`, before, capFloor, maxRows)
+		WHERE ctid IN (
+			SELECT ctid FROM audit_log
+			WHERE ts < $1
+			   OR (ts < $2 AND id NOT IN (
+				SELECT id FROM audit_log ORDER BY ts DESC, id DESC LIMIT $3))
+			LIMIT $4)`, before, capFloor, maxRows, auditDeleteBatch)
 	if err != nil {
 		return 0, err
 	}
