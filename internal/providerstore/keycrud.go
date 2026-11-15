@@ -25,8 +25,6 @@ var (
 	ErrKeyNotFound = errors.New("providerstore: provider key not found")
 	// ErrProviderNotFound means the provider id names no configured provider.
 	ErrProviderNotFound = errors.New("providerstore: provider not found")
-	// ErrDuplicateKeyName means the key name is already used in its owner scope.
-	ErrDuplicateKeyName = errors.New("providerstore: provider key name already exists")
 	// ErrDuplicateKeyAlias means a model alias is already used in its owner scope.
 	ErrDuplicateKeyAlias = errors.New("providerstore: provider key model alias already exists")
 )
@@ -54,19 +52,6 @@ func scanKeyRecord(row pgx.Row) (KeyRecord, error) {
 		&record.SecretEnc, &record.SecretNonce, &record.SecretKVer, &record.SecretLast4,
 		&record.CreatedAt, &record.UpdatedAt)
 	return record, err
-}
-
-// keyConstraintError maps the two name indexes onto ErrDuplicateKeyName and
-// leaves every other failure intact.
-func keyConstraintError(err error) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		switch pgErr.ConstraintName {
-		case "provider_keys_owner_name_uq", "provider_keys_shared_name_uq":
-			return fmt.Errorf("%w: %s", ErrDuplicateKeyName, pgErr.Detail)
-		}
-	}
-	return err
 }
 
 func keyModelConstraintError(err error) error {
@@ -204,7 +189,7 @@ func InsertProviderKey(ctx context.Context, q Querier, key KeyRow) (KeyRecord, e
 		key.AuthHeaderName, key.KeyEnv, key.KeyRef, key.SecretEnc, key.SecretNonce,
 		key.SecretKVer, key.SecretLast4))
 	if err != nil {
-		return KeyRecord{}, keyConstraintError(err)
+		return KeyRecord{}, err
 	}
 	return record, nil
 }
@@ -224,7 +209,7 @@ func UpdateProviderKey(ctx context.Context, q Querier, key KeyRow) (KeyRecord, e
 		return KeyRecord{}, ErrKeyNotFound
 	}
 	if err != nil {
-		return KeyRecord{}, keyConstraintError(err)
+		return KeyRecord{}, err
 	}
 	return record, nil
 }

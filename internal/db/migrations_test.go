@@ -504,10 +504,8 @@ func TestMigrationsApply(t *testing.T) {
 	}
 
 	partial := map[string]string{
-		"provider_keys_owner_name_uq":  "owner_id IS NOT NULL",
-		"provider_keys_shared_name_uq": "owner_id IS NULL",
-		"key_models_owned_alias_uq":    "owner_id IS NOT NULL",
-		"key_models_shared_alias_uq":   "owner_id IS NULL",
+		"key_models_owned_alias_uq":  "owner_id IS NOT NULL",
+		"key_models_shared_alias_uq": "owner_id IS NULL",
 	}
 	for name, want := range partial {
 		var def string
@@ -647,18 +645,19 @@ func TestRoleAndPartialUniqueConstraints(t *testing.T) {
 		assertCheckViolation(t, err, "users_role_check")
 	})
 
+	// A key is identified by its id; the name is display text, so two keys of
+	// one provider may carry the same label.
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
 		insertProvider(t, ctx, tx, "owned-name-provider")
 		owner := insertUser(t, ctx, tx, "owned-name-user", "user")
-		other := insertUser(t, ctx, tx, "owned-name-other", "user")
 		insertSecretKey(t, ctx, tx, "owned-name-provider", owner, "same-name")
-		insertSecretKey(t, ctx, tx, "owned-name-provider", other, "same-name")
-		_, err := tx.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO provider_keys
 			   (provider_id, owner_id, name, auth_scheme, secret_enc, secret_nonce, secret_kver, secret_last4)
 			 VALUES ('owned-name-provider', $1::uuid, 'same-name', 'bearer', $2, $3, 1, 'last')`,
-			owner, []byte{1}, make([]byte, 12))
-		assertUniqueViolation(t, err, "provider_keys_owner_name_uq")
+			owner, []byte{1}, make([]byte, 12)); err != nil {
+			t.Fatalf("insert second key with the same label: %v", err)
+		}
 	})
 
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
@@ -668,10 +667,11 @@ func TestRoleAndPartialUniqueConstraints(t *testing.T) {
 			 VALUES ('shared-name-provider', 'same-name', 'none')`); err != nil {
 			t.Fatalf("insert first shared key: %v", err)
 		}
-		_, err := tx.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO provider_keys (provider_id, name, auth_scheme)
-			 VALUES ('shared-name-provider', 'same-name', 'none')`)
-		assertUniqueViolation(t, err, "provider_keys_shared_name_uq")
+			 VALUES ('shared-name-provider', 'same-name', 'none')`); err != nil {
+			t.Fatalf("insert second shared key with the same label: %v", err)
+		}
 	})
 
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
