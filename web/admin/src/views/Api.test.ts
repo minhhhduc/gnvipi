@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeCodeEnv, curlSample } from "./Api";
+import { claudeCodeEnv, codexConfig, curlSample, openCodeConfig } from "../lib/apiGuide";
 
 describe("curlSample", () => {
   it("sends OpenAI protocols to their paths with a bearer token", () => {
@@ -23,5 +23,17 @@ describe("curlSample", () => {
     expect(messages).toContain("/v1/messages");
     expect(messages).toContain("x-api-key: $GNVIPI_API_KEY");
     expect(messages).not.toContain("Authorization");
+  });
+});
+describe("model snippets", () => {
+  it("puts the model at the top level of the Codex config", () => {
+    const codex = codexConfig("my/alias", "http://gw:8081");
+    expect(codex.startsWith('model = "my/alias"')).toBe(true);
+    expect(codex).toContain('model_provider = "gnvipi"');
+    expect(codex).toContain('base_url = "http://gw:8081/v1"');
+  });
+
+  it("lists the model in the OpenCode provider map", () => {
+    expect(openCodeConfig("my/alias", "http://gw:8081")).toContain('"my/alias": {}');
   });
 });
