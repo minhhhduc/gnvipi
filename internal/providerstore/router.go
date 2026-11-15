@@ -33,6 +33,7 @@ type Route struct {
 type Router struct {
 	store *Store
 	audit AuditFunc
+	views *viewCache
 }
 
 // RouterOptions configures routing. Audit overrides the Store callback.
@@ -42,7 +43,10 @@ type RouterOptions struct {
 
 // NewRouter constructs a key-aware router over a snapshot store.
 func NewRouter(store *Store) *Router {
-	router := &Router{store: store}
+	router := &Router{
+		store: store,
+		views: newViewCache(accountViewCapacity, nil),
+	}
 	if store != nil {
 		router.audit = store.audit
 	}
@@ -103,8 +107,16 @@ func (r *Router) ResolveCandidates(ctx context.Context, userID, clientModel stri
 	if snapshot == nil {
 		return nil, ErrNoSnapshot
 	}
+	view := r.accountView(snapshot, userID)
 	primary, err := selectPrimary(snapshot, userID, clientModel)
 	if err != nil {
+		if errors.Is(err, ErrModelNotFound) {
+			// Lazy eviction: the alias no longer maps for this account. Drop it
+			// from the cached view and answer with one typed 404. The message is
+			// identical whether or not the alias exists for someone else.
+			view.evict(clientModel)
+			return nil, ErrModelNotAvailable
+		}
 		return nil, err
 	}
 	chain := append([]selected(nil), primary...)

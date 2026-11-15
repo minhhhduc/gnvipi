@@ -1,6 +1,9 @@
 package providerstore
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Auth scheme names as stored in provider_keys.auth_scheme.
 const (
@@ -15,6 +18,10 @@ var (
 	ErrModelNotFound = errors.New("providerstore: model not found")
 	// ErrModelHidden means the model or mapping is hidden or soft-deleted.
 	ErrModelHidden = errors.New("providerstore: model is hidden")
+	// ErrModelNotAvailable means an alias this account used to reach no longer
+	// maps for it. It wraps ErrModelNotFound so the 404 and delegation paths are
+	// unchanged, and its message never says whether the alias exists elsewhere.
+	ErrModelNotAvailable = fmt.Errorf("%w: this model is no longer available for this account", ErrModelNotFound)
 	// ErrKeyRequired means the alias is known but the user has no usable key.
 	ErrKeyRequired = errors.New("providerstore: provider key required")
 	// ErrCredentialUnavailable means configured candidates exist but none has
