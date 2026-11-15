@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -200,8 +200,8 @@ func runConcurrent(ctx context.Context, endpoint string, body []byte, n int) {
 	}
 	fmt.Printf("wall=%s success=%d/%d\n", time.Since(startAll).Round(time.Millisecond), ok, n)
 	if len(ttfbs) > 0 {
-		sort.Slice(ttfbs, func(i, j int) bool { return ttfbs[i] < ttfbs[j] })
-		sort.Slice(totals, func(i, j int) bool { return totals[i] < totals[j] })
+		slices.Sort(ttfbs)
+		slices.Sort(totals)
 		fmt.Printf("ttfb: min=%s p50=%s max=%s\n",
 			ttfbs[0].Round(time.Millisecond),
 			percentile(ttfbs, 50).Round(time.Millisecond),
@@ -352,7 +352,7 @@ func printReport(st *streamStats) {
 		len(st.Events), contentChunks, usageChunks, emptyChunks, st.DoneSeen)
 	fmt.Printf("total=%s content_runes≈%d\n", st.Total.Round(time.Millisecond), len([]rune(st.Content.String())))
 	if len(gaps) > 0 {
-		sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
+		slices.Sort(gaps)
 		fmt.Printf("inter_chunk_gap: min=%s p50=%s p90=%s p99=%s max=%s (idx=%d)\n",
 			gaps[0].Round(time.Millisecond),
 			percentile(gaps, 50).Round(time.Millisecond),

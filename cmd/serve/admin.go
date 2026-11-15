@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -297,7 +297,7 @@ func (p *modelPrefs) listDeleted() []string {
 	for id := range p.deleted {
 		out = append(out, id)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

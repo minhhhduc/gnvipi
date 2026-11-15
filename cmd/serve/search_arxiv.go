@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -64,7 +65,7 @@ func (a *arxivBackend) Adapt(ctx *SearchContext) QueryPlan {
 		// Second variant: a looser keyword search that catches works the exact
 		// phrase form misses.
 		loose := append([]string{}, arxivKeywords(ctx)...)
-		if ctx.Instrument != "" && ctx.Provision != "" && !contains(loose, ctx.Provision) {
+		if ctx.Instrument != "" && ctx.Provision != "" && !slices.Contains(loose, ctx.Provision) {
 			loose = append(loose, ctx.Provision)
 		}
 		looseQuery := "all:" + strings.Join(loose, " ")
@@ -85,15 +86,6 @@ func arxivKeywords(ctx *SearchContext) []string {
 	out = append(out, ctx.Phrases...)
 	out = append(out, ctx.Keywords...)
 	return out
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *arxivBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {

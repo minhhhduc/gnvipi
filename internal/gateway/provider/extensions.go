@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/textproto"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -104,7 +104,7 @@ func (p *Provider) validateExtensions(add func(field, problem string)) {
 	for protocol := range p.EndpointPaths {
 		protocols = append(protocols, protocol.String())
 	}
-	sort.Strings(protocols)
+	slices.Sort(protocols)
 	for _, protocol := range protocols {
 		field := "endpoint_path[" + protocol + "]"
 		if _, err := ir.ParseProtocol(protocol); err != nil {

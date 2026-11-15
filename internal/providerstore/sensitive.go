@@ -3,6 +3,7 @@ package providerstore
 import (
 	"encoding/json"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -44,7 +45,7 @@ func ValidateSensitiveConfig(row ProviderRow, p provider.Provider) []ConfigProbl
 	for name := range p.Headers {
 		headerNames = append(headerNames, name)
 	}
-	sort.Strings(headerNames)
+	slices.Sort(headerNames)
 	for _, name := range headerNames {
 		if IsCredentialHeaderName(name) {
 			add("headers["+name+"]", "credential headers belong in provider_keys")
@@ -87,7 +88,7 @@ func scanCredentialLikeKeys(raw json.RawMessage, path string, add func(field, pr
 			for key := range typed {
 				keys = append(keys, key)
 			}
-			sort.Strings(keys)
+			slices.Sort(keys)
 			for _, key := range keys {
 				child := current + "." + key
 				if credentialLikeKey(key) {

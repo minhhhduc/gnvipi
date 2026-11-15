@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -259,7 +260,7 @@ func benchmarkCandidate(ctx context.Context, url string, trials int, budget time
 	if len(durs) == 0 {
 		return 0, false, fmt.Errorf("no trials completed")
 	}
-	sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
+	slices.Sort(durs)
 	return durs[len(durs)/2], true, nil
 }
 

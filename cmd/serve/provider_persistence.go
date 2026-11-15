@@ -162,8 +162,8 @@ func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged b
 				return err
 			}
 		}
-		sort.Strings(file.MasksID)
-		sort.Strings(file.DeletedID)
+		slices.Sort(file.MasksID)
+		slices.Sort(file.DeletedID)
 		doc.Providers = file.ProvidersV2
 		values := map[string]any{"masks_id": file.MasksID, "deleted_id": file.DeletedID, "auto_model": file.AutoModel, "auto_model_chat_responses": file.AutoModelChatResponses, "search_url": file.SearchURL, "cycle": file.Cycle}
 		if _, exists := doc.Fields["groups"]; !exists {

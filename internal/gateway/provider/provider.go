@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/textproto"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -356,7 +356,7 @@ func (p *Provider) validateHeaders(add func(field, problem string)) {
 	for name := range canonical {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		field := "headers[" + name + "]"
 		switch {

@@ -3,7 +3,7 @@ package provider
 import (
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -41,7 +41,7 @@ func ValidateHeaderPolicy(p *Provider) error {
 	for name := range p.Headers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	seen := make(map[string]bool, len(names))
 	for _, name := range names {
 		canonical := http.CanonicalHeaderKey(name)
