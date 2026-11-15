@@ -35,7 +35,7 @@ export function AutomodeNote() {
       </div>
       <div>
         2. Claude Code: add the <span class="mono">env</span> block below to <span class="mono">~/.claude/settings.json</span> — it is gateway-wide and applies to every project.
-        The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GVIPI_GATEWAY_TOKEN</span>, from API Keys);
+        The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GNVIPI_GATEWAY_TOKEN</span>, from API Keys);
         provider Auth key / API key stay on the server in the provider's keys. Leave <span class="mono">ANTHROPIC_API_KEY</span> empty.
       </div>
     </div>

@@ -16,7 +16,7 @@ export function claudeCodeSettings(origin: string): string {
   return `{
   "env": {
     "ANTHROPIC_BASE_URL": "${origin}",
-    "ANTHROPIC_AUTH_TOKEN": "$GVIPI_GATEWAY_TOKEN",
+    "ANTHROPIC_AUTH_TOKEN": "$GNVIPI_GATEWAY_TOKEN",
     "ANTHROPIC_API_KEY": "",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_AUTO_MODE_MODEL": "automode"
