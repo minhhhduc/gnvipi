@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 )
 
 // RefResolver resolves provider_keys.key_ref values from the imported secrets
@@ -27,11 +29,14 @@ func (m MapRefResolver) ResolveRef(_ context.Context, ref string) (string, bool)
 }
 
 // ResolvedCredential is one usable credential. Raw is the header value for
-// bearer/header; Basic is populated for basic auth. Neither is ever returned
-// by an API or written to a log.
+// bearer/header; Basic is populated for basic auth. APIKey is a second upstream
+// credential carried by the same secret, named by the key's auth_header_name.
+// None of them is ever returned by an API or written to a log.
 type ResolvedCredential struct {
-	Raw   string
-	Basic BasicSecret
+	Raw          string
+	APIKey       string
+	APIKeyHeader string
+	Basic        BasicSecret
 }
 
 // ResolveKeyCredential deterministically resolves the single configured
@@ -114,6 +119,26 @@ func validateKeyEnvName(name string) error {
 
 func credentialFromPlaintext(scheme string, plaintext []byte) (ResolvedCredential, error) {
 	if scheme != SchemeBasic {
+		// A key may carry two upstream credentials as
+		// {"auth_key","api_key","api_key_header"}: auth_key goes to
+		// Authorization, api_key to the header it names, so no vendor header is
+		// baked into the code. ponytail: the pair rides inside the existing
+		// secret (stdlib json, no migration). Split into columns if the two
+		// credentials ever rotate independently.
+		var pair struct {
+			AuthKey      string `json:"auth_key"`
+			APIKey       string `json:"api_key"`
+			APIKeyHeader string `json:"api_key_header"`
+		}
+		if json.Unmarshal(bytes.TrimSpace(plaintext), &pair) == nil && (pair.AuthKey != "" || pair.APIKey != "") {
+			if pair.APIKey == "" {
+				return ResolvedCredential{Raw: pair.AuthKey}, nil
+			}
+			if err := gatewayprovider.ValidateAuthHeaderName(gatewayprovider.AuthBearer, pair.APIKeyHeader); err != nil || pair.APIKeyHeader == "" {
+				return ResolvedCredential{}, fmt.Errorf("%w: paired api_key needs a valid api_key_header", ErrInvalidCredentialSource)
+			}
+			return ResolvedCredential{Raw: pair.AuthKey, APIKey: pair.APIKey, APIKeyHeader: pair.APIKeyHeader}, nil
+		}
 		return ResolvedCredential{Raw: string(plaintext)}, nil
 	}
 	basic, err := parseBasicSecret(plaintext)
