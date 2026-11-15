@@ -20,6 +20,9 @@ interface Turn {
   content: string;
   /** Data URLs or public URLs attached to a user turn. */
   images?: string[];
+  /** Provider and upstream model recorded when the turn was sent. */
+  provider?: string;
+  upstream?: string;
   /** Milliseconds to the first streamed token, when measured. */
   firstTokenMs?: number;
   /** Milliseconds for the whole reply, when measured. */
@@ -45,7 +48,16 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   const [maxTokens, setMaxTokens] = useState("");
   const [input, setInput] = useState("");
   const [images, setImages] = useState<string[]>([]);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  // Each model keeps its own conversation; switching models must not relabel
+  // or mix replies from another model.
+  const [conversations, setConversations] = useState<Record<string, Turn[]>>({});
+  const turns = conversations[model] ?? [];
+  const setTurns = (update: Turn[] | ((current: Turn[]) => Turn[])) =>
+    setConversations((prev) => {
+      const current = prev[model] ?? [];
+      const next = typeof update === "function" ? (update as (current: Turn[]) => Turn[])(current) : update;
+      return { ...prev, [model]: next };
+    });
   const [error, setError] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -86,10 +98,10 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     };
   }, [owner, accountID]);
 
-  // Switching the account being tested changes whose keys resolve, so the old
-  // conversation no longer describes anything real.
+  // Switching the account being tested changes whose keys resolve, so every
+  // saved conversation no longer describes anything real.
   useEffect(() => {
-    setTurns([]);
+    setConversations({});
     setError("");
   }, [accountID]);
 
@@ -183,7 +195,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     void run([
       ...turns,
       { role: "user", content: prompt, images: attached },
-      { role: "assistant", content: "" },
+      { role: "assistant", content: "", provider: selected?.provider, upstream: selected?.upstream_model },
     ]);
   };
 
@@ -204,7 +216,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     const lastUser = turns.map((turn) => turn.role).lastIndexOf("user");
     if (lastUser < 0) return;
     const history = turns.slice(0, lastUser + 1);
-    void run([...history, { role: "assistant", content: "" }]);
+    void run([...history, { role: "assistant", content: "", provider: selected?.provider, upstream: selected?.upstream_model }]);
   };
 
   const copyReply = async () => {
@@ -378,7 +390,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
                     </li>
                   ) : (
                     <li key={index} class="max-w-[92%]">
-                      <div class="mb-1 mono text-[10px] text-dim">{selected ? selected.upstream_model : "assistant"}</div>
+                      <div class="mb-1 mono text-[10px] text-dim">{turn.upstream || selected?.upstream_model || "assistant"}</div>
                       <div class="whitespace-pre-wrap break-words text-[13px] leading-6">
                         {turn.content}
                         {streaming && index === turns.length - 1 && (
