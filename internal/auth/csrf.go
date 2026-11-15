@@ -103,7 +103,7 @@ func CSRFCookie(token string, secure bool, lifetime time.Duration) *http.Cookie 
 	return &http.Cookie{
 		Name:     CSRFCookieName,
 		Value:    token,
-		Path:     "/admin",
+		Path:     "/",
 		HttpOnly: false,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,

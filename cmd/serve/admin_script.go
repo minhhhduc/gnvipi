@@ -183,7 +183,10 @@ function drawDeleted() {
   deleted.forEach(id => {
     const row = document.createElement('div');
     row.className = 'del-row';
-    row.innerHTML = '<span class=id>' + id + '</span>';
+    const idEl = document.createElement('span');
+    idEl.className = 'id';
+    idEl.textContent = id; // model ids are user data: never as HTML
+    row.appendChild(idEl);
     const btn = document.createElement('button');
     btn.textContent = 'restore';
     btn.onclick = () => restoreModel(id);

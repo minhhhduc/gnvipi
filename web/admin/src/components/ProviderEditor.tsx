@@ -1,10 +1,10 @@
 import type { ComponentChildren } from "preact";
-import { useMemo, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { api, ApiError } from "../lib/api";
 import { nsToSeconds, secondsToNs } from "../lib/format";
-import { STANDARD_PROTOCOLS, buildUpstreamModel, getProtocolOptions } from "../lib/helpers";
+import { STANDARD_PROTOCOLS, getProtocolOptions } from "../lib/helpers";
 import type { Provider, TestResult } from "../lib/types";
-import { Dialog, IconPlus, IconX, Switch, useUi } from "./ui";
+import { Dialog, IconPlus, IconX, useUi } from "./ui";
 
 interface MappingRow {
   alias: string;
@@ -170,27 +170,6 @@ export function ProviderEditor({
     // Credentials live on provider keys; a new provider starts with auth none
     // and an edited provider keeps its stored auth untouched.
     const auth: Provider["auth"] = provider?.auth ?? { scheme: "none" };
-    const mapping = f.mappings
-      .filter((m) => m.alias.trim())
-      .map((m) => {
-        const alias = m.alias.trim();
-        const item: NonNullable<Provider["models"]>[number] = {
-          alias,
-          upstream_model: buildUpstreamModel(alias, m.upstream),
-        };
-        if (m.hidden) item.hidden = true;
-        const fallbacks = m.fallbacks.split(",").map((s) => s.trim()).filter(Boolean);
-        const statuses = m.statuses
-          .split(",")
-          .map((s) => parseInt(s.trim(), 10))
-          .filter((n) => Number.isFinite(n));
-        if (fallbacks.length) item.fallbacks = fallbacks;
-        if (statuses.length) item.fallback_statuses = statuses;
-        if (m.allowShadow) item.allow_shadow = true;
-        const legacy = parseInt(m.legacy, 10);
-        if (Number.isFinite(legacy)) item.legacy_position = legacy;
-        return item;
-      });
     const headers: Record<string, string> = {};
     f.headers.forEach((h) => {
       if (h.name.trim()) headers[h.name.trim()] = h.value;
@@ -216,7 +195,6 @@ export function ProviderEditor({
       enabled: f.enabled,
       tls: f.tls,
       auth,
-      models: mapping,
       headers,
       forward_headers: f.forwardHeaders.split(",").map((s) => s.trim()).filter(Boolean),
       endpoint_path: (endpointPath.value || {}) as Record<string, string>,
@@ -228,6 +206,8 @@ export function ProviderEditor({
     };
     if (!f.proxy_url.trim()) delete payload.proxy_url;
     else payload.proxy_url = f.proxy_url.trim();
+    // Models belong to keys, never to the provider record.
+    delete payload.models;
     return payload;
   };
 
@@ -293,12 +273,6 @@ export function ProviderEditor({
     }
   };
 
-  const setMapping = (i: number, next: Partial<MappingRow>) => {
-    const mappings = f.mappings.map((m, idx) => (idx === i ? { ...m, ...next } : m));
-    patch({ mappings });
-  };
-
-  const mappingSummary = useMemo(() => f.mappings.length, [f.mappings.length]);
   const fieldError = (key: string) => errors[key] && <div class="mt-1 text-[11px] text-bad">{errors[key]}</div>;
 
   return (
@@ -362,52 +336,6 @@ export function ProviderEditor({
           </button>
 
           {showAdvanced && (<>
-          <Section title="Model mappings">
-            {f.mappings.map((m, i) => (
-              <div key={i} class="mb-2 rounded-lg border border-line p-2.5">
-                <div class="flex items-center gap-2">
-                  <input class="input mono" placeholder="alias" value={m.alias} onInput={(e) => setMapping(i, { alias: (e.target as HTMLInputElement).value })} />
-                  <input class="input mono" placeholder="upstream model" value={m.upstream} onInput={(e) => setMapping(i, { upstream: (e.target as HTMLInputElement).value })} />
-                  <Switch checked={m.hidden} onChange={(v) => setMapping(i, { hidden: v })} label={`Hide ${m.alias || "mapping"}`} />
-                  <button class="btn btn-sm" onClick={() => setMapping(i, { expanded: !m.expanded })}>
-                    {m.expanded ? "Less" : "More"}
-                  </button>
-                  <button class="btn btn-sm" aria-label="Remove mapping" onClick={() => patch({ mappings: f.mappings.filter((_, idx) => idx !== i) })}>
-                    <IconX />
-                  </button>
-                </div>
-                {m.expanded && (
-                  <div class="mt-2 grid grid-cols-2 gap-2">
-                    <Field label="Fallbacks (comma-separated)">
-                      <input class="input mono" value={m.fallbacks} onInput={(e) => setMapping(i, { fallbacks: (e.target as HTMLInputElement).value })} />
-                    </Field>
-                    <Field label="Fallback statuses (comma-separated)">
-                      <input class="input mono" value={m.statuses} placeholder="429, 500" onInput={(e) => setMapping(i, { statuses: (e.target as HTMLInputElement).value })} />
-                    </Field>
-                    <Field label="Legacy position">
-                      <input class="input" type="number" value={m.legacy} onInput={(e) => setMapping(i, { legacy: (e.target as HTMLInputElement).value })} />
-                    </Field>
-                    <label class="flex items-center gap-2 pt-5 text-xs font-semibold">
-                      <Switch checked={m.allowShadow} onChange={(v) => setMapping(i, { allowShadow: v })} label={`Allow shadow ${m.alias || "mapping"}`} />
-                      Allow shadow
-                    </label>
-                  </div>
-                )}
-              </div>
-            ))}
-            <button
-              class="btn btn-sm"
-              onClick={() =>
-                patch({
-                  mappings: [...f.mappings, { alias: "", upstream: "", hidden: false, fallbacks: "", statuses: "", allowShadow: false, legacy: "", expanded: true }],
-                })
-              }
-            >
-              <IconPlus /> Add mapping
-            </button>
-            <div class="mt-1 text-[11px] text-dim">{mappingSummary} mapping{mappingSummary === 1 ? "" : "s"}</div>
-          </Section>
-
           <Section title="Headers & routing">
             {f.headers.map((h, i) => (
               <div class="mb-2 flex items-center gap-2">

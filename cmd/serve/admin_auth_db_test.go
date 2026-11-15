@@ -216,9 +216,12 @@ func assertNoPasswordMaterial(t *testing.T, value any, secrets ...string) {
 	walk(value)
 }
 
+// cookieValue returns the value a browser keeps. A response may also carry an
+// expired same-name cookie (used to clear the legacy Path=/admin pair), and a
+// browser deletes that one instead of storing it.
 func cookieValue(res *httptest.ResponseRecorder, name string) string {
 	for _, c := range res.Result().Cookies() {
-		if c.Name == name {
+		if c.Name == name && c.Value != "" && c.MaxAge >= 0 {
 			return c.Value
 		}
 	}

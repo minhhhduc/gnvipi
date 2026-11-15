@@ -59,7 +59,7 @@ if (PAGE === 'chromes') {
           tile(busy, 'in use now') +
           tile(extracts, 'captcha extracts') +
         '</div>' +
-        (status.error ? '<div class="note" style="padding:.5rem .9rem 0">last error: ' + status.error + '</div>' : '') +
+        (status.error ? '<div class="note" style="padding:.5rem .9rem 0">last error: ' + escHTML(status.error) + '</div>' : '') +
         (list.length
           ? list.map(c =>
               '<div class="row static" data-id="chrome' + c.index + '">' +

@@ -17,7 +17,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -206,11 +205,6 @@ func setCustomProviderHeaders(dst, src *http.Request, prov *customProvider) {
 	}
 	if v := src.Header.Get("User-Agent"); v != "" {
 		dst.Header.Set("User-Agent", v)
-	}
-	if u, err := url.Parse(prov.BaseURL); err == nil && strings.EqualFold(u.Hostname(), "agentrouter.org") {
-		// AgentRouter's WAF only accepts known first-party agent clients.
-		dst.Header.Set("User-Agent", "opencode/1.18.25")
-		dst.Header.Set("X-App", "opencode")
 	}
 }
 

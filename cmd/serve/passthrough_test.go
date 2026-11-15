@@ -14,15 +14,15 @@ type testRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f testRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestSetCustomProviderHeadersSpoofsAgentRouterClient(t *testing.T) {
+func TestSetCustomProviderHeadersKeepsCallerIdentity(t *testing.T) {
 	src := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", http.NoBody)
 	src.Header.Set("User-Agent", "test-client")
-	dst := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://agentrouter.org/v1/chat/completions", http.NoBody)
-	setCustomProviderHeaders(dst, src, &customProvider{BaseURL: "https://agentrouter.org/v1", APIKey: "secret"})
-	if got := dst.Header.Get("User-Agent"); got != "opencode/1.18.25" {
+	dst := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "https://up.invalid/v1/chat/completions", http.NoBody)
+	setCustomProviderHeaders(dst, src, &customProvider{BaseURL: "https://up.invalid/v1", APIKey: "secret"})
+	if got := dst.Header.Get("User-Agent"); got != "test-client" {
 		t.Fatalf("User-Agent = %q", got)
 	}
-	if got := dst.Header.Get("X-App"); got != "opencode" {
+	if got := dst.Header.Get("X-App"); got != "" {
 		t.Fatalf("X-App = %q", got)
 	}
 	if got := dst.Header.Get("Authorization"); got != "Bearer secret" {
