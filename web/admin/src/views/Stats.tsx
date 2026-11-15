@@ -84,16 +84,6 @@ export function StatsView() {
         </span>
       </PageHeader>
 
-      <Card class="mb-3 px-[15px] py-3 text-xs text-dim">
-        <div class="mb-1 font-semibold text-fg">Reading the numbers</div>
-        <div class="space-y-0.5">
-          <div>Totals, tokens and errors are cumulative <b class="text-fg">since start</b>; TTFB and p95 read the <b class="text-fg">last 200 events</b>.</div>
-          <div>A gap in the TTFB chart means no streamed request in that minute — it is not zero latency.</div>
-          <div>Panels refresh every 2s while the tab is visible; per-request detail lives on the Usage log.</div>
-          <div>Requests are attributed per gateway account; these totals cover the whole gateway.</div>
-        </div>
-      </Card>
-
       <Card class="mb-3 overflow-hidden">
       <div class="grid grid-cols-2 gap-px bg-[var(--line)] sm:grid-cols-4">
         <Kpi label="Total requests" value={value(fmtInt(totalRequests))} detail={hasTraffic ? "since start" : "no traffic"} />
