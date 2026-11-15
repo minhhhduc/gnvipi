@@ -278,6 +278,8 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "update_unavailable", "could not update the user")
 			return
 		}
+		// A role or status change must apply now, not after the cache TTL.
+		gatewayTokenCache.PurgeAll()
 		c.JSON(http.StatusOK, adminUserJSON(user))
 	}
 }
@@ -319,6 +321,8 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "delete_unavailable", "could not delete the user")
 			return
 		}
+		// Deleted users' tokens must stop authenticating immediately.
+		gatewayTokenCache.PurgeAll()
 		c.Status(http.StatusNoContent)
 	}
 }
@@ -376,6 +380,9 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "password_unavailable", "could not reset the password")
 			return
 		}
+		// The reset sets must-change-password; cached identities must not route
+		// traffic in the meantime.
+		gatewayTokenCache.PurgeAll()
 		c.Status(http.StatusNoContent)
 	}
 }
