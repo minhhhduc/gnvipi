@@ -60,3 +60,13 @@ func TestTokenCachePurge(t *testing.T) {
 		t.Fatal("purged entry still hits")
 	}
 }
+
+func TestTokenCachePurgeAll(t *testing.T) {
+	cache := NewTokenCache(time.Minute, 8)
+	cache.Store("a", TokenKindGateway, TokenIdentity{UserID: "a"})
+	cache.Store("b", TokenKindGateway, TokenIdentity{UserID: "b"})
+	cache.PurgeAll()
+	if len(cache.entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(cache.entries))
+	}
+}

@@ -418,6 +418,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke credentials")
 			return
 		}
+		gatewayTokenCache.PurgeAll()
 		if target.ID == identity.UserID {
 			adminClearCredentials(c)
 		}

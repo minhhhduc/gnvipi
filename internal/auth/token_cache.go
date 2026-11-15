@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-// TokenCacheTTL bounds how long a validated token identity may be reused.
-// Revocation, expiry and account disable take effect within this window.
-const TokenCacheTTL = 15 * time.Second
+// TokenCacheTTL bounds how long a validated token identity may be reused. A
+// gateway token authenticates every /v1 request, often long streams, so the
+// window is sized to keep DB validation off the hot path; revoke handlers call
+// PurgeAll so revocation still applies immediately.
+const TokenCacheTTL = 5 * time.Minute
 
 // tokenCacheEntry is one cached identity. Entries are keyed by the token hash,
 // never the raw token.
@@ -90,6 +92,18 @@ func (c *TokenCache) Store(raw string, kind TokenKind, identity TokenIdentity) {
 		c.order.Remove(oldest)
 		delete(c.entries, oldest.Value.(*tokenCacheEntry).key)
 	}
+}
+
+// PurgeAll drops every cached identity. Revocation is rare and not on the hot
+// path, so flushing the whole cache is cheaper than tracking token ids.
+func (c *TokenCache) PurgeAll() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]*list.Element)
+	c.order.Init()
 }
 
 // Purge drops one cached identity, for callers that revoke a token and want the

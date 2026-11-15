@@ -248,6 +248,8 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "revoke_unavailable", "could not revoke the token")
 			return
 		}
+		// Revocation must not wait for the TTL window.
+		gatewayTokenCache.PurgeAll()
 		c.Status(http.StatusNoContent)
 	}
 }
