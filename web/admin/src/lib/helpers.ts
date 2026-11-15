@@ -75,17 +75,13 @@ export const FRAME_SIZE = 200;
 
 /** Global event range and label for the open usage-log frame. */
 export function usagePageWindow(frame: number | null, totalFrames: number, count: number) {
-  const page = clampFrame(frame ?? 1, Math.max(totalFrames, 1));
+  const frames = Math.max(totalFrames, 1);
+  const page = clampFrame(frame ?? 1, frames);
   const start = (page - 1) * FRAME_SIZE;
   return {
-    page,
     from: count === 0 ? 0 : start + 1,
     to: start + count,
-    note: frame == null ? `live · frame ${page} of ${Math.max(totalFrames, 1)}` : `frame ${page} of ${Math.max(totalFrames, 1)}`,
-    hasNewer: frame != null && page > 1,
-    hasOlder: totalFrames > page,
-    newer: page - 1,
-    older: page + 1,
+    note: frame == null ? `live · frame ${page} of ${frames}` : `frame ${page} of ${frames}`,
   };
 }
 

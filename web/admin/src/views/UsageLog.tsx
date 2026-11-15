@@ -205,16 +205,20 @@ export function UsageLogView() {
           </table>
         )}
         {logEvents.length > 0 && (() => {
-          const w = usagePageWindow(frame, totalFrames, logEvents.length);
+          // Label the frame the rows actually came from while the next fetch is in flight.
+          const shown = frame == null ? null : frameData?.frame ?? frame;
+          const w = usagePageWindow(shown, totalFrames, logEvents.length);
+          // Navigate from the requested frame, not the rows still on screen.
+          const page = frame ?? 1;
           return (
             <Pager
               from={w.from}
               to={w.to}
               note={w.note}
-              hasPrev={w.hasNewer}
-              hasNext={w.hasOlder}
-              onPrev={() => setFrame(w.newer)}
-              onNext={() => setFrame(w.older)}
+              hasPrev={frame != null && page > 1}
+              hasNext={totalFrames > page}
+              onPrev={() => setFrame(page - 1)}
+              onNext={() => setFrame(page + 1)}
             />
           );
         })()}
