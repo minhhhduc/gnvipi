@@ -175,8 +175,6 @@ func adminKeyCredentialError(c *gin.Context, err error) {
 func adminKeyStoreError(c *gin.Context, err error) {
 	var pgErr *pgconn.PgError
 	switch {
-	case errors.Is(err, providerstore.ErrDuplicateKeyName):
-		adminFieldError(c, http.StatusConflict, "name", "this name is already used in the same owner scope")
 	case errors.Is(err, providerstore.ErrDuplicateKeyAlias):
 		adminFieldError(c, http.StatusConflict, "alias", "this alias is already used in the same owner scope")
 	case errors.Is(err, providerstore.ErrKeyNotFound), errors.Is(err, providerstore.ErrProviderNotFound):

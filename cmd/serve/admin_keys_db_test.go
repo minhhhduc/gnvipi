@@ -479,7 +479,7 @@ func TestDBAdminKeys_BasicAuthSecret(t *testing.T) {
 	assertFieldError(t, decodeBody(t, res), "credential")
 }
 
-func TestDBAdminKeys_DuplicateNameAndAlias(t *testing.T) {
+func TestDBAdminKeys_KeyLabelAndAliasScope(t *testing.T) {
 	h := newDBAdminHarness(t)
 	insertTestProvider(t, h, keyTestProviderURL)
 
@@ -487,10 +487,12 @@ func TestDBAdminKeys_DuplicateNameAndAlias(t *testing.T) {
 	res := makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
 		"name": "duplicate", "secret": keyTestSecret,
 	}, bearer(h.token))
-	if res.Code != http.StatusConflict {
-		t.Fatalf("duplicate key name = %d, want 409 (body %s)", res.Code, res.Body.String())
+	if res.Code != http.StatusCreated {
+		t.Fatalf("second key with the same label = %d, want 201 (body %s)", res.Code, res.Body.String())
 	}
-	assertFieldError(t, decodeBody(t, res), "name")
+	if secondID, _ := decodeBody(t, res)["id"].(string); secondID == "" || secondID == first["id"] {
+		t.Fatalf("second key id = %q, want a fresh id distinct from %v", secondID, first["id"])
+	}
 
 	userID := createContractUser(t, h, "key-dup-user", auth.RoleUser)
 	other := createTestKey(t, h, bearer(h.token), gin.H{
@@ -507,10 +509,9 @@ func TestDBAdminKeys_DuplicateNameAndAlias(t *testing.T) {
 	res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
 		"name": "shared name", "auth_scheme": "none", "owner_id": nil,
 	}, bearer(h.token))
-	if res.Code != http.StatusConflict {
-		t.Fatalf("duplicate shared key name = %d, want 409 (body %s)", res.Code, res.Body.String())
+	if res.Code != http.StatusCreated {
+		t.Fatalf("second shared key with the same label = %d, want 201 (body %s)", res.Code, res.Body.String())
 	}
-	assertFieldError(t, decodeBody(t, res), "name")
 
 	firstID, _ := first["id"].(string)
 	res = makeRequest(t, h.engine, http.MethodPut, keysPath(firstID)+"/models", gin.H{
