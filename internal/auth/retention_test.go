@@ -296,7 +296,7 @@ func TestCleanupAuditDB(t *testing.T) {
 			t.Fatalf("insert audit %s: %v", row.target, err)
 		}
 	}
-	deleted, err := CleanupAudit(ctx, db, cutoff)
+	deleted, err := CleanupAudit(ctx, db, cutoff, DefaultAuditMaxRows)
 	if err != nil {
 		t.Fatalf("cleanup audit: %v", err)
 	}

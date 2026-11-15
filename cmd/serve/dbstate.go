@@ -27,6 +27,8 @@ const (
 	authRetentionInterval = 24 * time.Hour
 	// auditRetentionDaysEnv overrides the audit retention window in days.
 	auditRetentionDaysEnv = "GNVIPI_AUDIT_RETENTION_DAYS"
+	// auditMaxRowsEnv caps the audit table at the newest N rows.
+	auditMaxRowsEnv = "GNVIPI_AUDIT_MAX_ROWS"
 	// maxAuditRetentionDays bounds the configured window so the duration cannot
 	// overflow and an obvious typo fails at startup instead of later.
 	maxAuditRetentionDays = 36500
@@ -43,14 +45,20 @@ func loadRetentionConfigFrom(lookup func(string) (string, bool), sessions auth.S
 	cfg.Sessions = sessions
 	value, _ := lookup(auditRetentionDaysEnv)
 	raw := strings.TrimSpace(value)
-	if raw == "" {
-		return cfg, nil
+	if raw != "" {
+		days, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil || days == 0 || days > maxAuditRetentionDays {
+			return cfg, fmt.Errorf("%s must be a whole number of days between 1 and %d", auditRetentionDaysEnv, maxAuditRetentionDays)
+		}
+		cfg.Audit = time.Duration(days) * 24 * time.Hour
 	}
-	days, err := strconv.ParseUint(raw, 10, 32)
-	if err != nil || days == 0 || days > maxAuditRetentionDays {
-		return cfg, fmt.Errorf("%s must be a whole number of days between 1 and %d", auditRetentionDaysEnv, maxAuditRetentionDays)
+	if value, _ := lookup(auditMaxRowsEnv); strings.TrimSpace(value) != "" {
+		rows, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || rows < 1 {
+			return cfg, fmt.Errorf("%s must be a positive whole number of rows", auditMaxRowsEnv)
+		}
+		cfg.AuditMaxRows = rows
 	}
-	cfg.Audit = time.Duration(days) * 24 * time.Hour
 	return cfg, nil
 }
 

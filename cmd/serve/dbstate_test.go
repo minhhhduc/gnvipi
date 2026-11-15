@@ -190,8 +190,11 @@ func TestLoadRetentionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default retention config: %v", err)
 	}
-	if cfg.Audit != 365*24*time.Hour {
-		t.Fatalf("default audit retention = %v, want 365 days", cfg.Audit)
+	if cfg.Audit != 30*24*time.Hour {
+		t.Fatalf("default audit retention = %v, want 30 days", cfg.Audit)
+	}
+	if cfg.AuditMaxRows != auth.DefaultAuditMaxRows {
+		t.Fatalf("default audit row cap = %d, want %d", cfg.AuditMaxRows, auth.DefaultAuditMaxRows)
 	}
 	if cfg.LoginAttempts != 30*24*time.Hour {
 		t.Fatalf("default login attempt retention = %v, want 30 days", cfg.LoginAttempts)
