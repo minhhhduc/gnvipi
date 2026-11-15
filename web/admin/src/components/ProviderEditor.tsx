@@ -83,10 +83,13 @@ function init(provider: Provider | null) {
     scheme: provider?.auth?.scheme === "api-key" ? "x-api-key" : provider?.auth?.scheme || "bearer",
     source: provider?.auth?.key_env ? "env" : provider?.auth?.key_ref ? "ref" : "key",
     key: "",
+    apiKey: provider?.headers?.["x-api-key"] || "",
     keyEnv: provider?.auth?.key_env || "",
     keyRef: provider?.auth?.key_ref || "",
     headerName: provider?.auth?.header_name || "",
-    headers: Object.entries(provider?.headers || {}).map(([name, value]) => ({ name, value })) as HeaderRow[],
+    headers: Object.entries(provider?.headers || {})
+      .filter(([name]) => name.toLowerCase() !== "x-api-key")
+      .map(([name, value]) => ({ name, value })) as HeaderRow[],
     mappings: (provider?.models || []).map((m) => ({
       alias: m.alias,
       upstream: m.upstream_model || "",
@@ -109,6 +112,11 @@ function init(provider: Provider | null) {
     maxConcurrency: num(provider?.max_concurrency),
     queueTimeout: nsToSeconds(provider?.queue_timeout),
   };
+}
+
+/** At least one credential must be present: auth key (bearer) or API key (x-api-key). */
+export function missingCredentials(authValue: string, apiKey: string, storedAuth: boolean, storedAPIKey: boolean): boolean {
+  return !authValue.trim() && !apiKey.trim() && !storedAuth && !storedAPIKey;
 }
 
 /** Derives the provider id from its name; stable enough for the console. */
@@ -167,9 +175,15 @@ export function ProviderEditor({
     setErrors(errs);
     if (Object.keys(errs).length) return null;
 
-    // The web always sends the credential as a bearer token; the API key is the
-    // only auth input in this console.
-    const auth: Provider["auth"] = { scheme: provider?.auth?.scheme === "none" ? "none" : "bearer" };
+    // Auth key is the bearer credential (or its env/ref source); API key is a
+    // second credential sent as x-api-key. At least one must be present.
+    const authValue = f.source === "key" ? f.key.trim() : f.source === "env" ? f.keyEnv.trim() : f.keyRef.trim();
+    const storedAuth = isEdit && !!(provider?.auth?.key || provider?.auth?.key_env || provider?.auth?.key_ref);
+    const storedAPIKey = isEdit ? provider?.headers?.["x-api-key"] || "" : "";
+    if (provider?.auth?.scheme !== "none" && missingCredentials(authValue, f.apiKey, storedAuth, !!storedAPIKey)) {
+      errs.apiKey = "Fill at least one of Auth key or API key";
+    }
+    const auth: Provider["auth"] = { scheme: provider?.auth?.scheme === "none" ? "none" : authValue || storedAuth ? "bearer" : "none" };
     if (auth.scheme !== "none") {
       if (f.source === "key" && f.key.trim()) auth.key = f.key.trim();
       if (f.source === "env" && f.keyEnv.trim()) auth.key_env = f.keyEnv.trim();
@@ -200,6 +214,10 @@ export function ProviderEditor({
     f.headers.forEach((h) => {
       if (h.name.trim()) headers[h.name.trim()] = h.value;
     });
+    // The second credential travels as x-api-key; the auth key above stays the
+    // bearer credential (or its env/ref source).
+    const apiKeyValue = f.apiKey.trim() || storedAPIKey;
+    if (apiKeyValue) headers["x-api-key"] = apiKeyValue;
     const timeouts: NonNullable<Provider["timeouts"]> = {};
     [
       ["connect", f.connect],
@@ -371,24 +389,26 @@ export function ProviderEditor({
               </select>
             </Field>
             {f.source === "key" && (
-              <Field label="API key">
-                <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "paste the provider API key"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
+              <Field label="Auth key">
+                <input class="input" type="password" autoComplete="off" value={f.key} placeholder={isEdit ? "leave blank to keep the stored key" : "Authorization: Bearer <auth key>"} onInput={(e) => patch({ key: (e.target as HTMLInputElement).value })} />
               </Field>
             )}
             {f.source === "env" && (
-              <Field label="Environment variable">
+              <Field label="Auth key (env var)">
                 <input class="input mono" value={f.keyEnv} placeholder="OPENAI_API_KEY" onInput={(e) => patch({ keyEnv: (e.target as HTMLInputElement).value })} />
               </Field>
             )}
             {f.source === "ref" && (
-              <Field label="Key reference">
+              <Field label="Auth key (reference)">
                 <input class="input mono" value={f.keyRef} placeholder="vault/provider-key" onInput={(e) => patch({ keyRef: (e.target as HTMLInputElement).value })} />
               </Field>
             )}
+            <Field label="API key">
+              <input class="input" type="password" autoComplete="off" value={f.apiKey} placeholder="optional · sent as x-api-key" onInput={(e) => patch({ apiKey: (e.target as HTMLInputElement).value })} />
+              {fieldError("apiKey")}
+            </Field>
             <span class="block text-[11px] text-dim">
-              {f.source === "key"
-                ? "Sent as Authorization: Bearer <key>. Write-only: only the last four characters are shown later."
-                : "The credential is read from the selected source; the value never enters this form."}
+              Auth key goes out as Authorization: Bearer (or from the selected source); API key goes out as x-api-key. Both are write-only; only the last four characters are shown later.
             </span>
           </Section>
 
