@@ -72,10 +72,7 @@ func anthropicResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if prov.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+prov.APIKey)
-		}
-		forwardOpenCodeHeaders(req, c.Request)
+		setCustomProviderHeaders(req, c.Request, prov)
 		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(in.Model, start)

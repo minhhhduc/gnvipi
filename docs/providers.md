@@ -163,6 +163,7 @@ An allow-list of client request headers forwarded through to the upstream:
 ```
 
 - Client credentials (`Authorization`, `X-Api-Key`, `Cookie`) and transport headers cannot be forwarded.
+- The list is the only source of relayed client headers: no header name or prefix is forwarded implicitly, on the relay path and on every passthrough path. A client that carries session affinity in a header (for example a coding agent sending its own session id) needs that header listed here.
 
 ---
 

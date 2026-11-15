@@ -93,7 +93,7 @@ func ApplyHeaders(dst, src *http.Request, p *provider.Provider) error {
 }
 
 func headerAllowed(name string, extras []string) bool {
-	if forwardedHeaders[name] || strings.HasPrefix(name, "X-Opencode-") {
+	if forwardedHeaders[name] {
 		return true
 	}
 	for _, extra := range extras {

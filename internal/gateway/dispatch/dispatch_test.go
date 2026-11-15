@@ -42,7 +42,10 @@ func TestSameProtocolDispatchAndCountTokens(t *testing.T) {
 				}
 			}))
 			defer upstream.Close()
-			resolver, err := routing.NewLegacyResolver([]provider.LegacyProvider{{Name: "vendor", BaseURL: upstream.URL, APIKey: "provider-key", Model: "upstream-model", Alias: "alias", MessagesOnly: tc.messages, ResponsesOnly: tc.responses}}, nil)
+			resolver, err := routing.NewLegacyResolver([]provider.LegacyProvider{{
+				Name: "vendor", BaseURL: upstream.URL, APIKey: "provider-key", Model: "upstream-model", Alias: "alias",
+				MessagesOnly: tc.messages, ResponsesOnly: tc.responses, ForwardHeaders: "X-Session",
+			}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -51,7 +54,8 @@ func TestSameProtocolDispatchAndCountTokens(t *testing.T) {
 			engine.POST(tc.path, func(c *gin.Context) { t.Error("owned request reached downstream"); c.Status(http.StatusTeapot) })
 			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.path, strings.NewReader(`{"model":"alias","input":"hello","vendor":9007199254740993}`))
 			request.Header.Set("Authorization", "Bearer inbound-key")
-			request.Header.Set("X-Opencode-Session", "session-1")
+			request.Header.Set("X-Session", "session-1")
+			request.Header.Set("X-Unconfigured", "dropped")
 			out := httptest.NewRecorder()
 			engine.ServeHTTP(out, request)
 			if out.Code != http.StatusOK || out.Body.String() != " {\"answer\":\"unchanged\"}\n" {
@@ -62,7 +66,7 @@ func TestSameProtocolDispatchAndCountTokens(t *testing.T) {
 			if tc.messages {
 				authHeader, authValue = "X-Api-Key", "provider-key"
 			}
-			if observed.URL.Path != tc.path || observed.Header.Get(authHeader) != authValue || observed.Header.Get("X-Opencode-Session") != "session-1" {
+			if observed.URL.Path != tc.path || observed.Header.Get(authHeader) != authValue || observed.Header.Get("X-Session") != "session-1" || observed.Header.Get("X-Unconfigured") != "" {
 				t.Fatalf("upstream request = %s %v", observed.URL.Path, observed.Header)
 			}
 			var fields map[string]json.RawMessage
