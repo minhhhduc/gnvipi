@@ -252,6 +252,16 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
             </select>
           </label>
         )}
+        <a
+          href="/api"
+          class="text-xs font-medium text-dim hover:text-fg"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("api");
+          }}
+        >
+          API usage
+        </a>
       </PageHeader>
 
       <div class="grid items-start gap-3 lg:grid-cols-[300px_minmax(0,1fr)]">
