@@ -35,7 +35,8 @@ export function AutomodeNote() {
       </div>
       <div>
         2. Claude Code: add the <span class="mono">env</span> block below to <span class="mono">~/.claude/settings.json</span> — it is gateway-wide and applies to every project.
-        <span class="mono">CLAUDE_CODE_AUTO_MODE_MODEL</span> sets the auto-mode classifier model; the main model stays what the agent picks.
+        The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GVIPI_GATEWAY_TOKEN</span>, from API Keys);
+        provider Auth key / API key stay on the server in the provider's keys. Leave <span class="mono">ANTHROPIC_API_KEY</span> empty.
       </div>
     </div>
   );
