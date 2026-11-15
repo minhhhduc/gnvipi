@@ -192,6 +192,13 @@ func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) (
 	if state, ok := snapshot.modelState[model]; ok && (state.Hidden || state.Deleted) {
 		return nil, ErrModelHidden
 	}
+	if entry, ok := snapshot.sharedIDs[model]; ok {
+		if selections, err := selectSharedID(snapshot, userID, model, entry); err != nil {
+			return nil, err
+		} else if len(selections) > 0 {
+			return selections, nil
+		}
+	}
 	if list := snapshot.personalEx[userID][model]; len(list) > 0 {
 		if selections, err := pickExact(list, model, snapshot.isProtected); err != nil {
 			return nil, err
@@ -235,6 +242,30 @@ func selectExactOnly(snapshot *Snapshot, userID, model string, exactOnly bool) (
 		}
 	}
 	return nil, ErrModelNotFound
+}
+
+// selectSharedID resolves a shared mapping's public id. The selection keeps the
+// id as the alias, so nothing downstream echoes the alias the operator owns,
+// and the protected-model rule runs against the alias the id stands for.
+//
+// A personal mapping for the same alias outranks the shared one exactly as it
+// does for the alias itself, and AvailableModels stops advertising the id at the
+// same moment, so the id stops resolving too.
+func selectSharedID(snapshot *Snapshot, userID, id string, entry *sharedID) ([]selected, error) {
+	if len(snapshot.personalEx[userID][entry.alias]) > 0 {
+		return nil, nil
+	}
+	if state, ok := snapshot.modelState[entry.alias]; ok && (state.Hidden || state.Deleted) {
+		return nil, ErrModelHidden
+	}
+	selections, err := pickExact(entry.list, entry.alias, snapshot.isProtected)
+	if err != nil {
+		return nil, err
+	}
+	for i := range selections {
+		selections[i].alias = id
+	}
+	return selections, nil
 }
 
 func pickExact(list []*candidate, model string, isProtected func(string) bool) ([]selected, error) {

@@ -65,13 +65,20 @@ func handlePlaygroundModels(runtime *providerRuntime, prefs *modelPrefs) gin.Han
 		if runtime != nil {
 			if snapshot := runtime.store.Current(); snapshot != nil {
 				for _, model := range snapshot.AvailableModels(target, union) {
-					out = append(out, playgroundModel{
+					entry := playgroundModel{
 						Provider:      model.ProviderID,
 						Alias:         model.Alias,
 						UpstreamModel: model.UpstreamModel,
 						Source:        "key",
-					})
-					keyAliases[model.Alias] = struct{}{}
+					}
+					// A shared mapping is the operator's configuration: the
+					// account selects it by the id the gateway derives, and the
+					// alias and upstream model stay out of the response.
+					if model.PublicID != "" {
+						entry.Alias, entry.UpstreamModel = model.PublicID, ""
+					}
+					out = append(out, entry)
+					keyAliases[entry.Alias] = struct{}{}
 				}
 			}
 		}

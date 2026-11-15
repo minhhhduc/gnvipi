@@ -130,8 +130,35 @@ func providerView(ctx context.Context, q providerstore.Querier, row *providersto
 	}
 	if userProviderReader(identity) {
 		view = providerMetadata(&view)
+		publicSharedModels(row.ID, identity.UserID, models, &view)
 	}
 	return view, nil
+}
+
+// publicSharedModels replaces every mapping the account can only reach through a
+// shared key with the id it may call. The alias, its upstream model and its
+// fallbacks belong to the operator who created the shared key, so a caller sees
+// an opaque id and nothing that names the operator's upstream configuration.
+func publicSharedModels(providerID, userID string, rows []providerstore.KeyModelRow, view *gatewayprovider.Provider) {
+	personal := make(map[string]bool, len(rows))
+	for i := range rows {
+		row := &rows[i]
+		if row.OwnerID != "" && sameUserID(row.OwnerID, userID) {
+			personal[row.Alias] = true
+		}
+	}
+	for i := range view.Models {
+		model := &view.Models[i]
+		// Wildcard patterns are patterns, not selectable ids; they keep their
+		// shape and are left to the resolver's pattern rules.
+		if personal[model.Alias] || strings.HasSuffix(model.Alias, "/*") {
+			continue
+		}
+		model.Alias = providerstore.PublicModelID(providerID, model.Alias)
+		model.UpstreamModel = ""
+		model.Fallbacks = nil
+		model.FallbackStatuses = nil
+	}
 }
 
 func handleDBAdminAPIListProviders(c *gin.Context, state *authState) {

@@ -99,6 +99,7 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 		ownerKeyID  = "22222222-2222-2222-2222-222222222201"
 		memberKeyID = "22222222-2222-2222-2222-222222222202"
 		envKeyID    = "22222222-2222-2222-2222-222222222203"
+		sharedKeyID = "22222222-2222-2222-2222-222222222204"
 	)
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO providers(id, name, protocol, base_url)
@@ -111,10 +112,11 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 		{ownerKeyID, owner.ID, "issue-202-owner", "none", ""},
 		{memberKeyID, member.ID, "issue-202-member", "none", ""},
 		{envKeyID, owner.ID, "issue-202-env", "bearer", "GNVIPI_KEY_SERVE_202_DB_UNSET"},
+		{sharedKeyID, "", "issue-202-shared", "none", ""},
 	} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO provider_keys(id, provider_id, owner_id, name, auth_scheme, key_env)
-			 VALUES($1, 'db202', $2, $3, $4, NULLIF($5, ''))`,
+			 VALUES($1, 'db202', NULLIF($2, '')::uuid, $3, $4, NULLIF($5, ''))`,
 			key.id, key.owner, key.name, key.scheme, key.env); err != nil {
 			t.Fatalf("insert key %s: %v", key.id, err)
 		}
@@ -125,10 +127,12 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 		{ownerKeyID, owner.ID, "db202-model", "owner-up"},
 		{memberKeyID, member.ID, "db202-model", "member-up"},
 		{envKeyID, owner.ID, "db202-unavailable", "unavailable-up"},
+		{sharedKeyID, "", "db202-shared", "shared-up"},
 	} {
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO key_models(key_id, alias, upstream_model) VALUES($1, $2, $3)`,
-			model.keyID, model.alias, model.upstream); err != nil {
+			`INSERT INTO key_models(key_id, provider_id, owner_id, alias, upstream_model)
+			 VALUES($1, 'db202', NULLIF($2, '')::uuid, $3, $4)`,
+			model.keyID, model.owner, model.alias, model.upstream); err != nil {
 			t.Fatalf("insert model %s: %v", model.alias, err)
 		}
 	}
@@ -188,6 +192,21 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 	}
 	if got := lastUpstream(); got != "member-up" {
 		t.Fatalf("member routed to %q, want member-up", got)
+	}
+
+	// A shared key's mapping is selected by the id the gateway derives from the
+	// provider and alias: any account reaches it, and neither the alias nor the
+	// upstream model comes back in the response.
+	sharedPublicID := providerstore.PublicModelID("db202", "db202-shared")
+	out := send(memberToken, sharedPublicID)
+	if out.Code != http.StatusOK {
+		t.Fatalf("member shared-id request = %d: %s", out.Code, out.Body.String())
+	}
+	if got := lastUpstream(); got != "shared-up" {
+		t.Fatalf("shared id routed to %q, want shared-up", got)
+	}
+	if strings.Contains(out.Body.String(), "db202-shared") || strings.Contains(out.Body.String(), "shared-up") {
+		t.Fatalf("shared-id response leaks the operator's mapping: %s", out.Body.String())
 	}
 
 	// The keyless user must receive a 4xx naming the provider, never another

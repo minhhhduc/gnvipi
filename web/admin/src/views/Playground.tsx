@@ -296,7 +296,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
                 </label>
                 {selected && (
                   <p class="mono break-all text-[11px] text-dim">
-                    {selected.provider} · {selected.upstream_model}
+                    {selected.upstream_model ? `${selected.provider} · ${selected.upstream_model}` : `${selected.provider} · shared mapping`}
                   </p>
                 )}
                 {union && (

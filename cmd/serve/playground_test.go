@@ -140,8 +140,15 @@ func TestPlaygroundModelsIsolatesUsers(t *testing.T) {
 	if findPlaygroundModel(userOne.Models, "shared-alias", "up-u2") {
 		t.Fatal("u1 sees u2's key")
 	}
-	if !findPlaygroundModel(userOne.Models, "shared-none", "up-shared") {
-		t.Fatal("u1 does not see the shared none-key alias")
+	// A shared none-key mapping is the operator's configuration: the picker
+	// lists it under the derived id with no upstream model behind it.
+	if !findPlaygroundModel(userOne.Models, providerstore.PublicModelID("p1", "shared-none"), "") {
+		t.Fatalf("u1 does not see the shared none-key mapping under its id: %+v", userOne.Models)
+	}
+	for _, model := range userOne.Models {
+		if model.Alias == "shared-none" || model.UpstreamModel == "up-shared" {
+			t.Fatalf("the picker exposes the shared mapping's alias or upstream: %+v", model)
+		}
 	}
 
 	userTwo := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("u2", auth.RoleUser), &rows), http.MethodGet, "/admin/api/playground/models", "").Body.String())
@@ -158,6 +165,9 @@ func TestPlaygroundModelsIsolatesUsers(t *testing.T) {
 	}
 	if !findPlaygroundModel(owner.Models, "shared-alias", "up-u1") || !findPlaygroundModel(owner.Models, "shared-alias", "up-u2") {
 		t.Fatalf("owner union missed an account alias: %+v", owner.Models)
+	}
+	if !findPlaygroundModel(owner.Models, providerstore.PublicModelID("p1", "shared-none"), "") {
+		t.Fatalf("owner union missed the shared mapping's id: %+v", owner.Models)
 	}
 
 	selected := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("owner", auth.RoleOwner), &rows), http.MethodGet, "/admin/api/playground/models?user_id=u2", "").Body.String())
