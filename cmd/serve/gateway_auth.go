@@ -29,6 +29,9 @@ func withInternalGatewayUser(ctx context.Context, userID string) context.Context
 // gateway API token is also accepted and its user is attached to the request
 // context for key-aware routing. Conflicts are rejected, never resolved by
 // trying both credentials.
+// gatewayTokenCache avoids one database round trip per authenticated request.
+var gatewayTokenCache = auth.NewTokenCache(auth.TokenCacheTTL, 4096)
+
 func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 	var keys [][sha256.Size]byte
 	for _, key := range strings.Split(keyList, ",") {
@@ -113,8 +116,17 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 		// A database gateway token authenticates to its user. A conflicting
 		// Authorization/x-api-key pair never reaches this path.
 		if valid && key != "" && consistent && db != nil && db.pool != nil {
-			identity, err := auth.ValidateAPIToken(c.Request.Context(), db.pool, key, auth.TokenKindGateway, time.Now())
-			if err == nil {
+			// Repeated requests with the same token reuse the cached identity for
+			// at most TokenCacheTTL; revoke/expiry apply within that window.
+			identity, cached := gatewayTokenCache.Lookup(key, auth.TokenKindGateway)
+			if !cached {
+				if validated, err := auth.ValidateAPIToken(c.Request.Context(), db.pool, key, auth.TokenKindGateway, time.Now()); err == nil {
+					identity = *validated
+					gatewayTokenCache.Store(key, auth.TokenKindGateway, identity)
+					cached = true
+				}
+			}
+			if cached {
 				if identity.MustChangePassword {
 					// Same code and envelope as the admin API: a minted token
 					// must not route traffic before the password changes.
