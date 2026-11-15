@@ -79,7 +79,7 @@ func newTestRelay(t *testing.T, base string, protocol ir.Protocol, recorder core
 		ID: "relay-provider", Name: "Relay provider", BaseURL: base, Protocol: protocol,
 		Auth:           provider.Auth{Scheme: provider.AuthBearer, Key: "opaque-relay-provider-credential"},
 		Headers:        map[string]string{"X-Static": "configured"},
-		ForwardHeaders: []string{"X-Client"},
+		ForwardHeaders: []string{"X-Client", "X-Session"},
 	}
 	if protocol == ir.ProtocolAnthropicMessages {
 		p.Auth.Scheme = provider.AuthAPIKey
@@ -112,7 +112,7 @@ func TestRelayPreservesResponseBytesAndOnlyRewritesModel(t *testing.T) {
 				r.Header.Set("Authorization", "Bearer client-credential")
 				r.Header.Set("Cookie", "session=client-secret")
 				r.Header.Set("X-Client", "forwarded")
-				r.Header.Set("X-Opencode-Session", "session-id")
+				r.Header.Set("X-Session", "session-id")
 				r.Header.Set(core.RequestIDHeader, "client-request-id")
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, r)
@@ -131,7 +131,7 @@ func TestRelayPreservesResponseBytesAndOnlyRewritesModel(t *testing.T) {
 				if string(fields["model"]) != `"upstream-model"` || string(fields["temperature"]) != "0" || string(fields["unknown"]) != `{"model":"nested","number":9007199254740993}` {
 					t.Fatalf("request fields changed: %s", got.Body)
 				}
-				if got.Headers.Get("X-Client") != "forwarded" || got.Headers.Get("X-Static") != "configured" || got.Headers.Get("X-Opencode-Session") != "session-id" || got.Headers.Get("Cookie") != "" || got.Headers.Get(core.RequestIDHeader) != "client-request-id" {
+				if got.Headers.Get("X-Client") != "forwarded" || got.Headers.Get("X-Static") != "configured" || got.Headers.Get("X-Session") != "session-id" || got.Headers.Get("Cookie") != "" || got.Headers.Get(core.RequestIDHeader) != "client-request-id" {
 					t.Fatalf("unsafe or missing upstream headers: %v", got.Headers)
 				}
 				credential := got.Headers.Get("Authorization")

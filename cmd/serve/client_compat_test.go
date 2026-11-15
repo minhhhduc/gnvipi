@@ -864,10 +864,11 @@ func TestClientCompat_OpenAIResponses_Codex(t *testing.T) {
 	}
 }
 
-// TestClientCompat_OpenCode_HeadersMetadata verifies that OpenCode custom
-// headers (x-opencode-*) are forwarded to preserve client metadata, while
-// arbitrary unsupported extension headers are dropped and credentials stripped.
-func TestClientCompat_OpenCode_HeadersMetadata(t *testing.T) {
+// TestClientCompat_OpenCode_ConfiguredMetadataHeaders verifies that a client's
+// metadata headers reach the upstream only because the provider names them in
+// forward_headers: no header prefix is relayed implicitly, unsupported headers
+// are dropped and the client credential is replaced.
+func TestClientCompat_OpenCode_ConfiguredMetadataHeaders(t *testing.T) {
 	fixtureBytes := readFixture(t, "opencode/chat_opencode.json")
 
 	upstream := newMockUpstream(func(w http.ResponseWriter, r *http.Request, _ []byte) {
@@ -901,6 +902,9 @@ func TestClientCompat_OpenCode_HeadersMetadata(t *testing.T) {
 				Alias:   "opencode-chat-model",
 				BaseURL: upstream.URL,
 				APIKey:  "opencode-provider-key",
+				ForwardHeaders: []string{
+					"X-Opencode-Session-Id", "X-Opencode-Client-Version", "X-Opencode-Project-Root",
+				},
 			},
 		},
 	}
@@ -914,6 +918,7 @@ func TestClientCompat_OpenCode_HeadersMetadata(t *testing.T) {
 	req.Header.Set("X-Opencode-Client-Version", "1.4.2")
 	req.Header.Set("X-Opencode-Project-Root", "/home/developer/gnvipi")
 	req.Header.Set("X-Custom-Unsupported-Header", "should-be-dropped")
+	req.Header.Set("X-Opencode-Unconfigured", "should-be-dropped")
 
 	rec := httptest.NewRecorder()
 	engine.ServeHTTP(rec, req)
@@ -927,7 +932,7 @@ func TestClientCompat_OpenCode_HeadersMetadata(t *testing.T) {
 		t.Fatal("no upstream request recorded")
 	}
 
-	// Verify X-Opencode-* metadata headers are preserved
+	// Verify the configured metadata headers are preserved
 	if got := captured.Header.Get("X-Opencode-Session-Id"); got != "sess-987654321" {
 		t.Errorf("upstream X-Opencode-Session-Id = %q, want sess-987654321", got)
 	}
@@ -938,9 +943,12 @@ func TestClientCompat_OpenCode_HeadersMetadata(t *testing.T) {
 		t.Errorf("upstream X-Opencode-Project-Root = %q, want /home/developer/gnvipi", got)
 	}
 
-	// Verify unsupported header was dropped
-	if got := captured.Header.Get("X-Custom-Unsupported-Header"); got != "" {
-		t.Errorf("upstream X-Custom-Unsupported-Header was not dropped: %q", got)
+	// Verify unsupported headers were dropped, including an unconfigured header
+	// of the same vendor prefix.
+	for _, name := range []string{"X-Custom-Unsupported-Header", "X-Opencode-Unconfigured"} {
+		if got := captured.Header.Get(name); got != "" {
+			t.Errorf("upstream %s was not dropped: %q", name, got)
+		}
 	}
 
 	// Verify client raw secret was replaced by provider credential

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -18,7 +19,7 @@ func TestRejectedProviderCandidateDoesNotPoisonPreferences(t *testing.T) {
 	if err := p.setProviders([]customProvider{bad}); err == nil {
 		t.Fatal("invalid provider accepted")
 	}
-	if got := p.listProviders(); len(got) != 1 || got[0] != old {
+	if got := p.listProviders(); len(got) != 1 || !reflect.DeepEqual(got[0], old) {
 		t.Fatalf("rejected candidate changed live providers: %+v", got)
 	}
 	route, err := r.Resolve(t.Context(), "alias", ir.ProtocolOpenAIChat)

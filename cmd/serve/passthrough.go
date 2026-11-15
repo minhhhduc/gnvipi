@@ -119,7 +119,6 @@ func customOpenAICompatPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		setCustomProviderHeaders(req, c.Request, prov)
-		forwardOpenCodeHeaders(req, c.Request)
 		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(model, start)
@@ -181,7 +180,6 @@ func customOpenAIResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		setCustomProviderHeaders(req, c.Request, prov)
-		forwardOpenCodeHeaders(req, c.Request)
 		resp, err := compatClient.Do(req)
 		if err != nil {
 			statFail(payload.Model, start)
@@ -199,12 +197,32 @@ func customOpenAIResponsesPassthrough(p *modelPrefs) gin.HandlerFunc {
 	}
 }
 
+// setCustomProviderHeaders gives the upstream the provider credential, the
+// caller's own identity and the headers the provider asked to forward. Nothing
+// outside forward_headers is relayed.
 func setCustomProviderHeaders(dst, src *http.Request, prov *customProvider) {
 	if prov.APIKey != "" {
 		dst.Header.Set("Authorization", "Bearer "+prov.APIKey)
 	}
 	if v := src.Header.Get("User-Agent"); v != "" {
 		dst.Header.Set("User-Agent", v)
+	}
+	forwardConfiguredHeaders(dst, src, prov)
+	core.PropagateRequestID(dst)
+}
+
+// forwardConfiguredHeaders relays exactly the caller headers the provider names
+// in forward_headers. It is the only way a caller header reaches an upstream on
+// the passthrough paths; nothing is relayed by prefix.
+func forwardConfiguredHeaders(dst, src *http.Request, prov *customProvider) {
+	for _, name := range prov.ForwardHeaders {
+		canonical := http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if canonical == "" || gwprovider.ForbiddenForwardHeader(canonical) {
+			continue
+		}
+		for _, value := range src.Header.Values(canonical) {
+			dst.Header.Add(canonical, value)
+		}
 	}
 }
 
@@ -553,10 +571,11 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		req.Header.Set("x-api-key", prov.APIKey)
 		// Keep the curl UA alongside the Chrome TLS fingerprint for header-based WAF rules.
 		req.Header.Set("User-Agent", "curl/8.4.0")
-		forwardOpenCodeHeaders(req, c.Request)
 		if v := c.Request.Header.Get("anthropic-version"); v != "" {
 			req.Header.Set("anthropic-version", v)
 		}
+		forwardConfiguredHeaders(req, c.Request, prov)
+		core.PropagateRequestID(req)
 
 		resp, err := messagesOnlyClient.Do(req)
 		if err != nil {
@@ -613,22 +632,6 @@ func messagesOnlyPassthrough(p *modelPrefs) gin.HandlerFunc {
 		}
 		statCopyDone(payload.Model, start, tee, resp.StatusCode, streamed, copyErr)
 		c.Abort()
-	}
-}
-
-// forwardOpenCodeHeaders preserves the session affinity headers required by
-// OpenCode Zen/Go. The relay rejects free-tier requests without
-// x-opencode-session; dropping it while proxying makes direct calls work but
-// gateway calls fail with MissingSessionID.
-func forwardOpenCodeHeaders(dst, src *http.Request) {
-	core.PropagateRequestID(dst)
-	for name, values := range src.Header {
-		if !strings.HasPrefix(strings.ToLower(name), "x-opencode-") {
-			continue
-		}
-		for _, value := range values {
-			dst.Header.Add(name, value)
-		}
 	}
 }
 

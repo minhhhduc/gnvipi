@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 )
@@ -44,8 +45,9 @@ func legacyRows(list []Provider) []legacyRow {
 				rows = append(rows, legacyRow{entry: LegacyProvider{Name: p.Name, BaseURL: p.BaseURL, APIKey: key,
 					KeyEnv: p.Auth.KeyEnv,
 					Model:  m.UpstreamModel, Alias: m.Alias,
-					MessagesOnly:  p.Protocol == ir.ProtocolAnthropicMessages,
-					ResponsesOnly: p.Protocol == ir.ProtocolOpenAIResponses}, owner: i, position: m.LegacyPosition})
+					MessagesOnly:   p.Protocol == ir.ProtocolAnthropicMessages,
+					ResponsesOnly:  p.Protocol == ir.ProtocolOpenAIResponses,
+					ForwardHeaders: strings.Join(p.ForwardHeaders, ",")}, owner: i, position: m.LegacyPosition})
 			}
 		}
 	}

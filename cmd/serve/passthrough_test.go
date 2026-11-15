@@ -131,28 +131,32 @@ func TestResponsesPassthroughUsesResponsesEndpoint(t *testing.T) {
 		}, nil
 	})}
 	p := &modelPrefs{providers: []customProvider{{
-		Name: "opencode-zen", Model: "muse-spark-1.3", BaseURL: "https://opencode.ai/zen/v1",
-		APIKey: "secret", ResponsesOnly: true,
+		Name: "zen", Model: "muse-spark-1.3", BaseURL: "https://zen.example/v1",
+		APIKey: "secret", ResponsesOnly: true, ForwardHeaders: []string{"X-Client-Session"},
 	}}}
 	engine := gin.New()
 	engine.Use(customOpenAIResponsesPassthrough(p))
 	called := false
 	engine.POST("/v1/responses", func(c *gin.Context) { called = true; c.Status(http.StatusOK) })
 	w := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"opencode-zen/muse-spark-1.3","input":"ping"}`))
-	req.Header.Set("x-opencode-session", "session-test-1")
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"zen/muse-spark-1.3","input":"ping"}`))
+	req.Header.Set("X-Client-Session", "session-test-1")
+	req.Header.Set("X-Unconfigured", "dropped")
 	engine.ServeHTTP(w, req)
 	if called || w.Code != http.StatusOK || got == nil {
 		t.Fatalf("called=%v status=%d request=%v", called, w.Code, got)
 	}
-	if got.URL.String() != "https://opencode.ai/zen/v1/responses" {
+	if got.URL.String() != "https://zen.example/v1/responses" {
 		t.Fatalf("target=%s", got.URL)
 	}
 	if got.Header.Get("Authorization") != "Bearer secret" {
 		t.Fatalf("authorization=%q", got.Header.Get("Authorization"))
 	}
-	if got.Header.Get("x-opencode-session") != "session-test-1" {
-		t.Fatalf("x-opencode-session=%q", got.Header.Get("x-opencode-session"))
+	if got.Header.Get("X-Client-Session") != "session-test-1" {
+		t.Fatalf("configured header=%q", got.Header.Get("X-Client-Session"))
+	}
+	if got.Header.Get("X-Unconfigured") != "" {
+		t.Fatalf("unconfigured header forwarded: %v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
 	if err != nil {
@@ -164,10 +168,10 @@ func TestResponsesPassthroughUsesResponsesEndpoint(t *testing.T) {
 }
 
 func TestProviderEndpointAcceptsFullEndpoint(t *testing.T) {
-	if got := providerEndpoint("https://opencode.ai/zen/v1/responses", "/responses"); got != "https://opencode.ai/zen/v1/responses" {
+	if got := providerEndpoint("https://zen.example/v1/responses", "/responses"); got != "https://zen.example/v1/responses" {
 		t.Fatalf("full endpoint=%q", got)
 	}
-	if got := providerEndpoint("https://opencode.ai/zen/v1", "/responses"); got != "https://opencode.ai/zen/v1/responses" {
+	if got := providerEndpoint("https://zen.example/v1", "/responses"); got != "https://zen.example/v1/responses" {
 		t.Fatalf("base URL=%q", got)
 	}
 }

@@ -177,6 +177,7 @@ func TestChatRoutePassthrough(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
 				Name: "vendor", Model: "gpt-5.6-terra", BaseURL: tc.baseURL, APIKey: "secret",
+				ForwardHeaders: []string{"X-Client-Session"},
 			}}}
 			log := fakeUpstream(t, `{"id":"chat_1"}`)
 			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
@@ -184,7 +185,7 @@ func TestChatRoutePassthrough(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions",
 				strings.NewReader(`{"model":"vendor/gpt-5.6-terra","messages":[]}`))
 			req.Header.Set("User-Agent", "test-client/1")
-			req.Header.Set("x-opencode-session", "sess-1")
+			req.Header.Set("X-Client-Session", "sess-1")
 			req.Header.Set("X-Other", "dropped")
 			engine.ServeHTTP(w, req)
 
@@ -207,11 +208,11 @@ func TestChatRoutePassthrough(t *testing.T) {
 			if got := call.Header.Get("User-Agent"); got != "test-client/1" {
 				t.Fatalf("User-Agent=%q", got)
 			}
-			if got := call.Header.Get("x-opencode-session"); got != "sess-1" {
-				t.Fatalf("x-opencode-session=%q", got)
+			if got := call.Header.Get("X-Client-Session"); got != "sess-1" {
+				t.Fatalf("configured header=%q", got)
 			}
 			if call.Header.Get("X-Other") != "" {
-				t.Fatalf("non-x-opencode header forwarded: %v", call.Header)
+				t.Fatalf("unconfigured header forwarded: %v", call.Header)
 			}
 		})
 	}
@@ -227,14 +228,15 @@ func TestResponsesRoutePassthrough(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
-				Name: "opencode-zen", Model: "muse-spark-1.3", BaseURL: tc.baseURL, APIKey: "zen-key", ResponsesOnly: true,
+				Name: "zen", Model: "muse-spark-1.3", BaseURL: tc.baseURL, APIKey: "zen-key", ResponsesOnly: true,
+				ForwardHeaders: []string{"X-Client-Session"},
 			}}}
 			log := fakeUpstream(t, `{"id":"resp_1"}`)
 			engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
 			w := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses",
-				strings.NewReader(`{"model":"opencode-zen/muse-spark-1.3","input":"ping"}`))
-			req.Header.Set("x-opencode-session", "sess-1")
+				strings.NewReader(`{"model":"zen/muse-spark-1.3","input":"ping"}`))
+			req.Header.Set("X-Client-Session", "sess-1")
 			engine.ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK || w.Body.String() != `{"id":"resp_1"}` {
@@ -253,8 +255,8 @@ func TestResponsesRoutePassthrough(t *testing.T) {
 			if got := call.Header.Get("Authorization"); got != "Bearer zen-key" {
 				t.Fatalf("Authorization=%q", got)
 			}
-			if got := call.Header.Get("x-opencode-session"); got != "sess-1" {
-				t.Fatalf("x-opencode-session=%q", got)
+			if got := call.Header.Get("X-Client-Session"); got != "sess-1" {
+				t.Fatalf("configured header=%q", got)
 			}
 		})
 	}
@@ -265,6 +267,7 @@ func TestResponsesRoutePassthrough(t *testing.T) {
 func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 	p := &modelPrefs{providers: []customProvider{{
 		Name: "justworker", Model: "gpt-5.6-terra", BaseURL: "http://up.invalid/v1", APIKey: "mw-key", MessagesOnly: true,
+		ForwardHeaders: []string{"X-Client-Session"},
 	}}}
 	log := fakeUpstream(t, `{"type":"message","content":[{"type":"text","text":"hi"}]}`)
 	engine := mountChain(t, p, echoStub(`{"fell":"through"}`))
@@ -272,7 +275,7 @@ func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages",
 		strings.NewReader(`{"model":"justworker/gpt-5.6-terra","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}`))
 	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("x-opencode-session", "sess-1")
+	req.Header.Set("X-Client-Session", "sess-1")
 	req.Header.Set("User-Agent", "test-client/1")
 	engine.ServeHTTP(w, req)
 
@@ -298,8 +301,8 @@ func TestMessagesRouteMessagesOnlyPassthrough(t *testing.T) {
 	if got := call.Header.Get("User-Agent"); got != "curl/8.4.0" {
 		t.Fatalf("User-Agent=%q want curl/8.4.0", got)
 	}
-	if got := call.Header.Get("x-opencode-session"); got != "sess-1" {
-		t.Fatalf("x-opencode-session=%q", got)
+	if got := call.Header.Get("X-Client-Session"); got != "sess-1" {
+		t.Fatalf("configured header=%q", got)
 	}
 }
 

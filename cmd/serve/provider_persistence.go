@@ -16,15 +16,16 @@ func toLegacyProviders(list []customProvider) []gatewayprovider.LegacyProvider {
 	out := make([]gatewayprovider.LegacyProvider, len(list))
 	for i, p := range list {
 		out[i] = gatewayprovider.LegacyProvider{
-			Name:          p.Name,
-			BaseURL:       p.BaseURL,
-			APIKey:        p.APIKey,
-			APIKeyEnv:     p.APIKeyEnv,
-			KeyEnv:        p.KeyEnv,
-			Model:         p.Model,
-			Alias:         p.Alias,
-			MessagesOnly:  p.MessagesOnly,
-			ResponsesOnly: p.ResponsesOnly,
+			Name:           p.Name,
+			BaseURL:        p.BaseURL,
+			APIKey:         p.APIKey,
+			APIKeyEnv:      p.APIKeyEnv,
+			KeyEnv:         p.KeyEnv,
+			Model:          p.Model,
+			Alias:          p.Alias,
+			MessagesOnly:   p.MessagesOnly,
+			ResponsesOnly:  p.ResponsesOnly,
+			ForwardHeaders: strings.Join(p.ForwardHeaders, ","),
 		}
 	}
 	return out
@@ -34,15 +35,16 @@ func fromLegacyProviders(list []gatewayprovider.LegacyProvider) []customProvider
 	out := make([]customProvider, len(list))
 	for i, p := range list {
 		out[i] = customProvider{
-			Name:          p.Name,
-			BaseURL:       p.BaseURL,
-			APIKey:        p.APIKey,
-			APIKeyEnv:     p.APIKeyEnv,
-			KeyEnv:        p.KeyEnv,
-			Model:         p.Model,
-			Alias:         p.Alias,
-			MessagesOnly:  p.MessagesOnly,
-			ResponsesOnly: p.ResponsesOnly,
+			Name:           p.Name,
+			BaseURL:        p.BaseURL,
+			APIKey:         p.APIKey,
+			APIKeyEnv:      p.APIKeyEnv,
+			KeyEnv:         p.KeyEnv,
+			Model:          p.Model,
+			Alias:          p.Alias,
+			MessagesOnly:   p.MessagesOnly,
+			ResponsesOnly:  p.ResponsesOnly,
+			ForwardHeaders: gatewayprovider.HeaderList(p.ForwardHeaders),
 		}
 	}
 	return out

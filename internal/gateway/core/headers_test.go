@@ -23,18 +23,18 @@ func TestApplyHeadersRejectsClientCredentialsAndConnectionHeaders(t *testing.T) 
 	src.Header = http.Header{
 		"aUtHoRiZaTiOn": {"Bearer client-secret"}, "X-Api-Key": {"client-key"},
 		"Cookie": {"session=secret"}, "Proxy-Authorization": {"proxy-secret"},
-		"Connection": {"X-Private, x-opencode-secret"}, "X-Private": {"private"},
-		"X-Opencode-Secret": {"session-secret"}, "User-Agent": {"client-agent"},
-		"Anthropic-Beta": {"tools-2024-01-01"}, "X-Opencode-Session": {"session-id"},
+		"Connection": {"X-Private, x-session-secret"}, "X-Private": {"private"},
+		"X-Session-Secret": {"session-secret"}, "User-Agent": {"client-agent"},
+		"Anthropic-Beta": {"tools-2024-01-01"}, "X-Session-Id": {"session-id"},
 		"X-Custom": {"allowed"}, "X-Unlisted": {"not-allowed"},
 	}
 	dst.Header.Set("Authorization", "Bearer stale")
 	before := src.Header.Clone()
-	p := &provider.Provider{Protocol: ir.ProtocolAnthropicMessages, Auth: provider.Auth{Scheme: provider.AuthAPIKey, Key: "provider-secret"}, ForwardHeaders: []string{"X-Custom"}}
+	p := &provider.Provider{Protocol: ir.ProtocolAnthropicMessages, Auth: provider.Auth{Scheme: provider.AuthAPIKey, Key: "provider-secret"}, ForwardHeaders: []string{"X-Custom", "X-Session-Id"}}
 	if err := ApplyHeaders(dst, src, p); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization", "Connection", "X-Private", "X-Opencode-Secret", "X-Unlisted"} {
+	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization", "Connection", "X-Private", "X-Session-Secret", "X-Unlisted"} {
 		if value := dst.Header.Get(name); value != "" {
 			t.Errorf("forbidden %s leaked %q", name, value)
 		}
@@ -42,7 +42,7 @@ func TestApplyHeadersRejectsClientCredentialsAndConnectionHeaders(t *testing.T) 
 	if got := dst.Header.Get("X-Api-Key"); got != "provider-secret" {
 		t.Fatalf("credential=%q", got)
 	}
-	for name, want := range map[string]string{"User-Agent": "client-agent", "Anthropic-Version": "2023-06-01", "Anthropic-Beta": "tools-2024-01-01", "X-Opencode-Session": "session-id", "X-Custom": "allowed"} {
+	for name, want := range map[string]string{"User-Agent": "client-agent", "Anthropic-Version": "2023-06-01", "Anthropic-Beta": "tools-2024-01-01", "X-Session-Id": "session-id", "X-Custom": "allowed"} {
 		if got := dst.Header.Get(name); got != want {
 			t.Errorf("%s=%q want %q", name, got, want)
 		}
@@ -96,9 +96,7 @@ func TestMigratedProviderHeadersPreserveLegacyModes(t *testing.T) {
 		messages                bool
 	}{
 		{"chat", "https://example.com/v1", "client", "Authorization", false},
-		{"agentrouter", "https://agentrouter.org/v1", "client", "Authorization", false},
 		{"messages", "https://example.com", "curl/8.4.0", "X-Api-Key", true},
-		{"messages-agentrouter", "https://agentrouter.org", "curl/8.4.0", "X-Api-Key", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			list, err := provider.FromLegacy([]provider.LegacyProvider{{Name: tc.name, BaseURL: tc.base, Model: "model", APIKey: "key", MessagesOnly: tc.messages}})

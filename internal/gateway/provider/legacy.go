@@ -20,6 +20,21 @@ type LegacyProvider struct {
 	Alias         string `json:"alias,omitempty"`
 	MessagesOnly  bool   `json:"messages_only,omitempty"`
 	ResponsesOnly bool   `json:"responses_only,omitempty"`
+	// ForwardHeaders is the comma-separated list of caller headers the upstream
+	// wants relayed. It is a string because rows are compared and used as map
+	// keys; HeaderList decodes it.
+	ForwardHeaders string `json:"forward_headers,omitempty"`
+}
+
+// HeaderList decodes a legacy forward_headers list.
+func HeaderList(list string) []string {
+	var out []string
+	for _, name := range strings.Split(list, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // FromLegacy converts the endpoints saved by the legacy admin page. Entries
@@ -35,6 +50,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 	type identity struct {
 		name, baseURL, apiKey, keyEnv string
 		protocol                      ir.Protocol
+		forwardHeaders                string
 	}
 
 	out := make([]Provider, 0, len(list))
@@ -62,7 +78,7 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 			keyEnv = e.APIKeyEnv
 		}
 		mapping := ModelMapping{Alias: LegacyAlias(e), UpstreamModel: e.Model, LegacyPosition: i + 1}
-		key := identity{e.Name, e.BaseURL, e.APIKey, keyEnv, protocol}
+		key := identity{e.Name, e.BaseURL, e.APIKey, keyEnv, protocol, e.ForwardHeaders}
 		at := -1
 		for _, candidate := range merged[key] {
 			duplicate := false
@@ -85,13 +101,14 @@ func FromLegacy(list []LegacyProvider) ([]Provider, error) {
 		id := nextLegacyID(e.Name, usedIDs, reservedNames)
 		merged[key] = append(merged[key], len(out))
 		out = append(out, Provider{
-			ID:       id,
-			Name:     e.Name,
-			BaseURL:  e.BaseURL,
-			Protocol: protocol,
-			Auth:     legacyAuth(e.APIKey, keyEnv),
-			Models:   []ModelMapping{mapping},
-			Enabled:  true,
+			ID:             id,
+			Name:           e.Name,
+			BaseURL:        e.BaseURL,
+			Protocol:       protocol,
+			Auth:           legacyAuth(e.APIKey, keyEnv),
+			Models:         []ModelMapping{mapping},
+			Enabled:        true,
+			ForwardHeaders: HeaderList(e.ForwardHeaders),
 		})
 	}
 

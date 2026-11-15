@@ -107,6 +107,10 @@ type customProvider struct {
 	// ResponsesOnly marks an upstream that expects the OpenAI Responses API
 	// (`/v1/responses`) and must receive the request without chat translation.
 	ResponsesOnly bool `json:"responses_only,omitempty"`
+	// ForwardHeaders are the caller headers this upstream needs, copied from the
+	// provider's forward_headers setting. The passthrough path forwards nothing
+	// else. Not part of the models file.
+	ForwardHeaders []string `json:"-"`
 }
 
 func (p *customProvider) alias() string {
