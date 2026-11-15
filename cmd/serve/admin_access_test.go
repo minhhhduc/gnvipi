@@ -22,6 +22,8 @@ func adminAccessTestEngine(addr, token string) *gin.Engine {
 	engine.Use(adminAccess(addr, token, nil))
 	engine.Any("/admin", func(c *gin.Context) { c.String(http.StatusOK, "admin") })
 	engine.Any("/admin/providers", func(c *gin.Context) { c.String(http.StatusOK, "changed") })
+	engine.Any("/", func(c *gin.Context) { c.String(http.StatusOK, "dashboard") })
+	engine.Any("/playground", func(c *gin.Context) { c.String(http.StatusOK, "playground") })
 	engine.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "public") })
 	engine.GET("/administrator", func(c *gin.Context) { c.String(http.StatusOK, "public") })
 	return engine
@@ -203,11 +205,11 @@ func TestAdminAccessLoginSession(t *testing.T) {
 			}
 			response = adminAccessRequest(t, engine, http.MethodPost, tc.origin+"/admin/login", strings.NewReader(url.Values{"token": {token}}.Encode()), headers)
 			cookies := response.Result().Cookies()
-			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/admin" || len(cookies) != 1 {
+			if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/" || len(cookies) != 1 {
 				t.Fatalf("login failed: %d %q, cookies=%d", response.Code, response.Header().Get("Location"), len(cookies))
 			}
 			cookie := cookies[0]
-			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure != tc.secure || cookie.Path != "/admin" || cookie.Domain != "" || cookie.MaxAge <= 0 || cookie.Expires.IsZero() || strings.Contains(cookie.Value, token) {
+			if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Secure != tc.secure || cookie.Path != "/" || cookie.Domain != "" || cookie.MaxAge <= 0 || cookie.Expires.IsZero() || strings.Contains(cookie.Value, token) {
 				t.Fatal("session cookie is insecure, unbounded, or contains the admin token")
 			}
 			response = adminAccessRequest(t, engine, http.MethodGet, tc.origin+"/admin", nil, nil, cookie)
@@ -243,6 +245,21 @@ func TestAdminAccessLoginSession(t *testing.T) {
 				t.Fatalf("tampered session accepted: %d", response.Code)
 			}
 		})
+	}
+}
+
+// The clean console paths are part of the admin surface: the same loopback,
+// origin and login-redirect rules apply outside /admin.
+func TestAdminAccessGatesCleanPagePaths(t *testing.T) {
+	engine := adminAccessTestEngine("127.0.0.1:8080", "clean-path-secret")
+	res := adminAccessRequest(t, engine, http.MethodGet, "http://127.0.0.1:8080/playground", nil, map[string]string{"Accept": "text/html"})
+	if res.Code != http.StatusSeeOther || res.Header().Get("Location") != "/admin/login" {
+		t.Fatalf("unauthenticated /playground = %d %q, want redirect to login", res.Code, res.Header().Get("Location"))
+	}
+
+	open := adminAccessTestEngine("127.0.0.1:8080", "")
+	if res := adminAccessRequest(t, open, http.MethodGet, "http://127.0.0.1:8080/", nil, map[string]string{"Accept": "text/html"}); res.Code != http.StatusOK {
+		t.Fatalf("loopback open dashboard = %d, want 200", res.Code)
 	}
 }
 

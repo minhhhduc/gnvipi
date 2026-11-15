@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "./lib/api";
-import { pageAllowed, pageFromUrl, rawPageFromUrl } from "./lib/router";
+import { pageAllowed, pageFromLocation, pathForPage, rawPageFromUrl } from "./lib/router";
 import { authScreenFor, isOperatorRole, parseAuthSession, sessionFailureMode, type AdminUser, type AuthSession } from "./lib/auth";
 import { createPoller, PollTimeoutError, type Poller } from "./lib/polling";
 import { GatewayContext, type Page } from "./lib/context";
@@ -41,7 +41,7 @@ const LEGACY_ADMIN_USER: AdminUser = {
 };
 
 export function App() {
-  const [page, setPage] = useState<Page>(() => pageFromUrl(location.search));
+  const [page, setPage] = useState<Page>(() => pageFromLocation(location));
   const [navSeq, setNavSeq] = useState(0);
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
@@ -75,7 +75,7 @@ export function App() {
   const setIdentity = useCallback((nextUser: AdminUser, legacy: boolean) => {
     invalidateIdentityData();
     setLegacyAuth(legacy);
-    setPage(pageFromUrl(location.search, nextUser.role));
+    setPage(pageFromLocation(location, nextUser.role));
     setUser(nextUser);
     setAuthError("");
   }, [invalidateIdentityData]);
@@ -106,9 +106,7 @@ export function App() {
 
   const navigate = useCallback((requested: Page) => {
     const next = user && pageAllowed(requested, user.role) ? requested : "stats";
-    const url = new URL(location.href);
-    url.searchParams.set("page", next);
-    history.pushState({ page: next }, "", url);
+    history.pushState({ page: next }, "", pathForPage(next));
     setPage(next);
     setNavSeq((n) => n + 1);
     window.scrollTo(0, 0);
@@ -123,9 +121,13 @@ export function App() {
   const syncFromUrl = useCallback(() => {
     if (!user) return;
     const raw = rawPageFromUrl(location.search);
-    const next = pageFromUrl(location.search, user.role);
+    const next = pageFromLocation(location, user.role);
     setPage(next);
-    if (raw && raw !== next) toast(`Page “${raw}” is not available for ${user.role} accounts — showing Dashboard`, "bad");
+    if (raw) {
+      // Adopt the clean path once, so back/forward no longer sees ?page=.
+      history.replaceState({ page: next }, "", pathForPage(next));
+      if (raw !== next) toast(`Page “${raw}” is not available for ${user.role} accounts — showing Dashboard`, "bad");
+    }
   }, [toast, user]);
 
   useEffect(() => {

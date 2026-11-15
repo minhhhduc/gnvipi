@@ -1,7 +1,7 @@
 import type { ComponentChildren } from "preact";
 import type { AdminUser } from "../lib/auth";
 import { totals, useGateway, type Page } from "../lib/context";
-import { pageAllowed } from "../lib/router";
+import { pageAllowed, pathForPage } from "../lib/router";
 
 const NAV: { page: Page; label: string }[] = [
   { page: "stats", label: "Dashboard" },
@@ -66,7 +66,7 @@ export function Shell({
           {NAV.filter((item) => pageAllowed(item.page, user.role)).map((item) => (
             <a
               key={item.page}
-              href={`?page=${item.page}`}
+              href={pathForPage(item.page)}
               class={`rounded-lg px-2.5 py-2 text-[13px] no-underline ${
                 page === item.page
                   ? "bg-accent-soft font-semibold text-accent"

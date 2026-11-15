@@ -24,8 +24,16 @@ func TestAdminUI_ServesEmbeddedSPA(t *testing.T) {
 	registerAdminUI(engine)
 
 	for _, tc := range []struct{ path, ctype string }{
-		{"/admin", "text/html"},
-		{"/admin/", "text/html"},
+		{"/", "text/html"},
+		{"/playground", "text/html"},
+		{"/api", "text/html"},
+		{"/models", "text/html"},
+		{"/config", "text/html"},
+		{"/chromes", "text/html"},
+		{"/tokens", "text/html"},
+		{"/users", "text/html"},
+		{"/usage", "text/html"},
+		{"/audit", "text/html"},
 		{"/admin/app.css", "text/css"},
 		{"/admin/app.js", "javascript"},
 	} {
@@ -38,12 +46,31 @@ func TestAdminUI_ServesEmbeddedSPA(t *testing.T) {
 		}
 	}
 
-	body := adminUIGet(t, engine, "/admin").Body.String()
+	body := adminUIGet(t, engine, "/").Body.String()
 	if !strings.Contains(body, "/admin/app.css") || !strings.Contains(body, "/admin/app.js") {
 		t.Fatalf("index.html does not reference its local assets")
 	}
 	if strings.Contains(body, "http://") || strings.Contains(body, "https://") {
 		t.Fatalf("index.html references a third-party origin")
+	}
+}
+
+func TestAdminUI_LegacyAdminURLsRedirectToCleanPaths(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	registerAdminUI(engine)
+
+	for _, tc := range []struct{ path, want string }{
+		{"/admin", "/"},
+		{"/admin/", "/"},
+		{"/admin?page=models", "/models"},
+		{"/admin?page=stats", "/"},
+		{"/admin?page=bogus", "/"},
+	} {
+		res := adminUIGet(t, engine, tc.path)
+		if res.Code != http.StatusSeeOther || res.Header().Get("Location") != tc.want {
+			t.Fatalf("GET %s = %d %q, want 303 %q", tc.path, res.Code, res.Header().Get("Location"), tc.want)
+		}
 	}
 }
 
@@ -60,8 +87,8 @@ func TestAdminUI_CoexistsWithJSONAPI(t *testing.T) {
 	registerAdminAPIRoutes(engine, p, nil, nil, nil)
 	registerAdminUI(engine)
 
-	if res := adminUIGet(t, engine, "/admin"); res.Code != http.StatusOK {
-		t.Fatalf("GET /admin = %d, want 200", res.Code)
+	if res := adminUIGet(t, engine, "/"); res.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", res.Code)
 	}
 	res := adminUIGet(t, engine, "/admin/api/stats")
 	if res.Code != http.StatusOK {

@@ -7,6 +7,7 @@ export function rawPageFromUrl(search: string): string {
 }
 
 const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
+  // Dashboard owns the root path.
   stats: ["owner", "admin", "user"],
   // The per-request audit view stays with operators; users keep the dashboard.
   usage: ["owner", "admin", "user"],
@@ -27,24 +28,47 @@ const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   audit: ["owner"],
 };
 
+const PAGE_PATHS: Record<Page, string> = {
+  stats: "/",
+  usage: "/usage",
+  playground: "/playground",
+  api: "/api",
+  models: "/models",
+  config: "/config",
+  chromes: "/chromes",
+  tokens: "/tokens",
+  users: "/users",
+  audit: "/audit",
+};
+
+const PATH_PAGES = Object.fromEntries(
+  Object.entries(PAGE_PATHS).map(([page, path]) => [path, page as Page]),
+) as Record<string, Page>;
+
 export function pageAllowed(page: Page, role: AdminRole): boolean {
   return PAGE_ROLES[page].includes(role);
 }
 
+/** The clean URL a page lives at. */
+export function pathForPage(page: Page): string {
+  return PAGE_PATHS[page];
+}
+
+/** The page a clean pathname names; unknown paths fall back to the dashboard. */
+export function pageFromPath(pathname: string, role?: AdminRole): Page {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  const page = PATH_PAGES[path] ?? "stats";
+  return role && !pageAllowed(page, role) ? "stats" : page;
+}
+
+/** Legacy ?page= links still resolve while their clean path is adopted. */
 export function pageFromUrl(search: string, role?: AdminRole): Page {
   const value = rawPageFromUrl(search);
-  const page: Page =
-    value === "stats" ||
-    value === "usage" ||
-    value === "playground" ||
-    value === "api" ||
-    value === "models" ||
-    value === "config" ||
-    value === "chromes" ||
-    value === "tokens" ||
-    value === "users" ||
-    value === "audit"
-      ? value
-      : "stats";
+  const page = (value in PAGE_ROLES ? value : "stats") as Page;
   return role && !pageAllowed(page, role) ? "stats" : page;
+}
+
+/** Pathname first; a legacy ?page= wins so old links keep working. */
+export function pageFromLocation(loc: { pathname: string; search: string }, role?: AdminRole): Page {
+  return rawPageFromUrl(loc.search) ? pageFromUrl(loc.search, role) : pageFromPath(loc.pathname, role);
 }
