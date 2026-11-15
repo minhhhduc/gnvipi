@@ -11,6 +11,7 @@ import { Card, Empty, PageHeader, ThemeContext, UiContext, type UiApi } from "./
 import { StatsView } from "./views/Stats";
 import { UsageLogView } from "./views/UsageLog";
 import { PlaygroundView } from "./views/Playground";
+import { ApiView } from "./views/Api";
 import { ModelsView } from "./views/Models";
 import { ConfigView } from "./views/Config";
 import { ChromesView } from "./views/Chromes";
@@ -250,6 +251,7 @@ export function App() {
     // Models is open to every role: users manage only their own keys there.
     effectivePage === "models" ? <ModelsView user={user} /> :
     effectivePage === "playground" ? <PlaygroundView user={user} /> :
+    effectivePage === "api" ? <ApiView /> :
     effectivePage === "audit" ? <AuditView user={user} /> :
     effectivePage === "usage" ? <UsageLogView /> :
     !operator ? (

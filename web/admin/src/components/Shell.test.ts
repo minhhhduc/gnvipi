@@ -73,7 +73,7 @@ describe("Shell role navigation", () => {
 
 it("keeps the logs together at the end of the nav", () => {
   const nav = renderShell("owner");
-  const order = ["Dashboard", "Playground", "Models", "Config", "Chrome", "API Keys", "Users", "Usage log", "Audit"];
+  const order = ["Dashboard", "Playground", "API", "Models", "Config", "Chrome", "API Keys", "Users", "Usage log", "Audit"];
   const positions = order.map((label) => nav.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);
   expect([...positions].sort((a, b) => a - b)).toEqual(positions);

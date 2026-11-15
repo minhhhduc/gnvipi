@@ -2,7 +2,7 @@ import { createContext } from "preact";
 import { useContext } from "preact/hooks";
 import type { Stats } from "./types";
 
-export type Page = "stats" | "usage" | "playground" | "models" | "config" | "chromes" | "tokens" | "users" | "audit";
+export type Page = "stats" | "usage" | "playground" | "api" | "models" | "config" | "chromes" | "tokens" | "users" | "audit";
 
 export interface GatewayContextValue {
   stats: Stats | null;
