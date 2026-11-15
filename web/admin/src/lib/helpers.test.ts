@@ -9,6 +9,7 @@ import {
   getFrameNavState,
   getProtocolOptions,
   runningWorkersRatio,
+  usagePageWindow,
 } from "./helpers";
 
 describe("buildUpstreamModel", () => {
@@ -151,6 +152,30 @@ describe("getFrameNavState", () => {
     expect(f3.canPrev).toBe(true);
     expect(f3.prevTarget).toBe(2);
     expect(f3.canNext).toBe(false);
+  });
+});
+
+describe("usagePageWindow", () => {
+  it("labels the live view as frame 1 and only offers older pages", () => {
+    const w = usagePageWindow(null, 3, 200);
+    expect(w).toMatchObject({ page: 1, from: 1, to: 200, hasNewer: false, hasOlder: true, older: 2 });
+    expect(w.note).toContain("live");
+  });
+
+  it("counts the global range from the open frame", () => {
+    const w = usagePageWindow(3, 12, 200);
+    expect(w).toMatchObject({ page: 3, from: 401, to: 600, hasNewer: true, hasOlder: true });
+    expect(usagePageWindow(2, 3, 57)).toMatchObject({ from: 201, to: 257, hasOlder: true });
+  });
+
+  it("clamps the last frame and stops paging older", () => {
+    const last = usagePageWindow(12, 12, 200);
+    expect(last).toMatchObject({ hasNewer: true, hasOlder: false, newer: 11, older: 13 });
+    expect(usagePageWindow(1, 1, 200)).toMatchObject({ hasNewer: false, hasOlder: false });
+  });
+
+  it("reports no range when the page has no events", () => {
+    expect(usagePageWindow(1, 0, 0)).toMatchObject({ from: 0, to: 0 });
   });
 });
 

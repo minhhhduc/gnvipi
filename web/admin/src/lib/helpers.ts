@@ -70,6 +70,25 @@ export function getFrameNavState(frame: number | null, totalFrames: number) {
   return { canPrev, canLatest, canNext, prevTarget, nextTarget };
 }
 
+/** Events per usage-log frame. Display only; the server owns the real size. */
+export const FRAME_SIZE = 200;
+
+/** Global event range and label for the open usage-log frame. */
+export function usagePageWindow(frame: number | null, totalFrames: number, count: number) {
+  const page = clampFrame(frame ?? 1, Math.max(totalFrames, 1));
+  const start = (page - 1) * FRAME_SIZE;
+  return {
+    page,
+    from: count === 0 ? 0 : start + 1,
+    to: start + count,
+    note: frame == null ? `live · frame ${page} of ${Math.max(totalFrames, 1)}` : `frame ${page} of ${Math.max(totalFrames, 1)}`,
+    hasNewer: frame != null && page > 1,
+    hasOlder: totalFrames > page,
+    newer: page - 1,
+    older: page + 1,
+  };
+}
+
 export function runningWorkersRatio(chromes?: { killed?: boolean }[]): string {
   const list = chromes || [];
   const running = list.filter((c) => !c.killed).length;
