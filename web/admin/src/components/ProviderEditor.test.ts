@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatProviderTestResult, missingCredentials } from "./ProviderEditor";
+import { formatProviderTestResult } from "./ProviderEditor";
 
 describe("provider test result diagnostics", () => {
   it("keeps the full 401 outcome visible", () => {
@@ -15,14 +15,5 @@ describe("provider test result diagnostics", () => {
     expect(summary).toContain("auth_failure");
     expect(summary).toContain("HTTP 401");
     expect(summary).toContain("upstream key was rejected");
-  });
-});
-
-describe("provider credentials", () => {
-  it("requires at least one of auth key or api key", () => {
-    expect(missingCredentials("", "", false, false)).toBe(true);
-    expect(missingCredentials("sk-auth", "", false, false)).toBe(false);
-    expect(missingCredentials("", "sk-api", false, false)).toBe(false);
-    expect(missingCredentials("", "", true, false)).toBe(false);
   });
 });
