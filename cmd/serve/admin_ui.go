@@ -61,8 +61,19 @@ func registerAdminUI(engine *gin.Engine) {
 	engine.GET("/admin/app.css", serveAsset)
 	engine.GET("/admin/app.js", serveAsset)
 
-	engine.GET("/", serveIndex)
 	for _, page := range consolePages {
 		engine.GET("/"+page, serveIndex)
 	}
+}
+
+// adminConsoleRoot serves the dashboard at "/" without registering the route:
+// the embedded CLIProxyAPI already owns GET / for its server banner. The
+// middleware runs after adminAccess, so the page is gated like every other.
+func adminConsoleRoot(c *gin.Context) {
+	if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/" {
+		http.ServeFileFS(c.Writer, c.Request, adminui.FS, "index.html")
+		c.Abort()
+		return
+	}
+	c.Next()
 }

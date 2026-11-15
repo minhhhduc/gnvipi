@@ -507,6 +507,7 @@ func runServer() (err error) {
 					}
 					// The SPA owns GET /admin; legacy endpoints stay for tools.
 					registerAdminUI(engine)
+					engine.Use(adminConsoleRoot)
 					engine.GET("/admin/stats", adminHandler)
 					chromeHandler := func(c *gin.Context) { chromeRoutes(c, chromes) }
 					engine.GET("/admin/chromes", chromeHandler)
