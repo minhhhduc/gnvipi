@@ -39,6 +39,7 @@ import {
 } from "../components/ui";
 import { useGateway } from "../lib/context";
 import { HealthPill } from "../components/Shell";
+import { ModelApiGuide } from "../components/ApiGuide";
 import { formatProviderTestResult, ProviderEditor, ProviderTestResultBadge } from "../components/ProviderEditor";
 
 type KeyDialogState =
@@ -71,6 +72,7 @@ export function ModelsView({ user }: { user: AdminUser }) {
   const [nvidiaOpen, setNvidiaOpen] = useState(false);
   const [nvidiaModels, setNvidiaModels] = useState<ModelInfo[]>([]);
   const [nvidiaLoading, setNvidiaLoading] = useState(false);
+  const [nvidiaGuide, setNvidiaGuide] = useState<string | null>(null);
 
   // Clicking Models in the nav returns to the provider list, even when the
   // view is already on screen with a provider open.
@@ -208,15 +210,29 @@ export function ModelsView({ user }: { user: AdminUser }) {
           ) : (
             <table class="table">
               <thead>
-                <tr><th>Model</th><th>Publisher</th><th>Status</th></tr>
+                <tr><th>Model</th><th>Publisher</th><th>Status</th><th /></tr>
               </thead>
               <tbody>
                 {nvidiaModels.map((model) => (
-                  <tr key={model.id}>
-                    <td class="mono text-[12px]">{model.id}</td>
-                    <td class="muted">{model.publisher || "—"}</td>
-                    <td class="muted">{model.hidden ? "hidden" : "available"}</td>
-                  </tr>
+                  <Fragment key={model.id}>
+                    <tr>
+                      <td class="mono text-[12px]">{model.id}</td>
+                      <td class="muted">{model.publisher || "—"}</td>
+                      <td class="muted">{model.hidden ? "hidden" : "available"}</td>
+                      <td class="whitespace-nowrap text-right">
+                        <button class="btn btn-sm" aria-label={`Call ${model.id}`} onClick={() => setNvidiaGuide(nvidiaGuide === model.id ? null : model.id)}>
+                          {nvidiaGuide === model.id ? "Hide call" : "Call"}
+                        </button>
+                      </td>
+                    </tr>
+                    {nvidiaGuide === model.id && (
+                      <tr>
+                        <td colSpan={4} class="bg-panel2">
+                          <ModelApiGuide model={model.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -747,6 +763,7 @@ function KeyModelsPanel({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<KeyModel>>({});
+  const [guide, setGuide] = useState<string | null>(null);
   const choices = modelChoices(provider.models, rows);
 
   // Every change is persisted immediately; Enter commits the row being edited.
@@ -814,15 +831,25 @@ function KeyModelsPanel({
             <button class="btn btn-sm" disabled={busy} onClick={commitEdit}>Save</button>
           </div>
         ) : (
-          <div key={item.alias} class="flex flex-wrap items-center gap-2">
-            <code class="mono w-[180px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
-            <span class="mono w-[220px] truncate text-[11px] text-dim" title={item.upstream_model}>{item.upstream_model}</span>
-            {item.hidden && <span class="text-[11px] text-dim">hidden</span>}
-            <button class="btn btn-sm" disabled={busy} aria-label={`Edit ${item.alias}`} onClick={() => startEdit(item)}>Edit</button>
-            <button class="btn btn-sm" disabled={busy} aria-label={`Remove ${item.alias}`} onClick={() => void persist(rows.filter((row) => row.alias !== item.alias))}>
-              <IconX />
-            </button>
-          </div>
+          <Fragment key={item.alias}>
+            <div class="flex flex-wrap items-center gap-2">
+              <code class="mono w-[180px] truncate text-[11px]" title={item.alias}>{item.alias}</code>
+              <span class="mono w-[220px] truncate text-[11px] text-dim" title={item.upstream_model}>{item.upstream_model}</span>
+              {item.hidden && <span class="text-[11px] text-dim">hidden</span>}
+              <button class="btn btn-sm" disabled={busy} aria-label={`Edit ${item.alias}`} onClick={() => startEdit(item)}>Edit</button>
+              <button class="btn btn-sm" aria-label={`Call ${item.alias}`} onClick={() => setGuide(guide === item.alias ? null : item.alias)}>
+                {guide === item.alias ? "Hide call" : "Call"}
+              </button>
+              <button class="btn btn-sm" disabled={busy} aria-label={`Remove ${item.alias}`} onClick={() => void persist(rows.filter((row) => row.alias !== item.alias))}>
+                <IconX />
+              </button>
+            </div>
+            {guide === item.alias && (
+              <div class="rounded-lg border border-line bg-panel2 p-2.5">
+                <ModelApiGuide model={item.alias} />
+              </div>
+            )}
+          </Fragment>
         ),
       )}
       {rows.length === 0 && <div class="text-[11px] text-dim">No models selected for this key.</div>}
