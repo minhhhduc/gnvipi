@@ -12,7 +12,7 @@ key handling are in [auth.md](auth.md).
 | Flag | Environment Variable | Default | Purpose |
 |---|---|---|---|
 | `-addr` | — | `127.0.0.1:8080` | Listen host and port. Loopback by default; use `:8080` to expose all network interfaces. |
-| `-gateway-key` | `GNVIPI_GATEWAY_KEY` | *(disabled)* | Optional comma-separated API keys protecting `/v1/*`, `/mcp`, and inference routes. |
+| `-gateway-key` | `GNVIPI_GATEWAY_KEY` | *(disabled)* | Optional comma-separated API keys protecting `/v1/*`, `/mcp`, `/v2/search`, and inference routes. |
 | `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Admin authentication token. Required for `/admin` on non-loopback binds; the console stays open on loopback without it. |
 | `-disable-admin-ui` | — | `false` | Remove the admin UI and admin API entirely (headless proxy mode); `/v1/*` and `/mcp` are unaffected. |
 | `-gateway-v2` | — | `true` | Gateway core dispatcher routing all custom providers (default on; false is deprecated). |
@@ -61,10 +61,10 @@ require same-origin browser provenance. Explicit `-admin-token` values override
 the environment, including empty values; non-loopback access then stays closed.
 Database-backed sign-in, roles and bootstrap are in [auth.md](auth.md).
 
-- **`?page=dashboard`:** Real-time request and token throughput KPIs, TTFT, p95 latency over the last 200 requests, error rates, and 200-request rolling history frames surviving restarts. Aggregate counters and charts reset on server restart. Logs default to `gnvipi/stats.jsonl` under the OS user cache directory (override with `GNVIPI_STATS_FILE`).
-- **`?page=models`:** Toggle models on/off (persisted), delete/restore catalog entries, and configure v2 custom providers with live validation.
-- **`?page=config`:** Configure virtual `automode` (Claude auto-model alias targeting an enabled real model or `cycle`), `cycle` (ordered round-robin with automatic failover), and web search MCP settings.
-- **`?page=chromes`:** Manage headless Chrome worker pools on demand (Turn On / Start All, Kill All). Startup is always idle and never allocates Chrome or token pools until activated.
+- **`/` (Dashboard):** Real-time request and token throughput KPIs, TTFT, p95 latency over the last 200 requests, error rates, and 200-request rolling history frames surviving restarts. Aggregate counters and charts reset on server restart. Logs default to `gnvipi/stats.jsonl` under the OS user cache directory (override with `GNVIPI_STATS_FILE`).
+- **`/models`:** Toggle models on/off (persisted), delete/restore catalog entries, and configure v2 custom providers with live validation. A provider is created with name, base URL and protocol only; its credentials are added as keys **inside** the provider (Auth key → `Authorization: Bearer`, API key → `X-Api-Key`). Each model row has a **Call** action that opens the API guide for that alias.
+- **`/config`:** Configure virtual `automode` (Claude auto-model alias targeting an enabled real model or `cycle`), `cycle` (ordered round-robin with automatic failover), and web search MCP settings.
+- **`/chromes`:** Manage headless Chrome worker pools on demand (Turn On / Start All, Kill All). Startup is always idle and never allocates Chrome or token pools until activated.
 
 ## Virtual models
 
@@ -74,7 +74,7 @@ its own target, resolved through that account's keys plus shared `none` keys; an
 owner may edit another account's settings from the config page. Without a
 database the setting stays process-wide.
 
-The **config** tab (`/admin?page=config`) always exposes the virtual model
+The **Config** page (`/config`) always exposes the virtual model
 `cycle`. Check the models to include and use the arrow controls to define their
 order. Changes save automatically to `-models-file` in file mode, or to the
 account's row in database mode. `cycle` remains visible even when empty, returning
@@ -89,10 +89,10 @@ When client requests target `cycle`:
 
 ## Web Search (MCP)
 
-The gateway includes a Streamable HTTP Model Context Protocol (`POST /mcp`)
+The gateway includes a Streamable HTTP Model Context Protocol (`POST /mcp`), and the same ranked pipeline is exposed as plain JSON at `POST /v2/search` (`{"query":"..."}` → `{"results":[...]}`).
 endpoint supporting web search:
 
-1. In `/admin?page=config`, select **DuckDuckGo** or **Bing**.
+1. In `/config`, select **DuckDuckGo** or **Bing**.
 2. Add the tool to Claude Code globally:
    ```bash
    claude mcp add --scope user --transport http gateway-search http://localhost:8080/mcp
@@ -140,8 +140,8 @@ point of view, so pass `-admin-token` (`-e GNVIPI_ADMIN_TOKEN=...`) to keep
 `/healthz` checks server liveness, not captcha readiness. Admin, MCP, and
 custom-provider routes remain available while Chrome starts or when captcha is
 disabled. For NVIDIA generation, enable Chrome captcha from Admin
-(`/admin?page=chromes`), then check `pool.ready` in `/healthz` and worker state on
-`/admin?page=chromes`.
+(`/chromes`), then check `pool.ready` in `/healthz` and worker state on
+`/chromes`.
 
 | Symptom | What to check |
 |---|---|
@@ -150,7 +150,7 @@ disabled. For NVIDIA generation, enable Chrome captcha from Admin
 | `captcha pool empty` / 503 | Wait for warmup after Start All; check Chrome, `CHROME_PATH`, and proxy connectivity. The default `-captcha-wait` is 30s. |
 | Invalid or expired captcha / 401 | Supply a fresh manual token, or let the enabled pool mint replacements; tokens cannot be reused. |
 | `max in-flight upstream streams reached` / 503 | Reduce concurrency or adjust `-max-inflight` and `-inflight-wait` to match available capacity. |
-| `cycle` has no available models / 503 | Select at least one enabled model on the Config page (`/admin?page=config`). |
+| `cycle` has no available models / 503 | Select at least one enabled model on the Config page (`/config`). |
 | `automode target is hidden` / 404 | Re-enable the target model or choose a different enabled model. |
 | Admin changes fail to save | Check the `-models-file` parent directory and write permissions; container deployments require a writable mount. |
 

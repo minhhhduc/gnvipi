@@ -77,11 +77,14 @@ Claude Code integrates directly with the gateway. The gateway exposes Anthropic 
 
 #### 1. Environment Setup
 
-Set the base URL and API key in your shell profile or session:
+The client holds only the **gateway token**. Provider Auth key / API key are server-side credentials stored under Models → provider → keys; they never belong in these variables. `ANTHROPIC_AUTH_TOKEN` is sent as `Authorization: Bearer`; `ANTHROPIC_API_KEY` would be sent as `x-api-key`, so set exactly one (the gateway rejects mismatched pairs):
+
+Set the base URL and token in your shell profile or session:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:8080"
-export ANTHROPIC_API_KEY="your-gateway-key" # or any non-empty string if unauthenticated
+export ANTHROPIC_AUTH_TOKEN="gw_..." # gateway token -> Authorization: Bearer
+export ANTHROPIC_API_KEY=""          # leave empty; x-api-key only if your gateway expects it
 ```
 
 #### 2. Automatic Model Discovery Cache
