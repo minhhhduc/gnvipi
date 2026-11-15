@@ -32,7 +32,7 @@ func TestNewSessionToken(t *testing.T) {
 
 func TestSessionCookie(t *testing.T) {
 	c := SessionCookie("token-value", true, DefaultSessionConfig())
-	if c.Name != SessionCookieName || c.Path != "/admin" || !c.HttpOnly ||
+	if c.Name != SessionCookieName || c.Path != "/" || !c.HttpOnly ||
 		!c.Secure || c.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("unexpected cookie: %+v", c)
 	}

@@ -453,7 +453,7 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 		}, nil
 	}
 
-	if raw, err := c.Cookie(auth.SessionCookieName); err == nil && raw != "" {
+	if cookies := sessionCookieValues(c.Request); len(cookies) > 0 {
 		if !s.cookieTransportAllowed(c.Request) {
 			return nil, &adminAuthFailure{
 				status:  http.StatusForbidden,
@@ -461,16 +461,22 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 				message: "admin sessions require HTTPS outside loopback",
 			}
 		}
-		session, err := auth.ValidateSession(ctx, s.pool, raw, now, s.sessions)
+		var lastErr error
+		for _, raw := range cookies {
+			session, err := auth.ValidateSession(ctx, s.pool, raw, now, s.sessions)
+			if err == nil {
+				return &adminIdentity{
+					UserID:             session.UserID,
+					Username:           session.Username,
+					Role:               session.Role,
+					MustChangePassword: session.MustChangePassword,
+					SessionToken:       raw,
+				}, nil
+			}
+			lastErr = err
+		}
+		err := lastErr
 		switch {
-		case err == nil:
-			return &adminIdentity{
-				UserID:             session.UserID,
-				Username:           session.Username,
-				Role:               session.Role,
-				MustChangePassword: session.MustChangePassword,
-				SessionToken:       raw,
-			}, nil
 		case errors.Is(err, auth.ErrInvalidSession):
 			// Fall through to the generic authentication-required response.
 		default:
@@ -518,9 +524,19 @@ func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return nil
 	}
-	cookie, _ := c.Cookie(auth.CSRFCookieName) //nolint:errcheck // a missing cookie is simply an empty CSRF token
 	headers := c.Request.Header.Values(auth.CSRFHeaderName)
-	if len(headers) != 1 || !auth.ValidDoubleSubmit(cookie, headers[0]) {
+	// Browsers keep same-name cookies per Path during a console URL move; the
+	// header matches the cookie set for the current page, wherever it arrives.
+	matched := false
+	if len(headers) == 1 {
+		for _, cookie := range c.Request.Cookies() {
+			if cookie.Name == auth.CSRFCookieName && auth.ValidDoubleSubmit(cookie.Value, headers[0]) {
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
 		return &adminAuthFailure{
 			status:  http.StatusForbidden,
 			code:    "csrf_failed",

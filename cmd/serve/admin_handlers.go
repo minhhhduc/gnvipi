@@ -9,7 +9,6 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
-	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/gateway/routing"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
@@ -68,7 +67,7 @@ func scopeEvents(events []nvidia.RequestEvent, userID string) []nvidia.RequestEv
 
 func handleAdminStats(c *gin.Context) {
 	userID := ""
-	if identity := adminIdentityOf(c); identity != nil && identity.Role == auth.RoleUser {
+	if identity := adminIdentityOf(c); identity != nil && identity.Role == "user" {
 		userID = identity.UserID
 	}
 	interval := nvidia.StatsReadInterval()

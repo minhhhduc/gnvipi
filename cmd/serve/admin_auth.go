@@ -48,7 +48,9 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			return
 		}
 		username := strings.TrimSpace(req.Username)
-		if username == "" || req.Password == "" {
+		// Normalize pasted credentials once, before any validation or query.
+		password := strings.TrimSpace(req.Password)
+		if username == "" || password == "" {
 			adminFieldError(c, http.StatusBadRequest, "username", "username and password are required")
 			return
 		}
@@ -61,7 +63,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 		now := time.Now()
-		user, needsRehash, err := auth.Login(ctx, state.pool, username, req.Password, state.clientIPs.requestIP(c.Request), now, state.login)
+		user, needsRehash, err := auth.Login(ctx, state.pool, username, password, state.clientIPs.requestIP(c.Request), now, state.login)
 		switch {
 		case errors.Is(err, auth.ErrAccountLocked), errors.Is(err, auth.ErrIPLocked):
 			adminAPIError(c, http.StatusTooManyRequests, "too_many_attempts", "too many failed sign-in attempts; try again later")
@@ -78,7 +80,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		// parameters or a previous pepper is upgraded now. The compare-and-swap
 		// prevents a concurrent password reset from being overwritten.
 		if needsRehash {
-			adminRehashPassword(ctx, state, user.ID, req.Password, user.PasswordHash)
+			adminRehashPassword(ctx, state, user.ID, password, user.PasswordHash)
 		}
 		csrf, err := auth.NewCSRFToken()
 		if err != nil {
@@ -94,7 +96,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			return
 		}
 		defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
-		if previous, cookieErr := c.Cookie(auth.SessionCookieName); cookieErr == nil && previous != "" {
+		for _, previous := range sessionCookieValues(c.Request) {
 			if err := auth.RevokeSession(ctx, tx, previous); err != nil {
 				adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not rotate the admin session")
 				return
@@ -116,6 +118,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		}
 
 		secure := adminTLSRequest(c.Request)
+		expireLegacyAdminCookies(c, secure)
 		http.SetCookie(c.Writer, auth.SessionCookie(raw, secure, state.sessions))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, secure, state.sessions.AbsoluteTimeout))
 		c.JSON(http.StatusOK, gin.H{"user": adminUserJSON(user), "csrf_token": csrf})
@@ -124,7 +127,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 
 func handleAdminLogout(state *authState) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if raw, err := c.Cookie(auth.SessionCookieName); err == nil && raw != "" {
+		for _, raw := range sessionCookieValues(c.Request) {
 			if err := auth.RevokeSession(c.Request.Context(), state.pool, raw); err != nil {
 				adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not revoke the admin session")
 				return
@@ -151,6 +154,7 @@ func handleAdminSession(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not refresh the admin session")
 			return
 		}
+		expireLegacyAdminCookies(c, adminTLSRequest(c.Request))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, adminTLSRequest(c.Request), state.sessions.AbsoluteTimeout))
 		c.JSON(http.StatusOK, gin.H{"user": adminUserJSON(user), "csrf_token": csrf})
 	}
@@ -200,11 +204,43 @@ func adminClearCredentials(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     auth.CSRFCookieName,
 		Value:    "",
-		Path:     "/admin",
+		Path:     "/",
 		MaxAge:   -1,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
+	expireLegacyAdminCookies(c, secure)
+}
+
+// expireLegacyAdminCookies removes the Path=/admin cookies left by consoles
+// served under /admin, so they stop shadowing the root-path pair.
+func expireLegacyAdminCookies(c *gin.Context, secure bool) {
+	for _, name := range []string{auth.SessionCookieName, auth.CSRFCookieName} {
+		http.SetCookie(c.Writer, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/admin",
+			MaxAge:   -1,
+			Secure:   secure,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+}
+
+// sessionCookieValues returns every gw_session value a request carries. A
+// console URL move leaves old Path=/admin and new Path=/ cookies side by side;
+// validation must accept either until the stale one expires.
+func sessionCookieValues(r *http.Request) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != auth.SessionCookieName || cookie.Value == "" || seen[cookie.Value] {
+			continue
+		}
+		seen[cookie.Value] = true
+		out = append(out, cookie.Value)
+	}
+	return out
 }
 
 func adminUserAgent(r *http.Request) string {

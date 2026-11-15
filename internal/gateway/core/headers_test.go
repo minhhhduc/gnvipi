@@ -96,7 +96,7 @@ func TestMigratedProviderHeadersPreserveLegacyModes(t *testing.T) {
 		messages                bool
 	}{
 		{"chat", "https://example.com/v1", "client", "Authorization", false},
-		{"agentrouter", "https://agentrouter.org/v1", "opencode/1.18.25", "Authorization", false},
+		{"agentrouter", "https://agentrouter.org/v1", "client", "Authorization", false},
 		{"messages", "https://example.com", "curl/8.4.0", "X-Api-Key", true},
 		{"messages-agentrouter", "https://agentrouter.org", "curl/8.4.0", "X-Api-Key", true},
 	} {

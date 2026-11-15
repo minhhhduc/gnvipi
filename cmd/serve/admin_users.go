@@ -82,6 +82,7 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 		req.Username = strings.TrimSpace(req.Username)
 		req.Email = strings.TrimSpace(req.Email)
 		req.DisplayName = strings.TrimSpace(req.DisplayName)
+		req.Password = strings.TrimSpace(req.Password)
 		if req.Username == "" {
 			adminFieldError(c, http.StatusBadRequest, "username", "username is required")
 			return
@@ -342,6 +343,9 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusBadRequest, "invalid_body", "expected a JSON object with password")
 			return
 		}
+		// Normalize pasted credentials once, before any validation or query.
+		req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
+		req.Password = strings.TrimSpace(req.Password)
 		ctx := c.Request.Context()
 		if targetID == identity.UserID {
 			if req.CurrentPassword == "" {

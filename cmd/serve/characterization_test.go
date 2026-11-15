@@ -437,16 +437,16 @@ func TestResponsesHiddenModelRouting(t *testing.T) {
 	}
 }
 
-// Only AgentRouter upstreams get the spoofed opencode client identity; every
-// other upstream sees the caller's User-Agent.
-func TestAgentRouterClientSpoofed(t *testing.T) {
+// Every upstream, whatever its host, sees the caller's User-Agent: the gateway
+// never impersonates a client application.
+func TestUpstreamSeesCallerUserAgent(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		baseURL string
 		wantUA  string
 	}{
-		{"agentrouter.org", "http://agentrouter.org/v1", "opencode/1.18.25"},
-		{"other host", "http://up.invalid/v1", "test-client/1"},
+		{"plain host", "http://up.invalid/v1", "test-client/1"},
+		{"known vendor host", "http://agentrouter.org/v1", "test-client/1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &modelPrefs{providers: []customProvider{{
@@ -466,8 +466,8 @@ func TestAgentRouterClientSpoofed(t *testing.T) {
 			if got := call.Header.Get("User-Agent"); got != tc.wantUA {
 				t.Fatalf("User-Agent=%q want %q", got, tc.wantUA)
 			}
-			if got := call.Header.Get("X-App"); tc.name == "agentrouter.org" && got != "opencode" {
-				t.Fatalf("X-App=%q want opencode", got)
+			if got := call.Header.Get("X-App"); got != "" {
+				t.Fatalf("X-App=%q want empty", got)
 			}
 		})
 	}

@@ -2,10 +2,8 @@ package provider
 
 import (
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"golang.org/x/net/http/httpguts"
@@ -89,13 +87,5 @@ func ApplyLegacyHeaderDefaults(p *Provider) {
 			p.Auth.Scheme = AuthAPIKey
 		}
 		return
-	}
-	u, err := url.Parse(p.BaseURL)
-	if err == nil && strings.EqualFold(u.Hostname(), "agentrouter.org") {
-		if p.Headers == nil {
-			p.Headers = make(map[string]string)
-		}
-		p.Headers["User-Agent"] = "opencode/1.18.25"
-		p.Headers["X-App"] = "opencode"
 	}
 }

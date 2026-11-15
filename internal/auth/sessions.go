@@ -224,7 +224,7 @@ func SessionCookie(token string, secure bool, cfg SessionConfig) *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
-		Path:     "/admin",
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
@@ -237,7 +237,7 @@ func ClearSessionCookie(secure bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
-		Path:     "/admin",
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
