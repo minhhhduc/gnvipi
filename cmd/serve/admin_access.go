@@ -41,7 +41,7 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		r := c.Request
 		path := r.URL.Path
-		if path != "/admin" && !strings.HasPrefix(path, "/admin/") {
+		if !adminSurfacePath(path) {
 			c.Next()
 			return
 		}
@@ -82,7 +82,7 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 				return
 			}
 			if path == "/admin/login" {
-				c.Redirect(http.StatusSeeOther, "/admin")
+				c.Redirect(http.StatusSeeOther, "/")
 				c.Abort()
 				return
 			}
@@ -119,10 +119,10 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 				payload := strconv.FormatInt(expires.Unix(), 10) + "." + rand.Text()
 				http.SetCookie(c.Writer, &http.Cookie{
 					Name: adminSessionCookie, Value: payload + "." + adminSessionSignature(payload, sessionKey),
-					Path: "/admin", HttpOnly: true, Secure: adminTLSRequest(r),
+					Path: "/", HttpOnly: true, Secure: adminTLSRequest(r),
 					SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int(adminSessionLifetime.Seconds()),
 				})
-				c.Redirect(http.StatusSeeOther, "/admin")
+				c.Redirect(http.StatusSeeOther, "/")
 				c.Abort()
 			default:
 				c.Header("Allow", "GET, POST")

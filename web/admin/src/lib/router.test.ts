@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pageAllowed, pageFromUrl, rawPageFromUrl } from "./router";
+import { pageAllowed, pageFromLocation, pageFromPath, pageFromUrl, pathForPage, rawPageFromUrl } from "./router";
 import type { Page } from "./context";
 
 describe("pageFromUrl", () => {
@@ -60,6 +60,38 @@ describe("pageFromUrl", () => {
     expect(forRole("?page=tokens", "owner")).toBe("tokens");
     expect(forRole("?page=tokens", "admin")).toBe("tokens");
     expect(forRole("?page=tokens", "user")).toBe("tokens");
+  });
+});
+
+describe("clean page paths", () => {
+  it.each([
+    ["/", "stats"],
+    ["/playground", "playground"],
+    ["/api", "api"],
+    ["/models", "models"],
+    ["/config", "config"],
+    ["/chromes", "chromes"],
+    ["/tokens", "tokens"],
+    ["/users", "users"],
+    ["/usage", "usage"],
+    ["/audit", "audit"],
+    ["/playground/", "playground"],
+    ["/unknown", "stats"],
+  ] as const)("maps %s to %s", (pathname, expected) => {
+    expect(pageFromPath(pathname)).toBe(expected);
+    expect(pageFromPath(expected === "stats" ? "/" : `/${expected}`)).toBe(expected);
+  });
+
+  it("builds the clean URL for every page", () => {
+    expect(pathForPage("stats")).toBe("/");
+    expect(pathForPage("models")).toBe("/models");
+    expect(pathForPage("audit")).toBe("/audit");
+  });
+
+  it("filters a pathname through the role and prefers a legacy ?page=", () => {
+    expect(pageFromPath("/users", "admin")).toBe("stats");
+    expect(pageFromLocation({ pathname: "/models", search: "" }, "user")).toBe("models");
+    expect(pageFromLocation({ pathname: "/models", search: "?page=usage" }, "user")).toBe("usage");
   });
 });
 

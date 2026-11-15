@@ -302,7 +302,7 @@ func TestAdminBootstrapTokenLegacySurfaceDB(t *testing.T) {
 	res = makeRequest(t, loopback, http.MethodPost, "/admin/login", "token="+dbBootstrapToken, map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	})
-	if res.Code != http.StatusSeeOther || res.Header().Get("Location") != "/admin" || len(res.Result().Cookies()) != 0 {
+	if res.Code != http.StatusSeeOther || res.Header().Get("Location") != "/" || len(res.Result().Cookies()) != 0 {
 		t.Fatalf("legacy token login after owner = %d %q cookies=%d, want a redirect without a session", res.Code, res.Header().Get("Location"), len(res.Result().Cookies()))
 	}
 }
