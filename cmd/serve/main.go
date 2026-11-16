@@ -529,23 +529,12 @@ func runServer() (err error) {
 				// Install middleware before routes: Gin snapshots the chain per route.
 				engine.Use(claudeAutoModelAlias(prefs), cycleRouter(prefs, engine))
 				if !*disableAdminUI {
-					adminHandler := func(c *gin.Context) {
-						adminRoutes(c, nvidiaModels)
-					}
-					// The SPA owns GET /admin; legacy endpoints stay for tools.
+					// The SPA owns GET /admin; legacy endpoints stay for tools in file mode.
 					registerAdminUI(engine)
 					engine.Use(adminConsoleRoot)
-					engine.GET("/admin/stats", adminHandler)
-					chromeHandler := func(c *gin.Context) { chromeRoutes(c, chromes) }
-					engine.GET("/admin/chromes", chromeHandler)
-					engine.POST("/admin/chromes", chromeHandler)
-					engine.POST("/admin/models", adminHandler)
-					engine.POST("/admin/automode", adminHandler)
-					engine.POST("/admin/cycle", adminHandler)
-					engine.POST("/admin/search", adminHandler)
-					engine.POST("/admin/providers", adminHandler)
-					engine.POST("/admin/delete", adminHandler)
-					engine.POST("/admin/retry-failed", adminHandler)
+					if adminAuth == nil {
+						registerLegacyAdminRoutes(engine, nvidiaModels, chromes)
+					}
 					registerAdminAPIRoutes(engine, prefs, nil, chromes, adminAuth)
 					if adminAuth != nil && gatewayDispatcher != nil {
 						registerAdminPlaygroundRoutes(engine, adminAuth, snapshotRuntime, prefs)
