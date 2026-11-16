@@ -764,3 +764,73 @@ func TestDBAdminAuth_LoginRehashesPreviousPepperAndParameters(t *testing.T) {
 		})
 	}
 }
+
+func TestDBAdminAuth_SelfPasswordChangeUnlocksCachedGatewayToken(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		useUsersPath bool
+	}{
+		{name: "auth password endpoint", useUsersPath: false},
+		{name: "users self password endpoint", useUsersPath: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newDBAdminHarness(t)
+			gatewayTokenCache.PurgeAll()
+			t.Cleanup(gatewayTokenCache.PurgeAll)
+
+			res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users", gin.H{
+				"username": "gwuser",
+				"role":     string(auth.RoleUser),
+				"password": dbUserPassword,
+			}, bearer(h.token))
+			if res.Code != http.StatusCreated {
+				t.Fatalf("create user = %d, want 201 (body %s)", res.Code, res.Body.String())
+			}
+			userID, _ := decodeBody(t, res)["id"].(string)
+			if userID == "" {
+				t.Fatal("missing created user id")
+			}
+
+			gwRaw, _, err := auth.CreateAPIToken(t.Context(), h.pool, auth.CreateAPITokenInput{
+				UserID: userID, Kind: auth.TokenKindGateway, Name: "gw",
+				Expiry: auth.TokenExpiry{NoExpiry: true}, Now: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("create gateway token: %v", err)
+			}
+
+			gwEngine := gin.New()
+			gwEngine.Use(gatewayRequestContext(), gatewayAuth("", h.state))
+			gwEngine.POST("/v1/chat/completions", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+			// First gateway request is rejected and caches MustChangePassword=true.
+			res = makeRequest(t, gwEngine, http.MethodPost, "/v1/chat/completions", gin.H{}, bearer(gwRaw))
+			if res.Code != http.StatusForbidden || decodeBody(t, res)["code"] != "password_change_required" {
+				t.Fatalf("gateway before password change = %d %s, want 403 password_change_required", res.Code, res.Body.String())
+			}
+
+			session, csrf := h.login(t, "gwuser", dbUserPassword)
+			newPassword := "Nimbus-Falcon4-Ember!"
+			if tc.useUsersPath {
+				res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/users/"+userID+"/password", gin.H{
+					"current_password": dbUserPassword,
+					"password":         newPassword,
+				}, cookieAuth(session, csrf))
+			} else {
+				res = makeRequest(t, h.engine, http.MethodPost, adminPasswordPath, gin.H{
+					"current_password": dbUserPassword,
+					"new_password":     newPassword,
+				}, cookieAuth(session, csrf))
+			}
+			if res.Code != http.StatusNoContent {
+				t.Fatalf("self password change = %d, want 204 (body %s)", res.Code, res.Body.String())
+			}
+
+			// The already-valid gateway token must be accepted immediately without waiting for cache TTL.
+			res = makeRequest(t, gwEngine, http.MethodPost, "/v1/chat/completions", gin.H{}, bearer(gwRaw))
+			if res.Code != http.StatusOK {
+				t.Fatalf("gateway after password change = %d %s, want 200", res.Code, res.Body.String())
+			}
+		})
+	}
+}
