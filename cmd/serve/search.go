@@ -58,12 +58,7 @@ func searchWebRanked(query string) ([]SearchResult, error) {
 		return nil, fmt.Errorf("configure an HTTPS search URL on the config page first")
 	}
 	gw := searchGatewayInstance
-	switch {
-	case strings.Contains(template, "bing.com"):
-		gw.setHTMLEngine(bingName)
-	case strings.Contains(template, "duckduckgo.com"):
-		gw.setHTMLEngine(ddgName)
-	}
+	gw.setSearchTemplate(template)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	results, traces := gw.rankedSearch(ctx, query)

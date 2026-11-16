@@ -248,3 +248,107 @@ func TestDedupCanonicalizesURLs(t *testing.T) {
 		t.Fatalf("url = %q", results[0].URL)
 	}
 }
+
+func TestDedupPreservesPortsAndIPv6(t *testing.T) {
+	results := dedupeURLs([]SearchResult{
+		{Title: "port 8443", URL: "https://example.com:8443/path?q=one&utm_source=x"},
+		{Title: "port 9443", URL: "https://example.com:9443/path?q=one"},
+		{Title: "ipv6 bare", URL: "http://[2001:DB8::1]/path/"},
+		{Title: "ipv6 port", URL: "https://[2001:DB8::1]:8443/path"},
+	})
+	want := []string{
+		"https://example.com:8443/path?q=one",
+		"https://example.com:9443/path?q=one",
+		"http://[2001:db8::1]/path",
+		"https://[2001:db8::1]:8443/path",
+	}
+	if len(results) != len(want) {
+		t.Fatalf("got %d results (%+v), want %d", len(results), results, len(want))
+	}
+	for i, w := range want {
+		if results[i].URL != w {
+			t.Fatalf("results[%d].URL = %q, want %q", i, results[i].URL, w)
+		}
+	}
+}
+
+func TestCircuitBreakerRecoveryProbe(t *testing.T) {
+	var hits atomic.Int32
+	rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+		hits.Add(1)
+		body := `<html><li class=b_algo><h2><a href="https://example.com/recovered">Recovered</a></h2><cite>https://example.com/recovered</cite></li></html>`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	})
+	gw := testGateway(rt)
+	health := gw.clients[bingName].health
+	for i := 0; i < 5; i++ {
+		health.Record(ErrBlocked)
+	}
+	if health.Healthy() {
+		t.Fatal("circuit should be open after 5 failures")
+	}
+
+	// Simulate cooldown elapsed.
+	health.mu.Lock()
+	health.openedAt = time.Now().Add(-health.cooldown - time.Second)
+	health.mu.Unlock()
+
+	if !health.Healthy() {
+		t.Fatal("Healthy() should report true once cooldown has elapsed")
+	}
+
+	// Routed search must dispatch the probe to HTTP and close the circuit on success.
+	results, _ := gw.search(context.Background(), "recovery probe test")
+	if hits.Load() == 0 {
+		t.Fatal("expected recovery probe to reach HTTP transport")
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results from recovery probe")
+	}
+	if !health.Healthy() {
+		t.Fatal("circuit should remain closed after successful probe")
+	}
+	health.mu.Lock()
+	openedAt := health.openedAt
+	health.mu.Unlock()
+	if !openedAt.IsZero() {
+		t.Fatalf("openedAt should be zero after recovery, got %v", openedAt)
+	}
+}
+
+func TestScholarlyBackendsAcquireRateLimitToken(t *testing.T) {
+	scholarly := []struct {
+		name string
+		body string
+	}{
+		{name: arxivName, body: `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`},
+		{name: crossrefName, body: `{"message":{"items":[]}}`},
+		{name: openalexName, body: `{"results":[]}`},
+		{name: s2Name, body: `{"data":[]}`},
+	}
+
+	for _, sc := range scholarly {
+		t.Run(sc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+				hits.Add(1)
+				return &http.Response{
+					StatusCode: 200,
+					Body:       io.NopCloser(strings.NewReader(sc.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})
+			gw := testGateway(rt)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			_, err := gw.backends[sc.name].Search(ctx, QueryPlan{Backend: sc.name, MaxResults: 5, Queries: []string{"attention"}})
+			if err != nil {
+				t.Fatalf("%s Search failed: %v", sc.name, err)
+			}
+			if hits.Load() == 0 {
+				t.Fatalf("%s made 0 HTTP requests; rate limiter starved it", sc.name)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -17,6 +18,20 @@ const bingName = "bing"
 
 type bingBackend struct {
 	client *sharedSearchClient
+	mu     sync.RWMutex
+	tmpl   string
+}
+
+func (b *bingBackend) setTemplate(tmpl string) {
+	b.mu.Lock()
+	b.tmpl = tmpl
+	b.mu.Unlock()
+}
+
+func (b *bingBackend) template() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.tmpl
 }
 
 func (b *bingBackend) Name() string { return bingName }
@@ -108,9 +123,13 @@ func legalAuthorityDomains(instrument string) []string {
 }
 
 func (b *bingBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {
+	tmpl := b.template()
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://www.bing.com/search?q=" + url.QueryEscape(q) + "&setlang=en-US&cc=US"
+		if tmpl != "" && tmpl != "https://www.bing.com/search?q={query}" {
+			target = expandSearchTemplate(tmpl, q)
+		}
 		body, err := b.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {

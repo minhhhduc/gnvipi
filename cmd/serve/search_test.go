@@ -160,3 +160,106 @@ func TestGatewaySearchMCP(t *testing.T) {
 		t.Fatalf("MCP search response: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestConfiguredSearchTemplatesAreUsed(t *testing.T) {
+	oldPrefs, oldGW := prefs, searchGatewayInstance
+	defer func() {
+		prefs = oldPrefs
+		searchGatewayInstance = oldGW
+	}()
+
+	cases := []struct {
+		name      string
+		template  string
+		wantHost  string
+		wantParam string
+		wantVal   string
+		htmlBody  string
+		wantURL   string
+	}{
+		{
+			name:     "google",
+			template: "https://www.google.com/search?q={query}",
+			wantHost: "www.google.com",
+			htmlBody: `<html><a href="https://docs.example.org/google-hit">Google Hit Title</a></html>`,
+			wantURL:  "https://docs.example.org/google-hit",
+		},
+		{
+			name:     "scholar",
+			template: "https://scholar.google.com/scholar?q={query}",
+			wantHost: "scholar.google.com",
+			htmlBody: `<html><h3><a href="https://aclanthology.org/paper1">Scholar Paper Title</a></h3></html>`,
+			wantURL:  "https://aclanthology.org/paper1",
+		},
+		{
+			name:      "custom with extra query param",
+			template:  "https://custom.example.org/search?q={query}&lang=vi",
+			wantHost:  "custom.example.org",
+			wantParam: "lang",
+			wantVal:   "vi",
+			htmlBody:  `<html><a href="https://target.example.org/vi-doc">Custom Search Result</a></html>`,
+			wantURL:   "https://target.example.org/vi-doc",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := newSearchGateway()
+			// Start with DDG selected to ensure custom/Google/Scholar overrides prior selection.
+			gw.setHTMLEngine(ddgName)
+			searchGatewayInstance = gw
+
+			var seenHosts []string
+			var seenParam string
+			gw.setTestTransport(searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+				seenHosts = append(seenHosts, r.URL.Host)
+				if r.URL.Host == tc.wantHost {
+					if tc.wantParam != "" {
+						seenParam = r.URL.Query().Get(tc.wantParam)
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(tc.htmlBody)),
+						Header:     make(http.Header),
+						Request:    r,
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`<html></html>`)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			}))
+
+			prefs = &modelPrefs{searchURL: tc.template}
+			results, err := searchWebRanked("test query")
+			if err != nil {
+				t.Fatalf("searchWebRanked error: %v", err)
+			}
+			var matchedHost bool
+			for _, h := range seenHosts {
+				if h == tc.wantHost {
+					matchedHost = true
+					break
+				}
+			}
+			if !matchedHost {
+				t.Fatalf("expected request to host %q, saw %v", tc.wantHost, seenHosts)
+			}
+			if tc.wantParam != "" && seenParam != tc.wantVal {
+				t.Fatalf("query param %s = %q, want %q", tc.wantParam, seenParam, tc.wantVal)
+			}
+			var foundResult bool
+			for _, r := range results {
+				if r.URL == tc.wantURL {
+					foundResult = true
+					break
+				}
+			}
+			if !foundResult {
+				t.Fatalf("expected result URL %q in %+v", tc.wantURL, results)
+			}
+		})
+	}
+}

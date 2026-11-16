@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -16,6 +17,20 @@ const ddgName = "duckduckgo"
 
 type ddgBackend struct {
 	client *sharedSearchClient
+	mu     sync.RWMutex
+	tmpl   string
+}
+
+func (d *ddgBackend) setTemplate(tmpl string) {
+	d.mu.Lock()
+	d.tmpl = tmpl
+	d.mu.Unlock()
+}
+
+func (d *ddgBackend) template() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.tmpl
 }
 
 func (d *ddgBackend) Name() string { return ddgName }
@@ -52,9 +67,13 @@ func (d *ddgBackend) Adapt(ctx *SearchContext) QueryPlan {
 }
 
 func (d *ddgBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {
+	tmpl := d.template()
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(q)
+		if tmpl != "" && tmpl != "https://www.duckduckgo.com/html/?q={query}" && tmpl != "https://html.duckduckgo.com/html/?q={query}" {
+			target = expandSearchTemplate(tmpl, q)
+		}
 		body, err := d.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {

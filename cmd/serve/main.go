@@ -338,6 +338,14 @@ func runServer() (err error) {
 			log.Printf("captcha: -pool-batch=%d clamped to 1 in playground mode (batching requires a usable harness)", batch)
 			batch = 1
 		}
+		effectiveSize := *poolSize
+		if effectiveSize < 1 {
+			effectiveSize = 2
+		}
+		if batch > effectiveSize {
+			log.Printf("captcha: -pool-batch=%d clamped to -pool-size=%d", batch, effectiveSize)
+			batch = effectiveSize
+		}
 		poolCfg := captcha.PoolConfig{Size: *poolSize, Workers: *poolWorkers, TTL: *poolTTL}
 		if batch > 1 {
 			poolCfg.BatchSize = batch
