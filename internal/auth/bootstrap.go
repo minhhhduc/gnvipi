@@ -251,7 +251,7 @@ type RootInput struct {
 // EnsureRoot creates the built-in root account when it is missing and returns
 // the row with a created flag. An existing account is left untouched apart from
 // a role promotion to root, so a password the operator already set survives
-// every restart. The advisory lock serialises concurrent starts; the seeded row
+// every restart. The advisory lock serializes concurrent starts; the seeded row
 // is audited as the system.
 //
 // The password is not checked against the login policy: the documented default

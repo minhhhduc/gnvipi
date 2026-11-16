@@ -64,9 +64,9 @@ func (r Role) rank() int {
 	return 0
 }
 
-// AtLeast reports whether r holds every privilege of min.
-func (r Role) AtLeast(min Role) bool {
-	return min.rank() != 0 && r.rank() >= min.rank()
+// AtLeast reports whether r holds every privilege of minimum.
+func (r Role) AtLeast(minimum Role) bool {
+	return minimum.rank() != 0 && r.rank() >= minimum.rank()
 }
 
 // Status is a user account status.

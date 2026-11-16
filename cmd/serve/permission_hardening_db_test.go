@@ -101,6 +101,10 @@ func TestDBAdminPermission_CurrentRouteRoleMatrix(t *testing.T) {
 	userID := createContractUser(t, h, "matrix-user", auth.RoleUser)
 	clearMustChangePassword(t, h, userID)
 	userSession, userCSRF := h.login(t, "matrix-user", dbUserPassword)
+	// Root never appears in the role matrix: it is the superuser fallback and is
+	// expected to reach every declared route.
+	rootID := insertRootUser(t, h, "matrix-root")
+	rootToken, _ := createContractAdminToken(t, h, rootID, bearer(h.token))
 
 	type actor struct {
 		name      string
@@ -112,6 +116,7 @@ func TestDBAdminPermission_CurrentRouteRoleMatrix(t *testing.T) {
 		{name: "owner", bit: permissionOwner, subjectID: h.owner.ID, headers: bearer(h.token)},
 		{name: "admin", bit: permissionAdmin, subjectID: adminID, headers: bearer(adminToken)},
 		{name: "user", bit: permissionUser, subjectID: userID, headers: cookieAuth(userSession, userCSRF)},
+		{name: "root", bit: 0, subjectID: rootID, headers: bearer(rootToken)},
 	}
 
 	registered := make(map[string]gin.RouteInfo)
@@ -148,7 +153,7 @@ func TestDBAdminPermission_CurrentRouteRoleMatrix(t *testing.T) {
 				engine.Use(adminAPIAuthorization(h.state))
 				engine.Handle(route.Method, route.Path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
 				res := makeRequest(t, engine, route.Method, concreteAdminRoute(route.Path, actor.subjectID), nil, actor.headers)
-				if expected[key]&actor.bit != 0 {
+				if expected[key]&actor.bit != 0 || actor.name == "root" {
 					if res.Code != http.StatusNoContent {
 						t.Fatalf("status = %d, want 204 (body %s)", res.Code, res.Body.String())
 					}
@@ -474,4 +479,21 @@ func TestDBAdminPermission_RuntimeRoleCannotTamperWithAuditRows(t *testing.T) {
 			t.Fatalf("audit tamper %q error = %v, want SQLSTATE 42501", statement, err)
 		}
 	}
+}
+
+// insertRootUser writes the built-in account directly: the admin API refuses to
+// create a root user, which is the point of a role only the seed may assign.
+func insertRootUser(t *testing.T, h *dbAdminHarness, username string) string {
+	t.Helper()
+	hash, err := auth.HashPassword(dbUserPassword, h.state.password.Params, h.state.password.Pepper)
+	if err != nil {
+		t.Fatalf("hash root password: %v", err)
+	}
+	var id string
+	if err := h.pool.QueryRow(t.Context(), `
+		INSERT INTO users (username, display_name, role, password_hash, must_change_password)
+		VALUES ($1, 'Root', 'root', $2, false) RETURNING id`, username, hash).Scan(&id); err != nil {
+		t.Fatalf("insert root user: %v", err)
+	}
+	return id
 }
