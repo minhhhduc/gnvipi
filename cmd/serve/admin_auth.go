@@ -179,6 +179,9 @@ func handleAdminChangePassword(state *authState) gin.HandlerFunc {
 			identity.SessionToken, req.CurrentPassword, req.NewPassword, state.password, adminAuditActor(identity))
 		switch {
 		case err == nil:
+			// Self password change clears must_change_password; unlock any
+			// already-cached gateway token identity immediately.
+			gatewayTokenCache.PurgeAll()
 			c.Status(http.StatusNoContent)
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			adminFieldError(c, http.StatusBadRequest, "current_password", "current password is incorrect")
