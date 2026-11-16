@@ -201,7 +201,7 @@ func routingTargetUser(c *gin.Context, identity *adminIdentity, requested string
 		return "", false
 	}
 	requested = strings.TrimSpace(requested)
-	if identity.Role != auth.RoleOwner {
+	if !identity.Role.AtLeast(auth.RoleOwner) {
 		if requested != "" && requested != identity.UserID {
 			adminNotFoundResponse(c)
 			return "", false

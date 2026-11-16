@@ -7,7 +7,7 @@ vi.mock("../lib/context", () => ({
   useGateway: () => ({ navigate: vi.fn() }),
 }));
 
-type TestRole = "owner" | "admin" | "user";
+type TestRole = "root" | "owner" | "admin" | "user";
 
 function textContent(value: ComponentChildren): string {
   return toChildArray(value)
@@ -57,7 +57,8 @@ describe("Shell role navigation", () => {
     expect(text).not.toContain("Chrome");
   });
 
-  it("shows the owner-only Audit screen to owners only", () => {
+  it("shows the owner-only Audit screen to owner-level roles only", () => {
+    expect(renderShell("root")).toContain("Audit");
     expect(renderShell("owner")).toContain("Audit");
     expect(renderShell("admin")).not.toContain("Audit");
     expect(renderShell("user")).not.toContain("Audit");

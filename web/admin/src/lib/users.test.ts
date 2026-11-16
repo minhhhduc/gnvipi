@@ -60,7 +60,8 @@ describe("user list parsing", () => {
 });
 
 describe("owner gating", () => {
-  it("lets only owners manage accounts", () => {
+  it("lets owner-level accounts manage accounts", () => {
+    expect(canManageUsers("root")).toBe(true);
     expect(canManageUsers("owner")).toBe(true);
     expect(canManageUsers("admin")).toBe(false);
     expect(canManageUsers("user")).toBe(false);
@@ -102,6 +103,8 @@ describe("edit safeguards", () => {
   it("blocks a save until an unknown role is resolved", () => {
     expect(roleError("admin")).toBeNull();
     expect(roleError("superuser")).toEqual({ field: "role", message: "Role must be owner, admin or user" });
+    // Root is seeded by the server and is not assignable from the console.
+    expect(roleError("root")).toEqual({ field: "role", message: "Role must be owner, admin or user" });
   });
 
   it("never edits the signed-in account's own role", () => {

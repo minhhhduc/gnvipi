@@ -50,7 +50,7 @@ func keyReachFor(identity *adminIdentity, key *providerstore.KeyRow) keyReach {
 	if identity == nil {
 		return keyReachNone
 	}
-	if identity.Role == auth.RoleOwner {
+	if identity.Role.AtLeast(auth.RoleOwner) {
 		return keyReachFull
 	}
 	if key.OwnerID != "" && sameUserID(key.OwnerID, identity.UserID) {
@@ -428,13 +428,13 @@ func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteReque
 		return identity.UserID, true
 	}
 	if shared {
-		if identity.Role != auth.RoleOwner {
+		if !identity.Role.AtLeast(auth.RoleOwner) {
 			adminAPIError(c, http.StatusForbidden, "forbidden", "only the owner may create shared keys")
 			return "", false
 		}
 		return "", true
 	}
-	if identity.Role == auth.RoleOwner || sameUserID(id, identity.UserID) {
+	if identity.Role.AtLeast(auth.RoleOwner) || sameUserID(id, identity.UserID) {
 		return id, true
 	}
 	adminAPIError(c, http.StatusForbidden, "forbidden", "a key may only be created for yourself")

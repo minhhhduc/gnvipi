@@ -39,7 +39,7 @@ func adminTokenTarget(c *gin.Context, identity *adminIdentity) (string, bool) {
 	if target == "" || target == identity.UserID {
 		return identity.UserID, true
 	}
-	if identity.Role != auth.RoleOwner {
+	if !identity.Role.AtLeast(auth.RoleOwner) {
 		adminNotFoundResponse(c)
 		return "", false
 	}
@@ -103,7 +103,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 		ctx := c.Request.Context()
 		target := identity.UserID
 		if raw := strings.TrimSpace(req.UserID); raw != "" && raw != identity.UserID {
-			if identity.Role != auth.RoleOwner {
+			if !identity.Role.AtLeast(auth.RoleOwner) {
 				adminNotFoundResponse(c)
 				return
 			}
@@ -218,7 +218,7 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "token_unavailable", "could not read the token")
 			return
 		}
-		if identity.Role != auth.RoleOwner && token.UserID != identity.UserID {
+		if !identity.Role.AtLeast(auth.RoleOwner) && token.UserID != identity.UserID {
 			adminNotFoundResponse(c)
 			return
 		}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { computeAutoModeOptions, computeCycleAvailableOptions, computeCycleUnselected } from "../lib/helpers";
-import type { AdminUser } from "../lib/auth";
+import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
 import type { CycleConfig, ModelsResponse, UserList } from "../lib/types";
 import { Card, CardHead, Empty, IconChevronDown, IconChevronUp, IconX, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
@@ -95,7 +95,7 @@ export function ConfigView({ user }: { user: AdminUser }) {
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<UserList["users"]>([]);
   const [targetUser, setTargetUser] = useState("");
-  const isOwner = user.role === "owner";
+  const isOwner = isOwnerLevelRole(user.role);
   // Only an owner may address another account; everyone else edits their own.
   const userQuery = targetUser ? `?user_id=${encodeURIComponent(targetUser)}` : "";
 

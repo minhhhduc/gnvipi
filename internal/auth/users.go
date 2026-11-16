@@ -68,8 +68,11 @@ func mapUserWriteError(err error) error {
 			return ErrEmailTaken
 		}
 	case "P0001":
-		if strings.Contains(pgErr.Message, "last active owner") {
+		switch {
+		case strings.Contains(pgErr.Message, "last active owner"):
 			return ErrLastOwner
+		case strings.Contains(pgErr.Message, "root account"):
+			return ErrRootProtected
 		}
 	}
 	return err

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { Card, CardHead, Dialog, Empty, PageHeader, Pager } from "../components/ui";
-import type { AdminUser } from "../lib/auth";
+import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
 import type { AdminUserRecord, TokenRecord } from "../lib/types";
 import {
   defaultExpiryLabel,
@@ -40,7 +40,7 @@ function statusPill(status: TokenStatus) {
 
 export function TokensView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
-  const owner = user.role === "owner";
+  const owner = isOwnerLevelRole(user.role);
   const [tokens, setTokens] = useState<TokenRecord[]>([]);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);

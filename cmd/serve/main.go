@@ -240,6 +240,12 @@ func runServer() (err error) {
 		// GNVIPI_ADMIN_TOKEN (or -admin-token) is a one-time bootstrap
 		// credential in database mode: it works only while no owner exists.
 		adminAuth.setBootstrapToken(*adminToken)
+		// The built-in root account is part of the schema contract: user
+		// management can neither delete nor demote it, so every install keeps a
+		// recovery identity. Failing to seed it stops startup.
+		if err := ensureRootAccount(ctx, adminAuth); err != nil {
+			return err
+		}
 		// Database mode owns the NVIDIA catalog: the table holds exactly what
 		// the last rescan fetched, and an empty table means an empty catalog
 		// (the admin console then offers a rescan). The runtime role reads;

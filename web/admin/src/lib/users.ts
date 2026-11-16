@@ -1,4 +1,4 @@
-import type { AdminRole } from "./auth";
+import { isOwnerLevelRole, type AdminRole } from "./auth";
 import type { AdminUserRecord, UserList } from "./types";
 import { optionalString } from "./admin";
 
@@ -7,7 +7,7 @@ import { optionalString } from "./admin";
  * is the second check the views use before rendering any mutation control.
  */
 export function canManageUsers(role: AdminRole): boolean {
-  return role === "owner";
+  return isOwnerLevelRole(role);
 }
 
 export interface FieldError {

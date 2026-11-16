@@ -39,7 +39,7 @@ func playgroundTargetUser(c *gin.Context, identity *adminIdentity) (string, bool
 		return "", false
 	}
 	requested := strings.TrimSpace(c.Query("user_id"))
-	if identity.Role != auth.RoleOwner {
+	if !identity.Role.AtLeast(auth.RoleOwner) {
 		if requested != "" && requested != identity.UserID {
 			adminNotFoundResponse(c)
 			return "", false
@@ -59,7 +59,7 @@ func handlePlaygroundModels(runtime *providerRuntime, prefs *modelPrefs) gin.Han
 		if !ok {
 			return
 		}
-		union := identity != nil && identity.Role == auth.RoleOwner && strings.TrimSpace(c.Query("user_id")) == ""
+		union := identity != nil && identity.Role.AtLeast(auth.RoleOwner) && strings.TrimSpace(c.Query("user_id")) == ""
 		out := make([]playgroundModel, 0, 32)
 		keyAliases := make(map[string]struct{})
 		if runtime != nil {

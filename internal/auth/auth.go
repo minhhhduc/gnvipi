@@ -28,10 +28,13 @@ type DB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// Role is a user role. There is deliberately no viewer role.
+// Role is a user role. There is deliberately no viewer role. Root is the
+// built-in account above owner: it is seeded on every install and the database
+// refuses to delete, rename, demote or disable it.
 type Role string
 
 const (
+	RoleRoot  Role = "root"
 	RoleOwner Role = "owner"
 	RoleAdmin Role = "admin"
 	RoleUser  Role = "user"
@@ -40,10 +43,30 @@ const (
 // Valid reports whether r is one of the persisted roles.
 func (r Role) Valid() bool {
 	switch r {
-	case RoleOwner, RoleAdmin, RoleUser:
+	case RoleRoot, RoleOwner, RoleAdmin, RoleUser:
 		return true
 	}
 	return false
+}
+
+// rank orders the roles from least to most privileged.
+func (r Role) rank() int {
+	switch r {
+	case RoleUser:
+		return 1
+	case RoleAdmin:
+		return 2
+	case RoleOwner:
+		return 3
+	case RoleRoot:
+		return 4
+	}
+	return 0
+}
+
+// AtLeast reports whether r holds every privilege of minimum.
+func (r Role) AtLeast(minimum Role) bool {
+	return minimum.rank() != 0 && r.rank() >= minimum.rank()
 }
 
 // Status is a user account status.
@@ -67,6 +90,7 @@ var (
 	ErrUsernameTaken           = errors.New("auth: username already exists")
 	ErrEmailTaken              = errors.New("auth: email already exists")
 	ErrLastOwner               = errors.New("auth: last active owner cannot be removed, demoted or disabled")
+	ErrRootProtected           = errors.New("auth: the built-in root account cannot be deleted, renamed, demoted or disabled")
 	ErrInvalidCredentials      = errors.New("auth: invalid credentials")
 	ErrAccountLocked           = errors.New("auth: account temporarily locked")
 	ErrIPLocked                = errors.New("auth: too many failed attempts from this address")
