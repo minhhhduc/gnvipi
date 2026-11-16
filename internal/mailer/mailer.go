@@ -123,13 +123,14 @@ func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 
 	client, err := smtp.NewClient(conn, s.cfg.Host)
 	if err != nil {
-		_ = conn.Close()
-		return fmt.Errorf("mailer: smtp client: %w", err)
+		return errors.Join(fmt.Errorf("mailer: smtp client: %w", err), conn.Close())
 	}
-	defer func() { _ = client.Close() }()
+	defer func() { _ = client.Close() }() //nolint:errcheck // best-effort connection teardown
 
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+		if err := conn.SetDeadline(deadline); err != nil {
+			return fmt.Errorf("mailer: set deadline: %w", err)
+		}
 	}
 
 	if s.cfg.Port != 465 {
@@ -159,8 +160,7 @@ func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 	}
 	msg := buildMessage(fromAddr.String(), rcpt.Address, cleanSubject, body)
 	if _, err := w.Write([]byte(msg)); err != nil {
-		_ = w.Close()
-		return fmt.Errorf("mailer: write body: %w", err)
+		return errors.Join(fmt.Errorf("mailer: write body: %w", err), w.Close())
 	}
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("mailer: close data: %w", err)

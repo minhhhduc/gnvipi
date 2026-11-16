@@ -61,11 +61,15 @@ func TestSMTPSenderDisabledAndHeaderSanitization(t *testing.T) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = ln.Close() }()
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 
 	received := make(chan string, 1)
 	go func() {
@@ -73,9 +77,17 @@ func TestSMTPSenderDisabledAndHeaderSanitization(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer func() { _ = conn.Close() }()
+		defer func() {
+			if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+				t.Errorf("close conn: %v", closeErr)
+			}
+		}()
 		r := bufio.NewReader(conn)
-		write := func(s string) { _, _ = conn.Write([]byte(s + "\r\n")) }
+		write := func(s string) {
+			if _, wErr := conn.Write([]byte(s + "\r\n")); wErr != nil {
+				t.Errorf("write smtp response: %v", wErr)
+			}
+		}
 		write("220 localhost ESMTP")
 		var dataBuf strings.Builder
 		inData := false
@@ -113,8 +125,14 @@ func TestSMTPSenderDisabledAndHeaderSanitization(t *testing.T) {
 		}
 	}()
 
-	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
-	port, _ := strconv.Atoi(portStr)
+	_, portStr, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sender := NewSMTPSender(Config{
 		Host: "127.0.0.1",
 		Port: port,
