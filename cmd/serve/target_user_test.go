@@ -37,7 +37,7 @@ func TestTargetUserSelectionByRole(t *testing.T) {
 
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
-			c.Request = httptest.NewRequest(http.MethodGet, "/?user_id="+url.QueryEscape(tc.requested), nil)
+			c.Request = httptest.NewRequest(http.MethodGet, "/?user_id="+url.QueryEscape(tc.requested), http.NoBody)
 			got, ok := playgroundTargetUser(c, identity)
 			if ok != tc.wantOK || got != tc.wantID {
 				t.Fatalf("playground = (%q, %v), want (%q, %v)", got, ok, tc.wantID, tc.wantOK)
@@ -48,7 +48,7 @@ func TestTargetUserSelectionByRole(t *testing.T) {
 
 			rec = httptest.NewRecorder()
 			c, _ = gin.CreateTestContext(rec)
-			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+			c.Request = httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			got, ok = routingTargetUser(c, identity, tc.requested)
 			if ok != tc.wantOK || got != tc.wantID {
 				t.Fatalf("routing = (%q, %v), want (%q, %v)", got, ok, tc.wantID, tc.wantOK)
