@@ -133,6 +133,9 @@ func NewPool(parent context.Context, extract ExtractFunc, cfg PoolConfig) *Pool 
 	if cfg.BatchSize < 1 {
 		cfg.BatchSize = 1
 	}
+	if cfg.BatchSize > cfg.Size {
+		cfg.BatchSize = cfg.Size
+	}
 	ctx, cancel := context.WithCancel(parent)
 	p := &Pool{
 		extract:   extract,
@@ -218,8 +221,12 @@ func (p *Pool) worker(id int) {
 // wrapped in the same panic-recovery as the single-token path so a broken
 // harness page does not take down the worker.
 func (p *Pool) runExtract(ctx context.Context) ([]string, error) {
-	if p.batchSize > 1 && p.extractN != nil {
-		return safeExtractN(p.extractN, ctx, p.batchSize)
+	if p.extractN != nil && (p.batchSize > 1 || p.extract == nil) {
+		n := p.batchSize
+		if n < 1 {
+			n = 1
+		}
+		return safeExtractN(p.extractN, ctx, n)
 	}
 	tok, err := safeExtract(p.extract, ctx)
 	if err != nil {
