@@ -106,7 +106,9 @@ stored. Consequences:
 ## Roles
 
 Root holds every capability of an owner, on every route, and cannot be demoted.
-The table lists what owner, admin and user reach.
+That includes the account selectors on the playground and config pages, where
+root may name any user id exactly as an owner may. The table lists what owner,
+admin and user reach.
 
 | Capability | Owner | Admin | User |
 |---|---|---|---|
