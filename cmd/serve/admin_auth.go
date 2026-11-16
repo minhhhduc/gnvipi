@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -121,7 +122,11 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		expireLegacyAdminCookies(c, secure)
 		http.SetCookie(c.Writer, auth.SessionCookie(raw, secure, state.sessions))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, secure, state.sessions.AbsoluteTimeout))
-		c.JSON(http.StatusOK, gin.H{"user": adminUserJSON(user), "csrf_token": csrf})
+		c.JSON(http.StatusOK, gin.H{
+			"user":       adminUserJSON(user),
+			"csrf_token": csrf,
+			"public_url": configuredPublicURL(os.LookupEnv),
+		})
 	}
 }
 
@@ -156,7 +161,11 @@ func handleAdminSession(state *authState) gin.HandlerFunc {
 		}
 		expireLegacyAdminCookies(c, adminTLSRequest(c.Request))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, adminTLSRequest(c.Request), state.sessions.AbsoluteTimeout))
-		c.JSON(http.StatusOK, gin.H{"user": adminUserJSON(user), "csrf_token": csrf})
+		c.JSON(http.StatusOK, gin.H{
+			"user":       adminUserJSON(user),
+			"csrf_token": csrf,
+			"public_url": configuredPublicURL(os.LookupEnv),
+		})
 	}
 }
 

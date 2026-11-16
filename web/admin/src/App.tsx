@@ -52,6 +52,7 @@ export function App() {
   const [legacyAuth, setLegacyAuth] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsUpdated, setStatsUpdated] = useState<number | null>(null);
+  const [publicUrl, setPublicUrl] = useState("");
   const [banner, setBannerState] = useState<{ message: string; retry?: () => void; owner?: string } | null>(null);
   const [toasts, setToasts] = useState<{ id: number; message: string; kind: "ok" | "bad" }[]>([]);
   const toastId = useRef(0);
@@ -87,7 +88,11 @@ export function App() {
     setAuthError("");
     setLegacyAuth(false);
     api<unknown>("/admin/api/auth/session", { redirectOn401: false })
-      .then((value) => setIdentity(parseAuthSession(value).user, false))
+      .then((value) => {
+        const session = parseAuthSession(value);
+        setPublicUrl(session.public_url || "");
+        setIdentity(session.user, false);
+      })
       .catch((err) => {
         if (err instanceof ApiError) {
           const mode = sessionFailureMode(err.status);
@@ -273,7 +278,7 @@ export function App() {
 
   return (
     <UiContext.Provider value={ui}>
-      <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate, navSeq }}>
+      <GatewayContext.Provider value={{ stats, statsUpdated, refreshStats, navigate, navSeq, publicUrl }}>
         <ThemeContext.Provider value={{ theme, toggle: toggleTheme }}>
           <Shell
             page={effectivePage}

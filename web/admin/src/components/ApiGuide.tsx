@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { useUi } from "./ui";
-import { useGateway } from "../lib/context";
-import { PROTOCOLS, claudeCodeSettings, codexConfig, curlSample, guideOrigin, openCodeConfig, type Protocol } from "../lib/apiGuide";
+import { useGateway, useGatewayOrigin } from "../lib/context";
+import { PROTOCOLS, claudeCodeSettings, codexConfig, curlSample, openCodeConfig, type Protocol } from "../lib/apiGuide";
 
 export function Snippet({ label, code }: { label: string; code: string }) {
   const { toast } = useUi();
@@ -49,6 +49,7 @@ export function AutomodeNote({ protocol }: { protocol: Protocol }) {
 
 /** Protocol-tabbed cURL plus the agent setup snippets for one model alias. */
 export function ModelApiGuide({ model }: { model: string }) {
+  const origin = useGatewayOrigin();
   const [protocol, setProtocol] = useState<Protocol>("chat");
   const path = PROTOCOLS.find(([key]) => key === protocol)?.[2] ?? "";
   const alias = model.trim() || "automode";
@@ -68,16 +69,16 @@ export function ModelApiGuide({ model }: { model: string }) {
           </button>
         ))}
       </div>
-      <Snippet label={`cURL · ${path}`} code={curlSample(protocol, alias)} />
+      <Snippet label={`cURL · ${path}`} code={curlSample(protocol, alias, origin)} />
       <AutomodeNote protocol={protocol} />
       {protocol === "messages" && (
-        <Snippet label="Claude Code · ~/.claude/settings.json" code={claudeCodeSettings(guideOrigin)} />
+        <Snippet label="Claude Code · ~/.claude/settings.json" code={claudeCodeSettings(origin)} />
       )}
       {protocol === "responses" && (
-        <Snippet label="Codex · ~/.codex/config.toml" code={codexConfig(alias)} />
+        <Snippet label="Codex · ~/.codex/config.toml" code={codexConfig(alias, origin)} />
       )}
       {protocol === "chat" && (
-        <Snippet label="OpenCode · ~/.config/opencode/config.json" code={openCodeConfig(alias)} />
+        <Snippet label="OpenCode · ~/.config/opencode/config.json" code={openCodeConfig(alias, origin)} />
       )}
     </div>
   );
