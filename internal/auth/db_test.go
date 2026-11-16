@@ -175,7 +175,7 @@ BEGIN
     RETURN OLD;
   END IF;
   IF OLD.role = 'superuser' AND OLD.status = 'active'
-     AND (NEW.role <> 'superuser' OR NEW.status <> 'active') THEN
+     AND (NEW.role NOT IN ('superuser', 'root') OR NEW.status <> 'active') THEN
     PERFORM pg_advisory_xact_lock(hashtext('gnvipi:superusers'));
     SELECT count(*) INTO remaining FROM users
      WHERE role IN ('superuser', 'root') AND status = 'active' AND id <> OLD.id;
@@ -1045,6 +1045,30 @@ func TestEnsureRootPromotesExistingAccountDB(t *testing.T) {
 	}
 	if u.ID != existing.ID || u.Role != RoleRoot {
 		t.Fatalf("promoted = %+v", u)
+	}
+	if ok, _, err := VerifyPassword("chosen-by-operator", u.PasswordHash, cfg.Params, nil); err != nil || !ok {
+		t.Fatal("promotion replaced the account password")
+	}
+	if auditCount(t, db, "user.root.promote") != 1 {
+		t.Fatal("promotion was not audited")
+	}
+}
+
+func TestEnsureRootPromotesSoleActiveSuperuserDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cfg := BootstrapConfig{Params: fastParams()}
+	existing := createTestUser(t, db, RootUsername, RoleSuperuser, "chosen-by-operator")
+
+	u, created, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Password: "gnvipi"}, cfg)
+	if err != nil {
+		t.Fatalf("promote sole active superuser to root: %v", err)
+	}
+	if created {
+		t.Fatal("promoting an existing superuser reported a create")
+	}
+	if u.ID != existing.ID || u.Role != RoleRoot || u.Status != StatusActive {
+		t.Fatalf("promoted = %+v, want active root with ID %s", u, existing.ID)
 	}
 	if ok, _, err := VerifyPassword("chosen-by-operator", u.PasswordHash, cfg.Params, nil); err != nil || !ok {
 		t.Fatal("promotion replaced the account password")
