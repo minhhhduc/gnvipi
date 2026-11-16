@@ -69,16 +69,21 @@ func (h *translation) resolvePolicy() (adapter.Capabilities, gwpolicy.Mode) {
 }
 
 func (d *Dispatcher) translator(model string, route *routing.Route, base adapter.Outbound) (*translation, error) {
+	var providerID string
+	if route.Provider != nil {
+		providerID = route.Provider.ID
+	}
+	key := handlerKey{model: model, providerID: providerID, keyID: route.KeyID}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if cached, found := d.translations[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
+	if cached, found := d.translations[key]; found && cached.model == route.UpstreamModel && providersEqual(cached.provider, route.Provider) {
 		return cached.handler, nil
 	}
 	handler, err := newTranslation(route.Provider, route.UpstreamModel, base, &d.options, d.featurePolicyConfig())
 	if err != nil {
 		return nil, err
 	}
-	d.translations[model] = cachedTranslation{provider: route.Provider, model: route.UpstreamModel, handler: handler}
+	d.translations[key] = cachedTranslation{provider: route.Provider, model: route.UpstreamModel, handler: handler}
 	return handler, nil
 }
 
@@ -135,9 +140,15 @@ func newTranslation(p *provider.Provider, upstreamModel string, base adapter.Out
 	if err != nil {
 		return nil, errors.New("dispatch: invalid upstream proxy configuration")
 	}
+	var policyProxyURL string
+	if proxyURL != nil {
+		policyProxyURL = proxyURL.String()
+	}
 	clientOptions := &upstream.Options{
 		Timeouts: options.Timeouts, ProxyURL: proxy,
-		Control: policy.Control, DialContext: policy.Dialer(proxyURL, net.DefaultResolver, nil),
+		Policy:         &policy,
+		PolicyProxyURL: policyProxyURL,
+		Control:        policy.Control, DialContext: policy.Dialer(proxyURL, net.DefaultResolver, nil),
 		DisableProxy: true, CheckRedirect: policy.CheckRedirect,
 	}
 	var client *http.Client

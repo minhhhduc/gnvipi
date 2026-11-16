@@ -116,11 +116,17 @@ func New(p *provider.Provider, upstreamModel string, options *Options) (*Relay, 
 	if err != nil {
 		return nil, errors.New("relay: invalid upstream proxy configuration")
 	}
+	var policyProxyURL string
+	if proxyURL != nil {
+		policyProxyURL = proxyURL.String()
+	}
 	clientOptions := &upstream.Options{
 		Timeouts: options.Timeouts, ProxyURL: proxy,
-		Control:      policy.Control,
-		DialContext:  policy.Dialer(proxyURL, net.DefaultResolver, nil),
-		DisableProxy: true, CheckRedirect: policy.CheckRedirect,
+		Policy:         &policy,
+		PolicyProxyURL: policyProxyURL,
+		Control:        policy.Control,
+		DialContext:    policy.Dialer(proxyURL, net.DefaultResolver, nil),
+		DisableProxy:   true, CheckRedirect: policy.CheckRedirect,
 	}
 	var client *http.Client
 	if options.Factory == nil {

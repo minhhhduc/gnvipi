@@ -40,6 +40,12 @@ type Options struct {
 	DisableProxy bool
 	// CheckRedirect must be immutable for the lifetime of cached clients.
 	CheckRedirect func(*http.Request, []*http.Request) error
+	// Policy, when non-nil, keys the client cache by the URLPolicy value
+	// instead of per-call closure allocations.
+	Policy *provider.URLPolicy
+	// PolicyProxyURL records the resolved proxy URL (including ProxyFromEnvironment)
+	// captured by Policy.Dialer when ProxyURL is empty.
+	PolicyProxyURL string
 }
 
 // RegisterFlags exposes options on an explicitly supplied flag set without
@@ -86,20 +92,21 @@ func applyDefaults(t *provider.Timeouts) {
 }
 
 type clientConfig struct {
-	timeouts     provider.Timeouts
-	proxyURL     string
-	tls          provider.TLSProfile
-	controlOwner *Options
-	controlCode  uintptr
-	dialCode     uintptr
-	redirectCode uintptr
-	disableProxy bool
+	timeouts       provider.Timeouts
+	proxyURL       string
+	tls            provider.TLSProfile
+	hasPolicy      bool
+	policy         provider.URLPolicy
+	policyProxyURL string
+	controlCode    uintptr
+	dialCode       uintptr
+	redirectCode   uintptr
+	disableProxy   bool
 }
 
 type cacheEntry struct {
-	provider *provider.Provider
-	config   clientConfig
-	client   *http.Client
+	config clientConfig
+	client *http.Client
 }
 
 // Factory owns clients keyed by provider ID. The zero value is ready to use.
@@ -135,7 +142,7 @@ func (f *Factory) NewClient(p *provider.Provider, options *Options) (*http.Clien
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if entry, ok := f.clients[p.ID]; ok && entry.config == config && reflect.DeepEqual(entry.provider, p) {
+	if entry, ok := f.clients[p.ID]; ok && entry.config == config {
 		return entry.client, nil
 	}
 	proxy, err := proxyFunction(config.proxyURL)
@@ -196,16 +203,13 @@ func (f *Factory) NewClient(p *provider.Provider, options *Options) (*http.Clien
 	if options != nil {
 		client.CheckRedirect = options.CheckRedirect
 	}
-	// Copy only on configuration changes. Cache lookups do not serialize or
-	// copy provider credentials, maps or model slices.
-	snapshot := provider.Clone(p)
 	if old, ok := f.clients[p.ID]; ok {
 		old.client.CloseIdleConnections()
 	}
 	if f.clients == nil {
 		f.clients = make(map[string]*cacheEntry)
 	}
-	f.clients[p.ID] = &cacheEntry{provider: &snapshot, config: config, client: client}
+	f.clients[p.ID] = &cacheEntry{config: config, client: client}
 	return client, nil
 }
 
@@ -235,16 +239,18 @@ func resolveConfig(p *provider.Provider, o *Options) (config clientConfig, contr
 		config.timeouts, config.proxyURL, config.tls = o.Timeouts, o.ProxyURL, o.TLS
 		control = o.Control
 		config.disableProxy = o.DisableProxy
+		if o.Policy != nil {
+			config.hasPolicy = true
+			config.policy = *o.Policy
+			config.policyProxyURL = o.PolicyProxyURL
+		}
 		if o.CheckRedirect != nil {
-			config.controlOwner = o
 			config.redirectCode = reflect.ValueOf(o.CheckRedirect).Pointer()
 		}
 		if o.DialContext != nil {
-			config.controlOwner = o
 			config.dialCode = reflect.ValueOf(o.DialContext).Pointer()
 		}
 		if control != nil {
-			config.controlOwner = o
 			config.controlCode = reflect.ValueOf(control).Pointer()
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -29,10 +30,26 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/upstream"
 )
 
+type handlerKey struct {
+	model      string
+	providerID string
+	keyID      string
+}
+
 type cachedRelay struct {
 	provider *provider.Provider
 	model    string
 	handler  *relay.Relay
+}
+
+func providersEqual(a, b *provider.Provider) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // Dispatcher reuses relays and translations for configured aliases, not
@@ -53,8 +70,8 @@ type Dispatcher struct {
 	resolver     routing.Resolver
 	options      relay.Options
 	mu           sync.Mutex
-	handlers     map[string]cachedRelay
-	translations map[string]cachedTranslation
+	handlers     map[handlerKey]cachedRelay
+	translations map[handlerKey]cachedTranslation
 }
 
 func New(resolver routing.Resolver, options *relay.Options) *Dispatcher {
@@ -63,8 +80,8 @@ func New(resolver routing.Resolver, options *relay.Options) *Dispatcher {
 	}
 	d := &Dispatcher{
 		resolver:     resolver,
-		handlers:     make(map[string]cachedRelay),
-		translations: make(map[string]cachedTranslation),
+		handlers:     make(map[handlerKey]cachedRelay),
+		translations: make(map[handlerKey]cachedTranslation),
 		Limiter:      reliability.NewLimiter(),
 	}
 	if options != nil {
@@ -159,16 +176,21 @@ func (d *Dispatcher) isLocalCountTokens(route *routing.Route, protocol ir.Protoc
 }
 
 func (d *Dispatcher) handler(model string, route *routing.Route) (*relay.Relay, error) {
+	var providerID string
+	if route.Provider != nil {
+		providerID = route.Provider.ID
+	}
+	key := handlerKey{model: model, providerID: providerID, keyID: route.KeyID}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if cached, found := d.handlers[model]; found && cached.provider == route.Provider && cached.model == route.UpstreamModel {
+	if cached, found := d.handlers[key]; found && cached.model == route.UpstreamModel && providersEqual(cached.provider, route.Provider) {
 		return cached.handler, nil
 	}
 	handler, err := relay.New(route.Provider, route.UpstreamModel, &d.options)
 	if err != nil {
 		return nil, err
 	}
-	d.handlers[model] = cachedRelay{provider: route.Provider, model: route.UpstreamModel, handler: handler}
+	d.handlers[key] = cachedRelay{provider: route.Provider, model: route.UpstreamModel, handler: handler}
 	return handler, nil
 }
 
