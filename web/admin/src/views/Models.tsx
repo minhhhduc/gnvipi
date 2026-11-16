@@ -96,6 +96,9 @@ export function ModelsView({ user }: { user: AdminUser }) {
       const result = await api<NvidiaRescanResult>("/admin/api/nvidia/models/rescan", { method: "POST", body: {} });
       setRescanResult(result);
       await load();
+      // The rescan rewrites the catalog, so the models on screen are stale
+      // until they are read again.
+      if (nvidiaOpen) await loadNvidiaModels();
     } catch (err) {
       setRescanResult(null);
       setRescanError(message(err));
@@ -170,8 +173,7 @@ export function ModelsView({ user }: { user: AdminUser }) {
     }
   };
 
-  const openNvidia = async () => {
-    setNvidiaOpen(true);
+  const loadNvidiaModels = async () => {
     setNvidiaLoading(true);
     try {
       const body = await api<ModelsResponse>("/admin/api/models");
@@ -181,6 +183,11 @@ export function ModelsView({ user }: { user: AdminUser }) {
     } finally {
       setNvidiaLoading(false);
     }
+  };
+
+  const openNvidia = async () => {
+    setNvidiaOpen(true);
+    await loadNvidiaModels();
   };
 
   if (callModel) {
