@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
@@ -309,7 +310,7 @@ func ValidateKeyRow(k KeyRow) error {
 		if k.SecretKVer <= 0 {
 			return fmt.Errorf("%w: key %s has key version %d", ErrUnknownKeyVersion, k.ID, k.SecretKVer)
 		}
-		if k.SecretLast4 == "" || len(k.SecretLast4) > 8 {
+		if k.SecretLast4 == "" || !utf8.ValidString(k.SecretLast4) || utf8.RuneCountInString(k.SecretLast4) > 8 {
 			return fmt.Errorf("%w: key %s has invalid secret_last4", ErrInvalidCredentialSource, k.ID)
 		}
 	} else if len(k.SecretNonce) != 0 || k.SecretKVer != 0 || k.SecretLast4 != "" {
