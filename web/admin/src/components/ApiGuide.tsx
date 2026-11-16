@@ -23,7 +23,7 @@ export function Snippet({ label, code }: { label: string; code: string }) {
 }
 
 /** Where automode is configured, gateway side and agent side. */
-export function AutomodeNote() {
+export function AutomodeNote({ protocol }: { protocol: Protocol }) {
   const { navigate } = useGateway();
   return (
     <div class="rounded-lg border border-line bg-panel2 px-3 py-2.5 text-[11px] leading-5 text-dim">
@@ -33,13 +33,15 @@ export function AutomodeNote() {
         <a href="/config" onClick={(e) => { e.preventDefault(); navigate("config"); }}>Config</a>{" "}
         and choose the <span class="font-semibold text-fg">Auto model</span> that <span class="mono">model: "automode"</span> is routed to. Each account has its own target.
       </div>
+      {protocol === "messages" && (
+        <div>
+          2. Claude Code: add the <span class="mono">env</span> block below to <span class="mono">~/.claude/settings.json</span> — it is gateway-wide and applies to every project.
+          The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GNVIPI_GATEWAY_TOKEN</span>, from API Keys);
+          provider Auth key / API key stay on the server in the provider's keys. Leave <span class="mono">ANTHROPIC_API_KEY</span> empty.
+        </div>
+      )}
       <div>
-        2. Claude Code: add the <span class="mono">env</span> block below to <span class="mono">~/.claude/settings.json</span> — it is gateway-wide and applies to every project.
-        The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GNVIPI_GATEWAY_TOKEN</span>, from API Keys);
-        provider Auth key / API key stay on the server in the provider's keys. Leave <span class="mono">ANTHROPIC_API_KEY</span> empty.
-      </div>
-      <div>
-        3. Built-in models: you can set <span class="mono">$your_model</span> to <span class="mono">automode</span> (routes to your configured Auto model) or <span class="mono">cycle</span> (rotates across enabled models).
+        {protocol === "messages" ? "3." : "2."} Built-in models: you can set <span class="mono">{protocol === "messages" ? "$your_model" : "model"}</span> to <span class="mono">automode</span> (routes to your configured Auto model) or <span class="mono">cycle</span> (rotates across enabled models).
       </div>
     </div>
   );
@@ -67,10 +69,16 @@ export function ModelApiGuide({ model }: { model: string }) {
         ))}
       </div>
       <Snippet label={`cURL · ${path}`} code={curlSample(protocol, alias)} />
-      <AutomodeNote />
-      <Snippet label="Claude Code · ~/.claude/settings.json" code={claudeCodeSettings(guideOrigin)} />
-      <Snippet label="Codex · ~/.codex/config.toml" code={codexConfig(alias)} />
-      <Snippet label="OpenCode · ~/.config/opencode/config.json" code={openCodeConfig(alias)} />
+      <AutomodeNote protocol={protocol} />
+      {protocol === "messages" && (
+        <Snippet label="Claude Code · ~/.claude/settings.json" code={claudeCodeSettings(guideOrigin)} />
+      )}
+      {protocol === "responses" && (
+        <Snippet label="Codex · ~/.codex/config.toml" code={codexConfig(alias)} />
+      )}
+      {protocol === "chat" && (
+        <Snippet label="OpenCode · ~/.config/opencode/config.json" code={openCodeConfig(alias)} />
+      )}
     </div>
   );
 }
