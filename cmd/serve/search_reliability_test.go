@@ -248,3 +248,40 @@ func TestDedupCanonicalizesURLs(t *testing.T) {
 		t.Fatalf("url = %q", results[0].URL)
 	}
 }
+
+func TestScholarlyBackendsAcquireRateLimitToken(t *testing.T) {
+	scholarly := []struct {
+		name string
+		body string
+	}{
+		{name: arxivName, body: `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>`},
+		{name: crossrefName, body: `{"message":{"items":[]}}`},
+		{name: openalexName, body: `{"results":[]}`},
+		{name: s2Name, body: `{"data":[]}`},
+	}
+
+	for _, sc := range scholarly {
+		t.Run(sc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+				hits.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(sc.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})
+			gw := testGateway(rt)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			_, err := gw.backends[sc.name].Search(ctx, QueryPlan{Backend: sc.name, MaxResults: 5, Queries: []string{"attention"}})
+			if err != nil {
+				t.Fatalf("%s Search failed: %v", sc.name, err)
+			}
+			if hits.Load() == 0 {
+				t.Fatalf("%s made 0 HTTP requests; rate limiter starved it", sc.name)
+			}
+		})
+	}
+}
