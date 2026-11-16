@@ -828,6 +828,19 @@ func TestLastActiveSuperuserProtected(t *testing.T) {
 			t.Fatalf("demoting one of two superusers must be allowed: %v", err)
 		}
 	})
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertUser(t, ctx, tx, "gnvipi", "superuser")
+		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'root' WHERE username = 'gnvipi'`); err != nil {
+			t.Fatalf("promoting sole active superuser to active root must be allowed: %v", err)
+		}
+	})
+	withRollback(t, ctx, conn, func(tx pgx.Tx) {
+		insertUser(t, ctx, tx, "gnvipi", "superuser")
+		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'root', status = 'disabled' WHERE username = 'gnvipi'`); err == nil ||
+			!strings.Contains(err.Error(), "last active superuser") {
+			t.Fatalf("promoting sole active superuser to disabled root = %v, want last-superuser error", err)
+		}
+	})
 }
 
 func TestConfigVersionBumpsPerStatement(t *testing.T) {

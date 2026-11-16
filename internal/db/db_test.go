@@ -10,7 +10,11 @@ import (
 	"testing/fstest"
 	"time"
 
+<<<<<<< HEAD
 	"github.com/jackc/pgx/v5/pgxpool"
+=======
+	"github.com/minhhhduc/gnvipi/migrations"
+>>>>>>> origin/main
 )
 
 func TestRedactDSN(t *testing.T) {
@@ -409,6 +413,26 @@ func TestComposeDefaultDSNPassesValidation(t *testing.T) {
 	}
 	if _, err := pgxpool.ParseConfig(cfg.DatabaseURL); err != nil {
 		t.Fatalf("Compose default DSN rejected by pgxpool.ParseConfig: %v", err)
+	}
+}
+
+func TestGuardRootPromotionMigrationEmbedded(t *testing.T) {
+	latest, err := LatestVersion(migrations.FS)
+	if err != nil {
+		t.Fatalf("LatestVersion: %v", err)
+	}
+	if latest < 8 {
+		t.Fatalf("LatestVersion = %d, want >= 8", latest)
+	}
+	up, err := migrations.FS.ReadFile("0008_guard_root_promotion.up.sql")
+	if err != nil {
+		t.Fatalf("read 0008 up migration: %v", err)
+	}
+	if !strings.Contains(string(up), "NEW.role NOT IN ('superuser', 'root')") {
+		t.Fatalf("0008 up migration missing root-preserving NEW.role guard")
+	}
+	if _, err := migrations.FS.ReadFile("0008_guard_root_promotion.down.sql"); err != nil {
+		t.Fatalf("read 0008 down migration: %v", err)
 	}
 }
 
