@@ -1,4 +1,4 @@
-import type { AdminUser } from "./auth";
+import { isOwnerLevelRole, type AdminUser } from "./auth";
 import type { KeyModel, ProviderKey, ProviderModel } from "./types";
 
 export type KeyReach = "full" | "disable" | "none";
@@ -94,13 +94,13 @@ export function keyOwnerLabel(user: AdminUser, key: ProviderKey): string {
  * owner reaches it fully, an admin reaches a foreign key only to disable it.
  */
 export function keyReach(user: AdminUser, key: ProviderKey): KeyReach {
-  if (user.role === "owner") return "full";
+  if (isOwnerLevelRole(user.role)) return "full";
   if (key.owner_id && key.owner_id === user.id) return "full";
   return user.role === "admin" ? "disable" : "none";
 }
 
 export function canManageProviders(role: string): boolean {
-  return role === "owner" || role === "admin";
+  return isOwnerLevelRole(role) || role === "admin";
 }
 
 export function canEditKey(reach: KeyReach): boolean {

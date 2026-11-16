@@ -625,9 +625,10 @@ func providerModelsWritable(identity *adminIdentity, key *providerstore.KeyRow) 
 	if identity == nil {
 		return false
 	}
-	switch identity.Role {
-	case auth.RoleOwner:
+	if identity.Role.AtLeast(auth.RoleOwner) {
 		return true
+	}
+	switch identity.Role {
 	case auth.RoleAdmin:
 		return key.OwnerID == "" || sameUserID(key.OwnerID, identity.UserID)
 	case auth.RoleUser:

@@ -125,13 +125,20 @@ export function UsersView({ user }: { user: AdminUser }) {
               </tr>
             </thead>
             <tbody>
-              {users.map((record) => (
+              {users.map((record) => {
+                // The built-in root account keeps no destructive control: the
+                // server refuses the write, so the console must not offer it.
+                const rootAccount = record.role === "root";
+                return (
                 <tr key={record.id}>
                   <td>
                     <div class="font-semibold">{record.display_name || record.username}</div>
                     <div class="text-[11px] text-dim">@{record.username}{record.email ? ` · ${record.email}` : ""}</div>
                   </td>
-                  <td><span class="chip capitalize">{record.role}</span></td>
+                  <td>
+                    <span class="chip capitalize">{record.role}</span>
+                    {rootAccount && <span class="ml-1 pill pill-mute" title="Seeded on every start; it cannot be deleted, renamed, demoted or disabled">built-in</span>}
+                  </td>
                   <td>
                     <span class={statusPill(record.status)}>{record.status}</span>
                     {record.must_change_password && <span class="ml-1 pill pill-warn">password change due</span>}
@@ -143,8 +150,12 @@ export function UsersView({ user }: { user: AdminUser }) {
                     <button class="btn btn-sm" onClick={() => setDialog({ kind: "password", user: record })}>Reset password</button>{" "}
                     <button
                       class="btn btn-sm"
-                      disabled={record.id === user.id}
-                      title={record.id === user.id ? "You cannot disable your own account" : undefined}
+                      disabled={record.id === user.id || rootAccount}
+                      title={
+                        rootAccount
+                          ? "The built-in root account cannot be disabled"
+                          : record.id === user.id ? "You cannot disable your own account" : undefined
+                      }
                       onClick={() => {
                         const status = record.status === "active" ? "disabled" : "active";
                         void mutate(`/admin/api/users/${record.id}`, "PUT", { status })
@@ -156,15 +167,20 @@ export function UsersView({ user }: { user: AdminUser }) {
                     </button>{" "}
                     <button
                       class="btn btn-sm btn-danger"
-                      disabled={record.id === user.id}
-                      title={record.id === user.id ? "You cannot delete your own account" : undefined}
+                      disabled={record.id === user.id || rootAccount}
+                      title={
+                        rootAccount
+                          ? "The built-in root account cannot be deleted"
+                          : record.id === user.id ? "You cannot delete your own account" : undefined
+                      }
                       onClick={() => setDialog({ kind: "delete", user: record })}
                     >
                       Delete
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -239,7 +255,9 @@ function UserFormDialog({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const roleLocked = target != null && !canChangeRole(target.id, viewerID);
+  // Root's role is fixed by the seeded account; editing its other fields is
+  // still allowed.
+  const roleLocked = target != null && (!canChangeRole(target.id, viewerID) || target.role === "root");
 
   const submit = async () => {
     setError(null);
@@ -318,7 +336,11 @@ function UserFormDialog({
             {!ROLES.includes(role) && <option value={role}>{role} (unknown)</option>}
             {ROLES.map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
-          {roleLocked && <span class="mt-1 block text-[11px] font-normal text-dim">You cannot change your own role.</span>}
+          {roleLocked && (
+            <span class="mt-1 block text-[11px] font-normal text-dim">
+              {target?.role === "root" ? "The built-in root role is fixed." : "You cannot change your own role."}
+            </span>
+          )}
         </label>
         {mode === "create" && (
           <label class="block text-xs font-semibold">

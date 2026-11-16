@@ -1,7 +1,7 @@
 import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../lib/api";
-import type { AdminUser } from "../lib/auth";
+import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
 import type { KeyModel, ModelInfo, ModelsResponse, NvidiaRescanResult, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
@@ -613,7 +613,7 @@ function KeyEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const canShare = target === null && user.role === "owner";
+  const canShare = target === null && isOwnerLevelRole(user.role);
   const [name, setName] = useState(target?.name ?? "");
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
   const [authKey, setAuthKey] = useState("");

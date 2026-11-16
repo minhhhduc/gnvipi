@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -234,4 +235,100 @@ func ChangePassword(ctx context.Context, db DB, userID, currentSessionToken, old
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RootUsername is the reserved name of the built-in root account. It is created
+// by every database-mode start and the database refuses to delete it.
+const RootUsername = "gnvipi"
+
+// RootInput is the built-in root account request.
+type RootInput struct {
+	Username           string
+	Password           string
+	MustChangePassword bool
+}
+
+// EnsureRoot creates the built-in root account when it is missing and returns
+// the row with a created flag. An existing account is left untouched apart from
+// a role promotion to root, so a password the operator already set survives
+// every restart. The advisory lock serialises concurrent starts; the seeded row
+// is audited as the system.
+//
+// The password is not checked against the login policy: the documented default
+// is a first-sign-in credential and MustChangePassword forces a real password
+// before the console answers anything else.
+func EnsureRoot(ctx context.Context, db DB, in RootInput, cfg BootstrapConfig) (*User, bool, error) {
+	cfg = cfg.normalized()
+	username := strings.TrimSpace(in.Username)
+	if username == "" {
+		return nil, false, fmt.Errorf("auth: root username must not be empty")
+	}
+	if in.Password == "" {
+		return nil, false, fmt.Errorf("auth: root password must not be empty")
+	}
+	hash, err := HashPassword(in.Password, cfg.Params, cfg.Pepper)
+	if err != nil {
+		return nil, false, err
+	}
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup after an aborted write
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('gnvipi:root'))`); err != nil {
+		return nil, false, err
+	}
+	u, err := GetUserByUsername(ctx, tx, username)
+	switch {
+	case errors.Is(err, ErrUserNotFound):
+		u, err = CreateUser(ctx, tx, CreateUserInput{
+			Username:           username,
+			DisplayName:        "Root",
+			Role:               RoleRoot,
+			PasswordHash:       hash,
+			MustChangePassword: in.MustChangePassword,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		if err := writeRootAudit(ctx, tx, "user.root.create", u); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+		return u, true, nil
+	case err != nil:
+		return nil, false, err
+	case u.Role == RoleRoot:
+		return u, false, nil
+	}
+
+	// The reserved name is held by an ordinary account: promote it, keeping the
+	// password its operator already knows.
+	root := RoleRoot
+	u, err = UpdateUserTx(ctx, tx, u.ID, UpdateUserInput{Role: &root})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := writeRootAudit(ctx, tx, "user.root.promote", u); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return u, false, nil
+}
+
+func writeRootAudit(ctx context.Context, tx Querier, action string, u *User) error {
+	return WriteAudit(ctx, tx, AuditEntry{
+		ActorType:  "system",
+		Action:     action,
+		TargetType: "user",
+		TargetID:   u.ID,
+		UserID:     u.ID,
+		Details:    map[string]any{"username": u.Username, "role": string(u.Role)},
+	})
 }

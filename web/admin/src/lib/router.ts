@@ -6,26 +6,27 @@ export function rawPageFromUrl(search: string): string {
   return new URLSearchParams(search).get("page") ?? "";
 }
 
+// Root is admitted everywhere: it is the built-in superuser above owner.
 const PAGE_ROLES: Record<Page, readonly AdminRole[]> = {
   // Dashboard owns the root path.
-  stats: ["owner", "admin", "user"],
+  stats: ["root", "owner", "admin", "user"],
   // The per-request audit view stays with operators; users keep the dashboard.
-  usage: ["owner", "admin", "user"],
+  usage: ["root", "owner", "admin", "user"],
   // Every role can test the models it can actually reach.
-  playground: ["owner", "admin", "user"],
+  playground: ["root", "owner", "admin", "user"],
   // The API guide is reference material; every role holds its own key.
-  api: ["owner", "admin", "user"],
+  api: ["root", "owner", "admin", "user"],
   // Every role reaches Models, because that is where users manage their own
   // provider keys and per-key model aliases.
-  models: ["owner", "admin", "user"],
-  config: ["owner", "admin"],
-  chromes: ["owner", "admin"],
+  models: ["root", "owner", "admin", "user"],
+  config: ["root", "owner", "admin"],
+  chromes: ["root", "owner", "admin"],
   // Every role holds gateway tokens, so every role can reach its own list.
-  tokens: ["owner", "admin", "user"],
+  tokens: ["root", "owner", "admin", "user"],
   // Account administration is owner-only, including read access.
-  users: ["owner"],
+  users: ["root", "owner"],
   // The audit trail is readable by owners only.
-  audit: ["owner"],
+  audit: ["root", "owner"],
 };
 
 const PAGE_PATHS: Record<Page, string> = {

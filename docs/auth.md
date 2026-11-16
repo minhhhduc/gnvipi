@@ -26,6 +26,35 @@ Operational steps for PostgreSQL itself are in
   keys, with an audit entry. Shared keys are unaffected.
 - The last active owner cannot be deleted, disabled or demoted. A database
   trigger is the final authority, so the rule also holds outside the console.
+  Root counts as an owner-level account here, so promoting an owner to root
+  keeps the guard satisfied.
+- The built-in **root** account (`gnvipi`) sits above owner. It is seeded on
+  every database-mode start and the database refuses to delete, rename, demote
+  or disable it, so a console mistake or direct `DELETE` cannot remove the
+  recovery identity. Root is not assignable: the admin API rejects
+  `role: "root"` on create and update, and the only path that creates it is
+  `auth.EnsureRoot` at startup.
+
+### The built-in root account
+
+Every database-mode start ensures the account `gnvipi` exists:
+
+- If `GNVIPI_ROOT_PASSWORD` is set, the account is created with that password
+  and no forced change. That variable is the way to own the password from the
+  environment.
+- Otherwise the account is created with the documented default password
+  `gnvipi` and `must_change_password`, so the first sign-in must choose a real
+  password before any other admin route answers. The startup log warns while
+  the default is still in use.
+- An account named `gnvipi` that already exists with another role is promoted
+  to root, keeping its password. An existing root row is never rewritten, so a
+  password set in the console survives restarts.
+- Seeding and promotion are audited as `user.root.create` and
+  `user.root.promote`.
+
+The server returns `403 {"code":"root_protected"}` for any attempt to delete,
+rename, demote or disable the account, and the same holds in `psql`
+(`root account cannot be deleted`).
 
 ### Key selection precedence
 
@@ -75,6 +104,9 @@ stored. Consequences:
 
 ## Roles
 
+Root holds every capability of an owner, on every route, and cannot be demoted.
+The table lists what owner, admin and user reach.
+
 | Capability | Owner | Admin | User |
 |---|---|---|---|
 | Inference through own gateway token | yes | yes | yes |
@@ -105,6 +137,10 @@ Notes:
   scope and an expiry; gateway tokens have no scope and may be non-expiring.
 - `must_change_password` blocks every admin API route except login, logout,
   session lookup and password change, regardless of role.
+- Root is a superuser for every declared route, so it also reaches the screens
+  listed as owner-only. The console still applies the same CSRF and
+  `must_change_password` gates, and its Users row has no role select, disable or
+  delete control.
 - File mode is different: one `-admin-token` protects `/admin`, and
   `-gateway-key` protects inference routes. There are no users or roles.
 
@@ -287,10 +323,11 @@ Rules verified in the schema and resolver:
 Basic auth secrets are JSON objects with `username` and `password`. Bearer and
 header secrets are the raw token value.
 
-### Master key
+### Root account and master key
 
 | Variable | Meaning |
 |---|---|
+| `GNVIPI_ROOT_PASSWORD` | Password for the built-in root account at first seed. Without it the account uses the default `gnvipi` and must change it at sign-in. |
 | `GNVIPI_MASTER_KEY` | Base64-encoded 32-byte key. Required in database mode. |
 | `GNVIPI_MASTER_KEY_VERSION` | Positive integer version; defaults to `1`. Encryption always uses this version. |
 | `GNVIPI_MASTER_KEY_PREVIOUS` | Comma-separated `version:base64` pairs accepted for decryption. |

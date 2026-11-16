@@ -106,6 +106,7 @@ describe("rawPageFromUrl", () => {
 describe("pageAllowed", () => {
   it("gates the owner-only users screen and the shared tokens screen", () => {
     expect(pageAllowed("users", "owner")).toBe(true);
+    expect(pageAllowed("users", "root")).toBe(true);
     expect(pageAllowed("users", "admin")).toBe(false);
     expect(pageAllowed("users", "user")).toBe(false);
     expect(pageAllowed("tokens", "owner")).toBe(true);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { Card, CardHead, Empty, PageHeader, Pager } from "../components/ui";
-import { isOwnerRole, type AdminUser } from "../lib/auth";
+import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
 import {
   auditMatches,
   auditTime,
@@ -77,13 +77,13 @@ export function AuditView({ user }: { user: AdminUser }) {
   };
 
   useEffect(() => {
-    if (!isOwnerRole(user.role)) return;
+    if (!isOwnerLevelRole(user.role)) return;
     void load(request);
   }, [request, user.role]);
 
   // The router already refuses an unauthorised ?page=, so this is the render
   // half of the same owner-only gate.
-  if (!isOwnerRole(user.role)) {
+  if (!isOwnerLevelRole(user.role)) {
     return (
       <>
         <PageHeader title="Audit" sub="Owner-only audit trail" />

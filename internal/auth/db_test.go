@@ -85,7 +85,7 @@ CREATE TABLE users (
   username citext NOT NULL UNIQUE CHECK (length(username) BETWEEN 3 AND 64),
   email citext UNIQUE,
   display_name text NOT NULL DEFAULT '' CHECK (length(display_name) <= 200),
-  role text NOT NULL CHECK (role IN ('owner', 'admin', 'user')),
+  role text NOT NULL CHECK (role IN ('root', 'owner', 'admin', 'user')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   password_hash text NOT NULL CHECK (length(password_hash) > 0),
   password_updated_at timestamptz NOT NULL DEFAULT now(),
@@ -151,15 +151,23 @@ CREATE TABLE audit_log (
   CHECK (length(details::text) <= 8192)
 );
 
+CREATE UNIQUE INDEX users_single_root ON users ((true)) WHERE role = 'root';
+
 CREATE FUNCTION users_guard_last_owner() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE remaining integer;
 BEGIN
+  IF OLD.role = 'root' THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'DELETE' THEN
     IF OLD.role = 'owner' AND OLD.status = 'active' THEN
       PERFORM pg_advisory_xact_lock(hashtext('gnvipi:owners'));
       SELECT count(*) INTO remaining FROM users
-       WHERE role = 'owner' AND status = 'active' AND id <> OLD.id;
+       WHERE role IN ('owner', 'root') AND status = 'active' AND id <> OLD.id;
       IF remaining = 0 THEN
         RAISE EXCEPTION 'last active owner cannot be deleted';
       END IF;
@@ -170,7 +178,7 @@ BEGIN
      AND (NEW.role <> 'owner' OR NEW.status <> 'active') THEN
     PERFORM pg_advisory_xact_lock(hashtext('gnvipi:owners'));
     SELECT count(*) INTO remaining FROM users
-     WHERE role = 'owner' AND status = 'active' AND id <> OLD.id;
+     WHERE role IN ('owner', 'root') AND status = 'active' AND id <> OLD.id;
     IF remaining = 0 THEN
       RAISE EXCEPTION 'last active owner cannot be demoted or disabled';
     END IF;
@@ -185,6 +193,34 @@ FOR EACH ROW EXECUTE FUNCTION users_guard_last_owner();
 CREATE TRIGGER users_guard_last_owner_bd
 BEFORE DELETE ON users
 FOR EACH ROW EXECUTE FUNCTION users_guard_last_owner();
+
+CREATE FUNCTION users_protect_root() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'root account cannot be deleted';
+  END IF;
+  IF NEW.username <> OLD.username THEN
+    RAISE EXCEPTION 'root account cannot be renamed';
+  END IF;
+  IF NEW.role <> 'root' THEN
+    RAISE EXCEPTION 'root account cannot be demoted';
+  END IF;
+  IF NEW.status <> 'active' THEN
+    RAISE EXCEPTION 'root account cannot be disabled';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER users_protect_root_bu
+BEFORE UPDATE OF username, role, status ON users
+FOR EACH ROW WHEN (OLD.role = 'root')
+EXECUTE FUNCTION users_protect_root();
+
+CREATE TRIGGER users_protect_root_bd
+BEFORE DELETE ON users
+FOR EACH ROW WHEN (OLD.role = 'root')
+EXECUTE FUNCTION users_protect_root();
 `
 
 //nolint:unparam // test helper keeps explicit call-site shape
@@ -926,4 +962,94 @@ func auditCount(t *testing.T, db *pgxpool.Pool, action string) int {
 }
 
 func rolePtr(r Role) *Role       { return &r }
+func strPtr(v string) *string    { return &v }
 func statusPtr(s Status) *Status { return &s }
+
+func TestRootAccountIsProtectedDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	root := createTestUser(t, db, RootUsername, RoleRoot, "correct horse battery staple")
+
+	if err := DeleteUser(ctx, db, root.ID); !errors.Is(err, ErrRootProtected) {
+		t.Fatalf("deleting root: %v", err)
+	}
+	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{Role: rolePtr(RoleOwner)}); !errors.Is(err, ErrRootProtected) {
+		t.Fatalf("demoting root: %v", err)
+	}
+	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{Status: statusPtr(StatusDisabled)}); !errors.Is(err, ErrRootProtected) {
+		t.Fatalf("disabling root: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE users SET username = 'hijacked' WHERE id = $1`, root.ID); err == nil {
+		t.Fatal("direct SQL renamed the root account")
+	}
+	if err := DeleteUser(ctx, db, root.ID); !errors.Is(err, ErrRootProtected) {
+		t.Fatal("root survived an indirect delete path")
+	}
+
+	// Fields that carry no root invariant stay writable.
+	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{DisplayName: strPtr("Root")}); err != nil {
+		t.Fatalf("renaming the display name of root: %v", err)
+	}
+	// Root is an owner-level account, so it keeps the last-owner guard satisfied.
+	owner := createTestUser(t, db, "second-owner", RoleOwner, "correct horse battery staple")
+	if err := DeleteUser(ctx, db, owner.ID); err != nil {
+		t.Fatalf("deleting an owner beside root: %v", err)
+	}
+}
+
+func TestEnsureRootSeedsOnceDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cfg := BootstrapConfig{Params: fastParams()}
+
+	first, created, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Password: "gnvipi", MustChangePassword: true}, cfg)
+	if err != nil {
+		t.Fatalf("seed root: %v", err)
+	}
+	if !created || first.Role != RoleRoot || !first.MustChangePassword {
+		t.Fatalf("seeded root = %+v created=%v", first, created)
+	}
+	if auditCount(t, db, "user.root.create") != 1 {
+		t.Fatal("seeding the root account was not audited")
+	}
+
+	// A restart with a different password must not re-hash the row: the
+	// operator's own password has to survive.
+	second, created, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Password: "another-password"}, cfg)
+	if err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	if created || second.ID != first.ID || second.PasswordHash != first.PasswordHash {
+		t.Fatal("an existing root row was rewritten")
+	}
+	if ok, _, err := VerifyPassword("gnvipi", second.PasswordHash, cfg.Params, nil); err != nil || !ok {
+		t.Fatal("the seeded password no longer matches the stored hash")
+	}
+	if auditCount(t, db, "user.root.create") != 1 {
+		t.Fatal("the second start seeded a duplicate root audit entry")
+	}
+}
+
+func TestEnsureRootPromotesExistingAccountDB(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cfg := BootstrapConfig{Params: fastParams()}
+	existing := createTestUser(t, db, RootUsername, RoleUser, "chosen-by-operator")
+
+	u, created, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Password: "gnvipi"}, cfg)
+	if err != nil {
+		t.Fatalf("promote root: %v", err)
+	}
+	if created {
+		t.Fatal("promoting an existing account reported a create")
+	}
+	if u.ID != existing.ID || u.Role != RoleRoot {
+		t.Fatalf("promoted = %+v", u)
+	}
+	if ok, _, err := VerifyPassword("chosen-by-operator", u.PasswordHash, cfg.Params, nil); err != nil || !ok {
+		t.Fatal("promotion replaced the account password")
+	}
+	if auditCount(t, db, "user.root.promote") != 1 {
+		t.Fatal("promotion was not audited")
+	}
+}

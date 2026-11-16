@@ -2,7 +2,7 @@ import { toChildArray, type ComponentChildren, type VNode } from "preact";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import { message } from "./admin";
-import { isOwnerRole } from "./auth";
+import { isOwnerLevelRole } from "./auth";
 import { pageAllowed, pageFromUrl } from "./router";
 import {
   auditMatches,
@@ -49,13 +49,15 @@ const entryJSON = {
 const CANARY = "canary-super-secret-1f4a9";
 
 describe("audit role gate", () => {
-  it("opens only for an exact owner role", () => {
-    expect(isOwnerRole("owner")).toBe(true);
+  it("opens only for an exact owner-level role", () => {
+    expect(isOwnerLevelRole("owner")).toBe(true);
+    expect(isOwnerLevelRole("root")).toBe(true);
     for (const role of ["admin", "user", "Owner", "OWNER", "toString", "__proto__", ""]) {
-      expect(isOwnerRole(role)).toBe(false);
+      expect(isOwnerLevelRole(role)).toBe(false);
     }
 
     expect(pageAllowed("audit", "owner")).toBe(true);
+    expect(pageAllowed("audit", "root")).toBe(true);
     expect(pageAllowed("audit", "admin")).toBe(false);
     expect(pageAllowed("audit", "user")).toBe(false);
     expect(pageFromUrl("?page=audit", "owner")).toBe("audit");

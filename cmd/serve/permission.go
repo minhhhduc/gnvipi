@@ -375,6 +375,12 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 				}
 			}
 			reach, ok := perm.roles[identity.Role]
+			// Root is the built-in superuser: it is admitted to every declared
+			// route with full reach. CSRF and the password-change gate above
+			// still apply, so a seeded root must still change its password.
+			if !ok && identity.Role == auth.RoleRoot {
+				reach, ok = ownAny, true
+			}
 			if !ok {
 				adminAPIError(c, http.StatusForbidden, "forbidden", "this action is not permitted for your role")
 				return

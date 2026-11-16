@@ -59,7 +59,7 @@ func handlePlaygroundModels(runtime *providerRuntime, prefs *modelPrefs) gin.Han
 		if !ok {
 			return
 		}
-		union := identity != nil && identity.Role == auth.RoleOwner && strings.TrimSpace(c.Query("user_id")) == ""
+		union := identity != nil && identity.Role.AtLeast(auth.RoleOwner) && strings.TrimSpace(c.Query("user_id")) == ""
 		out := make([]playgroundModel, 0, 32)
 		keyAliases := make(map[string]struct{})
 		if runtime != nil {

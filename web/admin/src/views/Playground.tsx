@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
-import type { AdminUser } from "../lib/auth";
+import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
 import type { AdminUserRecord } from "../lib/types";
 import { message } from "../lib/admin";
 import { useGateway } from "../lib/context";
@@ -34,7 +34,7 @@ const MAX_IMAGE_BYTES = 700 * 1024;
 const DEFAULT_TEMPERATURE = 1;
 
 export function PlaygroundView({ user }: { user: AdminUser }) {
-  const owner = user.role === "owner";
+  const owner = isOwnerLevelRole(user.role);
   const { navigate } = useGateway();
   const [accounts, setAccounts] = useState<AdminUserRecord[]>([]);
   const [accountID, setAccountID] = useState("");

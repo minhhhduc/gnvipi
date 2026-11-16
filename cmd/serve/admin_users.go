@@ -132,6 +132,10 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
 			return
 		}
+		if role == auth.RoleRoot {
+			adminFieldError(c, http.StatusBadRequest, "role", "the root role is reserved for the built-in gnvipi account")
+			return
+		}
 		if err := auth.ValidatePassword(req.Password, req.Username, req.Email); err != nil {
 			adminFieldError(c, http.StatusBadRequest, "password", err.Error())
 			return
@@ -223,6 +227,10 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 				adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
 				return
 			}
+			if role == auth.RoleRoot {
+				adminFieldError(c, http.StatusBadRequest, "role", "the root role is reserved for the built-in gnvipi account")
+				return
+			}
 			patch.Role = &role
 		}
 		if req.Status != nil {
@@ -250,6 +258,9 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 			return
 		case errors.Is(err, auth.ErrLastOwner):
 			adminFieldError(c, http.StatusConflict, "role", "the last active owner cannot be demoted or disabled")
+			return
+		case errors.Is(err, auth.ErrRootProtected):
+			adminAPIError(c, http.StatusForbidden, "root_protected", "the built-in root account cannot be renamed, demoted or disabled")
 			return
 		case errors.Is(err, auth.ErrInvalidRole):
 			adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
@@ -306,6 +317,8 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 				adminNotFoundResponse(c)
 			case errors.Is(err, auth.ErrLastOwner):
 				adminFieldError(c, http.StatusConflict, "id", "the last active owner cannot be deleted")
+			case errors.Is(err, auth.ErrRootProtected):
+				adminAPIError(c, http.StatusForbidden, "root_protected", "the built-in root account cannot be deleted")
 			default:
 				adminAPIError(c, http.StatusInternalServerError, "delete_unavailable", "could not delete the user")
 			}
