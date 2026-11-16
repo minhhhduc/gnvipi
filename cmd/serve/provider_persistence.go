@@ -108,6 +108,16 @@ func initialCatalog() (groups []ModelGroup, meta map[string]any) {
 // Store callbacks are nil here; existing gateway callbacks run once, in order,
 // after both the full v2 store and the derived legacy view have been published.
 func (p *modelPrefs) commitPrefs(edit func(*prefsFile) error, providersChanged bool) error {
+	return p.commitPrefsAs(nil, edit, providersChanged)
+}
+
+// commitPrefsAs records identity (nil outside the admin API) so database mode
+// can credit the account that changed the mask, a deletion or the search URL.
+// Database mode writes model_state/settings and never touches the models file.
+func (p *modelPrefs) commitPrefsAs(identity *adminIdentity, edit func(*prefsFile) error, providersChanged bool) error {
+	if p.dbSettings != nil {
+		return p.commitPrefsDB(identity, edit, providersChanged)
+	}
 	p.mu.Lock()
 	if p.loadErr != nil {
 		err := p.loadErr

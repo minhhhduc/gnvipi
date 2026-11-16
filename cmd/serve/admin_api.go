@@ -236,7 +236,7 @@ func registerAdminAPIRoutes(engine *gin.Engine, p *modelPrefs, catalog []*clipro
 	engine.GET("/admin/api/config/search", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"url": p.searchTemplate()})
 	})
-	engine.POST("/admin/api/config/search", handleAdminSearch)
+	engine.POST("/admin/api/config/search", func(c *gin.Context) { handleAdminAPISetSearch(c, p) })
 
 	chromeHandler := func(c *gin.Context) {
 		if chromes == nil {
@@ -1028,6 +1028,23 @@ func handleAdminAPIListModels(c *gin.Context, p *modelPrefs, catalog []*cliproxy
 		})
 		seen[m.ID] = true
 	}
+	if p.dbSettings != nil && p.dbSettings.runtime != nil {
+		// Database mode lists the aliases the committed configuration declares:
+		// shared mappings surface their public id, never the operator's alias.
+		for _, alias := range p.dbSettings.runtime.store.Current().ModelAliases() {
+			if seen[alias.ID] || p.isDeleted(alias.ID) {
+				continue
+			}
+			items = append(items, adminAPIModel{
+				ID:        alias.ID,
+				Name:      alias.ID,
+				Publisher: alias.Provider,
+				Hidden:    p.isHidden(alias.ID),
+				Custom:    true,
+			})
+			seen[alias.ID] = true
+		}
+	}
 	for _, cp := range p.listProviders() {
 		id := cp.modelID()
 		if id == "" || seen[id] || p.isDeleted(id) {
@@ -1063,7 +1080,7 @@ func handleAdminAPISetModelMask(c *gin.Context, p *modelPrefs) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := p.setHidden(payload.MasksID); err != nil {
+	if err := p.setHiddenAs(adminIdentityOf(c), payload.MasksID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1080,7 +1097,7 @@ func handleAdminAPIDeleteModel(c *gin.Context, p *modelPrefs) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
 		return
 	}
-	if err := p.addDeleted(id); err != nil {
+	if err := p.addDeletedAs(adminIdentityOf(c), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -1098,7 +1115,7 @@ func handleAdminAPIModelAction(c *gin.Context, p *modelPrefs) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "unknown admin API path"})
 		return
 	}
-	if err := p.removeDeleted(id); err != nil {
+	if err := p.removeDeletedAs(adminIdentityOf(c), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

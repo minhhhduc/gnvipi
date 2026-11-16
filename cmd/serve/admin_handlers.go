@@ -112,7 +112,7 @@ func handleAdminModels(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := prefs.setHidden(payload.MasksID); err != nil {
+	if err := prefs.setHiddenAs(adminIdentityOf(c), payload.MasksID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -181,7 +181,13 @@ func handleAdminAutomode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"model": id})
 }
 
-func handleAdminSearch(c *gin.Context) {
+func handleAdminSearch(c *gin.Context) { setSearchTemplate(c, prefs) }
+
+// handleAdminAPISetSearch is the same write against the wiring's prefs, so the
+// admin API and the legacy form path cannot diverge.
+func handleAdminAPISetSearch(c *gin.Context, p *modelPrefs) { setSearchTemplate(c, p) }
+
+func setSearchTemplate(c *gin.Context, p *modelPrefs) {
 	var payload struct {
 		URL string `json:"url"`
 	}
@@ -194,7 +200,7 @@ func handleAdminSearch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "enter an HTTPS search URL containing {query}"})
 		return
 	}
-	if err := prefs.setSearchURL(payload.URL); err != nil {
+	if err := p.setSearchURLAs(adminIdentityOf(c), payload.URL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -269,13 +275,13 @@ func handleAdminDelete(c *gin.Context) {
 		return
 	}
 	if payload.Restore {
-		if err := prefs.removeDeleted(payload.ID); err != nil {
+		if err := prefs.removeDeletedAs(adminIdentityOf(c), payload.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"restored": payload.ID})
 	} else {
-		if err := prefs.addDeleted(payload.ID); err != nil {
+		if err := prefs.addDeletedAs(adminIdentityOf(c), payload.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

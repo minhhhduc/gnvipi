@@ -63,6 +63,10 @@ type modelPrefs struct {
 	// maintenance/migration pool. Both are nil in file mode.
 	catalogRead  *pgxpool.Pool
 	catalogWrite *pgxpool.Pool
+	// dbSettings is set only in database mode: model_state and settings are
+	// the store for the mask, the deletion set and the search template, and
+	// -models-file is neither read nor written. Nil in file mode.
+	dbSettings *dbSettingsStore
 }
 
 type prefsFile struct {
@@ -252,21 +256,26 @@ func (p *modelPrefs) isDeleted(id string) bool {
 	return ok
 }
 
-// setHidden replaces the mask and writes it back to disk.
-func (p *modelPrefs) setHidden(ids []string) error {
+// setHidden replaces the mask. identity is recorded in database mode and may
+// be nil for file mode and tests.
+func (p *modelPrefs) setHidden(ids []string) error { return p.setHiddenAs(nil, ids) }
+
+func (p *modelPrefs) setHiddenAs(identity *adminIdentity, ids []string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error {
+	return p.commitPrefsAs(identity, func(file *prefsFile) error {
 		file.MasksID = append([]string(nil), ids...)
 		return nil
 	}, false)
 }
 
 // addDeleted adds a single model to the deleted set.
-func (p *modelPrefs) addDeleted(id string) error {
+func (p *modelPrefs) addDeleted(id string) error { return p.addDeletedAs(nil, id) }
+
+func (p *modelPrefs) addDeletedAs(identity *adminIdentity, id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error {
+	return p.commitPrefsAs(identity, func(file *prefsFile) error {
 		for _, existing := range file.DeletedID {
 			if existing == id {
 				return nil
@@ -278,10 +287,12 @@ func (p *modelPrefs) addDeleted(id string) error {
 }
 
 // removeDeleted restores a model from the deleted set.
-func (p *modelPrefs) removeDeleted(id string) error {
+func (p *modelPrefs) removeDeleted(id string) error { return p.removeDeletedAs(nil, id) }
+
+func (p *modelPrefs) removeDeletedAs(identity *adminIdentity, id string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error {
+	return p.commitPrefsAs(identity, func(file *prefsFile) error {
 		var retained []string
 		for _, existing := range file.DeletedID {
 			if existing != id {
@@ -350,10 +361,12 @@ func (p *modelPrefs) searchTemplate() string {
 	return p.searchURL
 }
 
-func (p *modelPrefs) setSearchURL(raw string) error {
+func (p *modelPrefs) setSearchURL(raw string) error { return p.setSearchURLAs(nil, raw) }
+
+func (p *modelPrefs) setSearchURLAs(identity *adminIdentity, raw string) error {
 	p.changeMu.Lock()
 	defer p.changeMu.Unlock()
-	return p.commitPrefs(func(file *prefsFile) error { file.SearchURL = raw; return nil }, false)
+	return p.commitPrefsAs(identity, func(file *prefsFile) error { file.SearchURL = raw; return nil }, false)
 }
 
 func validSearchURL(raw string) bool {

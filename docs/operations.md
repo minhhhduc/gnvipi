@@ -16,7 +16,7 @@ key handling are in [auth.md](auth.md).
 | `-admin-token` | `GNVIPI_ADMIN_TOKEN` | *(disabled)* | Admin authentication token. Required for `/admin` on non-loopback binds; the console stays open on loopback without it. |
 | `-disable-admin-ui` | — | `false` | Remove the admin UI and admin API entirely (headless proxy mode); `/v1/*` and `/mcp` are unaffected. |
 | `-gateway-v2` | — | `true` | Gateway core dispatcher routing all custom providers (default on; false is deprecated). |
-| `-models-file` | — | `internal/models/playground_models.json` | Path to saved provider configuration, masks, and model preferences. |
+| `-models-file` | — | `internal/models/playground_models.json` | Path to saved provider configuration, masks, and model preferences. File mode only: with `GNVIPI_DATABASE_URL` set, PostgreSQL owns provider configuration, masks, deletions and the search template instead, and this file is neither read nor written. |
 | `-max-body-bytes` | — | `33554432` (32 MiB) | Maximum request body bytes for `/v1/*` routes (enforces `http.MaxBytesReader`). |
 | `-max-admin-body-bytes` | — | `1048576` (1 MiB) | Maximum request body bytes for administrative endpoints. |
 | `-deny-private-upstreams` | — | `false` | Deny loopback and RFC 1918 private LAN addresses for custom upstreams (SSRF protection). |
@@ -102,7 +102,8 @@ endpoint supporting web search:
 
 | Data | Default Location | Override |
 |---|---|---|
-| Catalog, admin settings, provider API keys | `internal/models/playground_models.json` | `-models-file` |
+| Catalog, admin settings, provider API keys (file mode) | `internal/models/playground_models.json` | `-models-file` |
+| Catalog, admin settings, provider keys, masks, deletions, search template (database mode) | PostgreSQL schema from `migrations/` | `GNVIPI_DATABASE_URL` |
 | Request history | User cache: `gnvipi/stats.jsonl` | `GNVIPI_STATS_FILE` |
 | Captcha champion state | User cache: `gnvipi/playground-state.json` | `GNVIPI_CAPTCHA_STATE` |
 

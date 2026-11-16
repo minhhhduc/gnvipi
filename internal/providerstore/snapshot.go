@@ -233,6 +233,81 @@ func (s *Snapshot) AvailableModels(userID string, allOwners bool) []AvailableMod
 	return out
 }
 
+// ModelAlias is one selectable id a provider mapping declares. It carries no
+// credential material and, for a shared mapping, the public id rather than the
+// operator's alias (#313).
+type ModelAlias struct {
+	ID         string
+	ProviderID string
+	Provider   string
+}
+
+// ModelAliases lists every selectable alias and shared public id. Unlike
+// AvailableModels it applies no hidden/deleted filtering: the console needs a
+// masked or deleted id in view in order to unmask or restore it. Mappings that
+// are hidden or outranked by a personal mapping of the same alias are omitted,
+// because no caller can select them.
+func (s *Snapshot) ModelAliases() []ModelAlias {
+	if s == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]ModelAlias, 0, len(s.sharedIDs)+len(s.sharedEx))
+	add := func(id, providerID string) {
+		if id == "" || providerID == "" {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		seen[id] = struct{}{}
+		name := providerID
+		if p, ok := s.providers[providerID]; ok && p != nil && p.Name != "" {
+			name = p.Name
+		}
+		out = append(out, ModelAlias{ID: id, ProviderID: providerID, Provider: name})
+	}
+	for id, entry := range s.sharedIDs {
+		if len(entry.list) > 0 {
+			add(id, entry.list[0].providerID)
+		}
+	}
+	personal := make(map[string]struct{}, len(s.personalEx))
+	for _, aliases := range s.personalEx {
+		for alias := range aliases {
+			personal[alias] = struct{}{}
+		}
+	}
+	for alias, list := range s.sharedEx {
+		if _, outranked := personal[alias]; outranked {
+			continue
+		}
+		for _, c := range list {
+			if !c.hidden {
+				add(alias, c.providerID)
+				break
+			}
+		}
+	}
+	for _, aliases := range s.personalEx {
+		for alias, list := range aliases {
+			for _, c := range list {
+				if !c.hidden {
+					add(alias, c.providerID)
+					break
+				}
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b ModelAlias) int {
+		if a.ProviderID != b.ProviderID {
+			return strings.Compare(a.ProviderID, b.ProviderID)
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out
+}
+
 // Audit codes reported for key-level routing failures.
 const (
 	AuditCredentialUnavailable = "provider_key_credential_unavailable"
