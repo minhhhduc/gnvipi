@@ -2,11 +2,15 @@ package db
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
 
@@ -264,10 +268,23 @@ func TestValidateDSNTLSRule(t *testing.T) {
 		{"local disable", "postgres://u@localhost:5432/x?sslmode=disable", false},
 		{"loopback disable", "postgres://u@127.0.0.1:5432/x?sslmode=disable", false},
 		{"ipv6 loopback disable", "postgres://u@[::1]:5432/x?sslmode=disable", false},
+		{"unix socket", "postgres://u@/x?host=/var/run/postgresql", false},
+		{"unix socket disable", "postgres://u@/x?host=/var/run/postgresql&sslmode=disable", false},
+		{"unix socket multi", "postgres://u@/x?host=/var/run/postgresql,/tmp", false},
+		{"empty host no socket", "postgres://u@/x", true},
+		{"empty host remote query", "postgres://u@/x?host=db.example.com&sslmode=disable", true},
+		{"unix socket mixed remote", "postgres://u@/x?host=/var/run/postgresql,db.example.com&sslmode=disable", true},
+		{"repeated host remote override", "postgres://u@/x?host=/var/run/postgresql&host=db.example.test&sslmode=disable", true},
+		{"repeated host unix sockets", "postgres://u@/x?host=/var/run/postgresql&host=/tmp&sslmode=disable", true},
+		{"local host with remote query", "postgres://u@localhost:5432/x?host=db.example.com&sslmode=disable", true},
+		{"remote host with socket query", "postgres://u@db.example.com:5432/x?host=/var/run/postgresql&sslmode=disable", true},
 		{"remote verify-full", "postgres://u@db.example.com:5432/x?sslmode=verify-full", false},
 		{"remote disable", "postgres://u@db.example.com:5432/x?sslmode=disable", true},
 		{"remote require", "postgres://u@db.example.com:5432/x?sslmode=require", true},
 		{"remote no sslmode", "postgres://u@db.example.com:5432/x", true},
+		{"repeated sslmode verify-full then disable", "postgres://u@db.example.com:5432/x?sslmode=verify-full&sslmode=disable", true},
+		{"repeated sslmode disable then verify-full", "postgres://u@db.example.com:5432/x?sslmode=disable&sslmode=verify-full", true},
+		{"unix socket repeated sslmode", "postgres://u@/x?host=/var/run/postgresql&sslmode=verify-full&sslmode=disable", true},
 		{"not a url", "host=localhost user=u", true},
 		{"wrong scheme", "mysql://u@localhost/x", true},
 	}
@@ -364,6 +381,35 @@ func TestAutoMigrateAllowed(t *testing.T) {
 	}
 	if AutoMigrateAllowed("production") || AutoMigrateAllowed(" PRODUCTION ") {
 		t.Fatal("auto-migrate must be refused in production")
+	}
+}
+
+func TestComposeDefaultDSNPassesValidation(t *testing.T) {
+	composePath := filepath.Join("..", "..", "docker-compose.yml")
+	raw, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", composePath, err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*GNVIPI_DATABASE_URL:\s*\$\{GNVIPI_DATABASE_URL:-([^}\r\n]+)\}`)
+	m := re.FindSubmatch(raw)
+	if len(m) != 2 {
+		t.Fatalf("default GNVIPI_DATABASE_URL not found in %s", composePath)
+	}
+	dsn := strings.TrimSpace(string(m[1]))
+
+	if err := ValidateDSN(dsn); err != nil {
+		t.Fatalf("Compose default DSN rejected by ValidateDSN: %v", err)
+	}
+	env := mapLookup(map[string]string{"GNVIPI_DATABASE_URL": dsn})
+	cfg, err := LoadConfigFrom(env)
+	if err != nil {
+		t.Fatalf("Compose default DSN rejected by LoadConfigFrom: %v", err)
+	}
+	if _, err := LoadMigrationURLFrom(env); err != nil {
+		t.Fatalf("Compose default DSN rejected by LoadMigrationURLFrom: %v", err)
+	}
+	if _, err := pgxpool.ParseConfig(cfg.DatabaseURL); err != nil {
+		t.Fatalf("Compose default DSN rejected by pgxpool.ParseConfig: %v", err)
 	}
 }
 

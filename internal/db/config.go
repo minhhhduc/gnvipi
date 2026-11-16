@@ -161,23 +161,56 @@ func AutoMigrateAllowed(env string) bool {
 }
 
 // ValidateDSN checks that raw is a postgres URL and applies the spec's TLS
-// rule: non-local hosts require sslmode=verify-full.
+// rule: non-local hosts require sslmode=verify-full. Local TCP loopback hosts
+// and local Unix domain sockets do not require TLS.
 func ValidateDSN(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return fmt.Errorf("invalid database URL %s", RedactDSN(raw))
 	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return fmt.Errorf("invalid database URL %s", RedactDSN(raw))
+	}
+	hosts := q["host"]
+	if len(hosts) > 1 {
+		return fmt.Errorf("invalid database URL %s: repeated host parameter", RedactDSN(raw))
+	}
+	sslmodes := q["sslmode"]
+	if len(sslmodes) > 1 {
+		return fmt.Errorf("invalid database URL %s: repeated sslmode parameter", RedactDSN(raw))
+	}
 	host := u.Hostname()
 	if host == "" {
+		if len(hosts) == 1 && isLocalUnixSocket(hosts[0]) {
+			return nil
+		}
 		return fmt.Errorf("invalid database URL %s: missing host", RedactDSN(raw))
+	}
+	if len(hosts) > 0 {
+		return fmt.Errorf("invalid database URL %s: ambiguous host parameter", RedactDSN(raw))
 	}
 	if isLocalHost(host) {
 		return nil
 	}
-	if mode := strings.ToLower(u.Query().Get("sslmode")); mode != "verify-full" {
+	if len(sslmodes) != 1 || !strings.EqualFold(sslmodes[0], "verify-full") {
 		return fmt.Errorf("database host %q is not local; sslmode=verify-full is required", host)
 	}
 	return nil
+}
+
+func isLocalUnixSocket(rawHost string) bool {
+	rawHost = strings.TrimSpace(rawHost)
+	if rawHost == "" {
+		return false
+	}
+	for _, part := range strings.Split(rawHost, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(part, "/") || part == "/" {
+			return false
+		}
+	}
+	return true
 }
 
 func isLocalHost(host string) bool {
