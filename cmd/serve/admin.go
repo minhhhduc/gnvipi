@@ -477,6 +477,28 @@ func compatProviders(list []gatewayprovider.Provider) []config.OpenAICompatibili
 	return out
 }
 
+// registerLegacyAdminRoutes registers the legacy /admin/* endpoints used in
+// file-backed mode. Database mode omits them so callers use /admin/api/* with
+// RBAC, CSRF, must_change_password, and audit logging.
+func registerLegacyAdminRoutes(engine *gin.Engine, catalog []*cliproxy.ModelInfo, chromes *chromeLifecycle) {
+	adminHandler := func(c *gin.Context) {
+		adminRoutes(c, catalog)
+	}
+	chromeHandler := func(c *gin.Context) {
+		chromeRoutes(c, chromes)
+	}
+	engine.GET("/admin/stats", adminHandler)
+	engine.GET("/admin/chromes", chromeHandler)
+	engine.POST("/admin/chromes", chromeHandler)
+	engine.POST("/admin/models", adminHandler)
+	engine.POST("/admin/automode", adminHandler)
+	engine.POST("/admin/cycle", adminHandler)
+	engine.POST("/admin/search", adminHandler)
+	engine.POST("/admin/providers", adminHandler)
+	engine.POST("/admin/delete", adminHandler)
+	engine.POST("/admin/retry-failed", adminHandler)
+}
+
 // adminRoutes serves the manager page and its actions.
 func adminRoutes(c *gin.Context, catalog []*cliproxy.ModelInfo) {
 	if strings.HasPrefix(c.Request.URL.Path, "/admin/api/") {
