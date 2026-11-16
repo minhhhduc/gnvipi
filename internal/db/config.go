@@ -168,17 +168,32 @@ func ValidateDSN(raw string) error {
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return fmt.Errorf("invalid database URL %s", RedactDSN(raw))
 	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return fmt.Errorf("invalid database URL %s", RedactDSN(raw))
+	}
+	hosts := q["host"]
+	if len(hosts) > 1 {
+		return fmt.Errorf("invalid database URL %s: repeated host parameter", RedactDSN(raw))
+	}
+	sslmodes := q["sslmode"]
+	if len(sslmodes) > 1 {
+		return fmt.Errorf("invalid database URL %s: repeated sslmode parameter", RedactDSN(raw))
+	}
 	host := u.Hostname()
 	if host == "" {
-		if isLocalUnixSocket(u.Query().Get("host")) {
+		if len(hosts) == 1 && isLocalUnixSocket(hosts[0]) {
 			return nil
 		}
 		return fmt.Errorf("invalid database URL %s: missing host", RedactDSN(raw))
 	}
+	if len(hosts) > 0 {
+		return fmt.Errorf("invalid database URL %s: ambiguous host parameter", RedactDSN(raw))
+	}
 	if isLocalHost(host) {
 		return nil
 	}
-	if mode := strings.ToLower(u.Query().Get("sslmode")); mode != "verify-full" {
+	if len(sslmodes) != 1 || strings.ToLower(sslmodes[0]) != "verify-full" {
 		return fmt.Errorf("database host %q is not local; sslmode=verify-full is required", host)
 	}
 	return nil
