@@ -70,7 +70,7 @@ On Windows:
 ```
 
 Add your providers via the Admin Console at `http://localhost:8080/models`: create the provider (name, base URL, protocol), then open it and add keys — Auth key (bearer) and/or API key (`x-api-key`)
-or directly in `-models-file` (default: `internal/models/playground_models.json`).
+or directly in `-models-file` (default: `internal/models/playground_models.json`, file mode only — with `GNVIPI_DATABASE_URL` set, providers, masks, deletions and the search template live in PostgreSQL).
 
 ### 2. NVIDIA Playground (With Headless Chrome Captcha Solvers)
 
@@ -188,7 +188,8 @@ Node/TypeScript, Codex CLI, OpenCode, and the full compatibility matrix are in
 ## Provider Configuration
 
 Providers are declared with the typed v2 schema, either in the configured models
-file (`-models-file`) or from the Admin UI at `/models`. From the UI:
+file (`-models-file`, file mode) or from the Admin UI at `/models`, which writes
+to PostgreSQL when a database is configured. From the UI:
 give the provider an **ID** and **base URL**, pick the **wire protocol**
 (`openai-chat`, `anthropic-messages`, or `openai-responses`), map model aliases
 (upstream IDs or wildcards such as `openrouter/*`), add the **API key**, then

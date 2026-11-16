@@ -134,11 +134,17 @@ func (d *appDB) runRetention(ctx context.Context) error {
 	return err
 }
 
+// databaseConfigured reports whether a database URL selects database mode.
+// Without it the gateway keeps the file-backed admin and routing state.
+func databaseConfigured() bool {
+	return strings.TrimSpace(os.Getenv(databaseEnv)) != ""
+}
+
 // openAppDB connects when the operator configured a database. A configured but
 // unreachable, unmigrated or half-migrated database is a startup error: serving
 // credential checks from an unexpected schema must fail closed, never degrade.
 func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
-	if strings.TrimSpace(os.Getenv(databaseEnv)) == "" {
+	if !databaseConfigured() {
 		if db.IsProduction(strings.TrimSpace(os.Getenv("GNVIPI_ENV"))) {
 			return nil, fmt.Errorf("%s is required when GNVIPI_ENV=production", databaseEnv)
 		}

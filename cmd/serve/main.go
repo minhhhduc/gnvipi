@@ -178,7 +178,9 @@ func runServer() (err error) {
 		return fmt.Errorf("stats configuration: %w", err)
 	}
 
-	if *modelsFile != "" {
+	// File mode owns the models file. Database mode keeps the same settings
+	// (mask, deletions, search template) in PostgreSQL and never opens it.
+	if !databaseConfigured() && *modelsFile != "" {
 		if err := prefs.load(*modelsFile); err != nil {
 			return fmt.Errorf("models file: %w", err)
 		}
@@ -250,6 +252,7 @@ func runServer() (err error) {
 		if err := prefs.loadStoredNvidiaCatalog(ctx); err != nil {
 			return fmt.Errorf("nvidia catalog: %w", err)
 		}
+		prefs.dbSettings = &dbSettingsStore{pool: appState.pool}
 	}
 
 	// Database mode also owns routing configuration: one immutable snapshot per
@@ -263,6 +266,12 @@ func runServer() (err error) {
 	defer snapshotRuntime.Close()
 	if appState != nil && snapshotRuntime != nil {
 		prefs.userRouting = newUserRoutingPrefs(appState.pool, snapshotRuntime.router, prefs)
+	}
+	if prefs.dbSettings != nil {
+		prefs.dbSettings.runtime = snapshotRuntime
+		if err := prefs.loadStateDB(ctx); err != nil {
+			return fmt.Errorf("database settings: %w", err)
+		}
 	}
 
 	exec := nvidia.NewExecutor(&nvidia.Options{
