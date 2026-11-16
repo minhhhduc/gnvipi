@@ -873,3 +873,54 @@ func TestProviderRuntimeCanceledWaiterReportsDegraded(t *testing.T) {
 		t.Fatalf("canceled waiter config_version = %d, want the last observed 5", health.ConfigVersion)
 	}
 }
+
+func TestProviderRuntimeOnPublishRefreshesPrefs(t *testing.T) {
+	source := &stubSnapshotSource{version: 1, rows: stubSnapshotRows()}
+	var maskCalls atomic.Int32
+	prefsB := &modelPrefs{
+		dbSettings:   &dbSettingsStore{},
+		onMaskChange: func() { maskCalls.Add(1) },
+	}
+
+	runtimeB, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		OnPublish: prefsB.applySnapshotDB,
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtimeB.Close)
+
+	if maskCalls.Load() != 1 {
+		t.Fatalf("initial onMaskChange calls = %d, want 1", maskCalls.Load())
+	}
+
+	nextRows := stubSnapshotRows()
+	nextRows.ModelState = []providerstore.ModelStateRow{
+		{ModelID: "acme/hidden", Hidden: true},
+		{ModelID: "acme/gone", Deleted: true},
+	}
+	nextRows.Settings = []providerstore.SettingRow{
+		{Key: "search", Value: []byte(`{"url":"https://search.example.test/?q={query}"}`)},
+	}
+	source.mu.Lock()
+	source.rows = nextRows
+	source.version = 2
+	source.mu.Unlock()
+
+	if err := runtimeB.store.Reload(t.Context()); err != nil {
+		t.Fatalf("reload snapshot: %v", err)
+	}
+
+	if !prefsB.isHidden("acme/hidden") {
+		t.Fatal("refreshed prefsB did not observe remote hidden model")
+	}
+	if !prefsB.isDeleted("acme/gone") {
+		t.Fatal("refreshed prefsB did not observe remote deleted model")
+	}
+	if got := prefsB.searchTemplate(); got != "https://search.example.test/?q={query}" {
+		t.Fatalf("refreshed searchTemplate = %q", got)
+	}
+	if maskCalls.Load() != 2 {
+		t.Fatalf("refreshed onMaskChange calls = %d, want 2", maskCalls.Load())
+	}
+}
