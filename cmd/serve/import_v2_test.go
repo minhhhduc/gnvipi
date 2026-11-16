@@ -183,6 +183,47 @@ func TestImportV2RoundTripScopesModelsAndAPIKeyMapping(t *testing.T) {
 	}
 }
 
+func TestImportV2AcceptsActiveRootOwner(t *testing.T) {
+	pool := newAdminTestPool(t, requiredImportTestDSN(t))
+	const rootID = "00000000-0000-0000-0000-000000000002"
+	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, status, password_hash) VALUES ($1::uuid, 'gnvipi', 'root', 'active', 'test-hash')`, rootID); err != nil {
+		t.Fatalf("create root owner: %v", err)
+	}
+	ring := importTestKeyring(t)
+	raw := []byte(`{
+		"schema_version": 2,
+		"providers_v2": [
+			{
+				"id": "root-owned",
+				"name": "Root Owned",
+				"base_url": "https://root-owned.example/v1",
+				"protocol": "openai-chat",
+				"auth": {"scheme": "bearer", "key": "root-import-secret"},
+				"models": [{"alias": "root-owned/a", "upstream_model": "a", "legacy_position": 1}],
+				"timeouts": {},
+				"enabled": true,
+				"tls": "default"
+			}
+		]
+	}`)
+
+	imported, err := providerstore.ImportV2(t.Context(), pool, raw, "gnvipi", false, ring, nil)
+	if err != nil {
+		t.Fatalf("import v2 as root: %v", err)
+	}
+	if !imported {
+		t.Fatal("first import as root reported a no-op")
+	}
+
+	rows, _, err := providerstore.NewDBRowSource(pool).LoadConfig(t.Context())
+	if err != nil {
+		t.Fatalf("load imported config: %v", err)
+	}
+	if len(rows.Keys) != 1 || rows.Keys[0].OwnerID != rootID {
+		t.Fatalf("imported keys = %+v, want single key owned by root %s", rows.Keys, rootID)
+	}
+}
+
 func TestImportV2IdempotencyChangedSourceAndForce(t *testing.T) {
 	pool := newAdminTestPool(t, requiredImportTestDSN(t))
 	createImportOwner(t, pool)
