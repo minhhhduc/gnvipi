@@ -376,3 +376,64 @@ func TestUsageFormatNoCache(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func sseHTTPResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestStreamChatReportsSSEErrorEnvelope(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{DefaultModel: fixture(DefaultModel, NVFunctionID)})
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "openai error envelope",
+			payload: "data: {\"error\":{\"message\":\"dummy provider failure\",\"type\":\"server_error\"}}\n\ndata: [DONE]\n",
+			want:    "dummy provider failure",
+		},
+		{
+			name:    "midstream nvidia status error",
+			payload: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"part\"}}]}\n\ndata: {\"requestStatus\":{\"statusCode\":\"500\",\"statusDescription\":\"upstream exploded\"}}\n\ndata: [DONE]\n",
+			want:    "upstream exploded",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hc := &http.Client{
+				Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return sseHTTPResponse(tc.payload), nil
+				}),
+			}
+			client := New(WithCaptchaToken("tok"), WithModel(DefaultModel), WithHTTPClient(hc))
+			var sawDone bool
+			var sawErr error
+			err := client.StreamChat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, func(sc StreamChunk) {
+				if sc.Error != nil {
+					sawErr = sc.Error
+				}
+				if sc.Done {
+					sawDone = true
+				}
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("StreamChat() error = %v, want %q", err, tc.want)
+			}
+			if sawErr == nil || !strings.Contains(sawErr.Error(), tc.want) {
+				t.Fatalf("callback Error = %v, want %q", sawErr, tc.want)
+			}
+			if sawDone {
+				t.Fatal("unexpected Done callback after stream error")
+			}
+		})
+	}
+}
