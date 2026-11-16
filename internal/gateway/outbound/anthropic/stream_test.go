@@ -290,3 +290,52 @@ func TestStreamParallelToolCalling(t *testing.T) {
 		t.Errorf("message_stop = %+v, want StopToolUse", stopEvent)
 	}
 }
+
+func TestStreamNormalizesRefusalAndContextWindowStopReasons(t *testing.T) {
+	for _, tc := range []struct {
+		rawReason string
+		want      ir.StopReason
+	}{
+		{rawReason: "refusal", want: ir.StopContentFilter},
+		{rawReason: "model_context_window_exceeded", want: ir.StopMaxTokens},
+	} {
+		t.Run(tc.rawReason, func(t *testing.T) {
+			out := anthropic.New()
+			rawSSE := "event: message_start\n" +
+				"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"upstream\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
+				"event: message_delta\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + tc.rawReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n" +
+				"event: message_stop\n" +
+				"data: {\"type\":\"message_stop\"}\n\n"
+
+			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(rawSSE))}
+			stream, err := out.ParseStream(t.Context(), resp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := stream.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+
+			var stopEvent *ir.StreamEvent
+			for {
+				ev, err := stream.Next(t.Context())
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ev.Type == ir.EventMessageStop {
+					evCopy := ev
+					stopEvent = &evCopy
+				}
+			}
+			if stopEvent == nil || stopEvent.StopReason != tc.want {
+				t.Fatalf("message_stop = %+v, want StopReason %q", stopEvent, tc.want)
+			}
+		})
+	}
+}
