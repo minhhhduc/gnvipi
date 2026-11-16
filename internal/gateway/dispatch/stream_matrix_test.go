@@ -821,3 +821,104 @@ func TestCrossProtocolStreamingClientCancel(t *testing.T) {
 		t.Fatal("expected completion error on cancellation")
 	}
 }
+
+func TestAnthropicStreamStopReasonsToOpenAIClients(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name               string
+		anthropicReason    string
+		wantChatFinish     string
+		wantRespIncomplete string
+	}{
+		{
+			name:               "refusal",
+			anthropicReason:    "refusal",
+			wantChatFinish:     `"finish_reason":"content_filter"`,
+			wantRespIncomplete: `"reason":"content_filter"`,
+		},
+		{
+			name:               "model_context_window_exceeded",
+			anthropicReason:    "model_context_window_exceeded",
+			wantChatFinish:     `"finish_reason":"length"`,
+			wantRespIncomplete: `"reason":"max_output_tokens"`,
+		},
+	}
+
+	for _, tc := range cases {
+		for _, client := range []struct {
+			name    string
+			route   string
+			reqBody string
+			want    string
+		}{
+			{
+				name:    "openaichat",
+				route:   gatewaytest.RouteChat,
+				reqBody: `{"model":"client-alias","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+				want:    tc.wantChatFinish,
+			},
+			{
+				name:    "openairesponses",
+				route:   gatewaytest.RouteResponses,
+				reqBody: `{"model":"client-alias","stream":true,"input":"hi"}`,
+				want:    tc.wantRespIncomplete,
+			},
+		} {
+			t.Run(tc.name+"_"+client.name, func(t *testing.T) {
+				upstreamSSE := "event: message_start\n" +
+					"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-fixture\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"upstream\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
+					"event: message_delta\n" +
+					"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + tc.anthropicReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n" +
+					"event: message_stop\n" +
+					"data: {\"type\":\"message_stop\"}\n\n"
+
+				u := gatewaytest.New(t)
+				u.Script(gatewaytest.RouteMessages, gatewaytest.Step{
+					Status:  http.StatusOK,
+					Headers: map[string]string{"Content-Type": "text/event-stream"},
+					Body:    upstreamSSE,
+				})
+
+				prov := &provider.Provider{
+					ID:       "anthropic-up",
+					Name:     "Anthropic Upstream",
+					BaseURL:  u.URL(),
+					Protocol: ir.ProtocolAnthropicMessages,
+					Auth:     provider.Auth{Scheme: provider.AuthAPIKey, Key: "sk-ant-test"},
+				}
+				resolver := staticResolver{
+					routes: map[string]routing.Route{
+						"client-alias": {
+							Kind:             routing.Custom,
+							Provider:         prov,
+							UpstreamModel:    "claude-upstream",
+							UpstreamProtocol: ir.ProtocolAnthropicMessages,
+						},
+					},
+				}
+				recorder := newStreamMatrixRecorder()
+				dispatcher := dispatch.New(resolver, &relay.Options{Recorder: recorder})
+				dispatcher.Registry = setupStreamMatrixRegistry()
+
+				engine := gin.New()
+				engine.Use(dispatcher.Handle)
+
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, client.route, strings.NewReader(client.reqBody))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				engine.ServeHTTP(w, req)
+
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), client.want) {
+					t.Fatalf("expected %s in stream body, got:\n%s", client.want, w.Body.String())
+				}
+				completion := recorder.waitCompletion(t)
+				if completion.Err != nil {
+					t.Fatalf("unexpected completion error: %v", completion.Err)
+				}
+			})
+		}
+	}
+}
