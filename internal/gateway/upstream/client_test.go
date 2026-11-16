@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -458,5 +459,108 @@ func TestRegisteredFlagsConfigureTimeout(t *testing.T) {
 	}
 	if err == nil || gwerr.StatusForKind(gwerr.KindFromErr(err)) != 504 {
 		t.Fatalf("flag-configured error = %v, want header timeout", err)
+	}
+}
+
+func TestFactoryReusesClientAcrossKeysModelsAndFreshOptions(t *testing.T) {
+	var newConns, closedConns atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := io.WriteString(w, "ok"); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			newConns.Add(1)
+		case http.StateClosed:
+			closedConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	factory := NewFactory()
+	defer factory.CloseIdleConnections()
+
+	policy := provider.URLPolicy{}
+	newOpts := func(p provider.URLPolicy, proxyURL string) *Options {
+		return &Options{
+			DisableProxy:   true,
+			Policy:         &p,
+			PolicyProxyURL: proxyURL,
+			Control:        p.Control,
+			DialContext:    p.Dialer(nil, nil, nil),
+			CheckRedirect:  p.CheckRedirect,
+		}
+	}
+
+	p1 := &provider.Provider{
+		ID:      "shared-provider",
+		BaseURL: server.URL,
+		Auth:    provider.Auth{Scheme: provider.AuthBearer, Key: "key-1"},
+		Headers: map[string]string{"X-Key": "1"},
+		Models:  []provider.ModelMapping{{Alias: "m1", UpstreamModel: "u1"}},
+	}
+	client1, err := factory.NewClient(p1, newOpts(policy, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doGet := func(c *http.Client) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadAll(resp.Body); err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doGet(client1)
+
+	// Different Auth.Key, Headers, Models, and freshly allocated Options/Dialer
+	// for the same provider ID must reuse the same *http.Client and idle TCP conn.
+	p2 := &provider.Provider{
+		ID:      "shared-provider",
+		BaseURL: server.URL,
+		Auth:    provider.Auth{Scheme: provider.AuthBearer, Key: "key-2"},
+		Headers: map[string]string{"X-Key": "2"},
+		Models:  []provider.ModelMapping{{Alias: "m2", UpstreamModel: "u2"}},
+	}
+	client2, err := factory.NewClient(p2, newOpts(policy, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client2 != client1 {
+		t.Fatalf("expected same *http.Client across keys/models and fresh Options")
+	}
+	if client2.Transport != client1.Transport {
+		t.Fatalf("expected same Transport across keys/models")
+	}
+	doGet(client2)
+
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("new TCP connections = %d, want 1 (idle connection should be reused)", got)
+	}
+	if got := closedConns.Load(); got != 0 {
+		t.Fatalf("closed TCP connections = %d, want 0 (CloseIdleConnections must not be called)", got)
+	}
+
+	// Changing URLPolicy must invalidate and return a new client.
+	strictPolicy := provider.URLPolicy{DenyPrivate: true}
+	client3, err := factory.NewClient(p2, newOpts(strictPolicy, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client3 == client1 {
+		t.Fatalf("expected new *http.Client when URLPolicy changes")
 	}
 }
