@@ -97,6 +97,9 @@ type rateLimiter struct {
 }
 
 func newRateLimiter(capacity float64, interval time.Duration) *rateLimiter {
+	if capacity < 1 {
+		capacity = 1
+	}
 	return &rateLimiter{tokens: capacity, cap: capacity, interval: interval, last: time.Now()}
 }
 

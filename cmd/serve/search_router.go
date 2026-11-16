@@ -33,10 +33,10 @@ func newSearchGateway() *searchGateway {
 		bingName:     newSharedClient(gatewayUA, 1.5, 2*time.Second, 3, 5),
 		ddgName:      newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
 		customName:   newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
-		arxivName:    newSharedClient(scholarlyUA, 0.5, 3*time.Second, 2, 4),
-		crossrefName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
-		openalexName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
-		s2Name:       newSharedClient(gatewayUA, 0.4, 3*time.Second, 2, 4),
+		arxivName:    newSharedClient(scholarlyUA, 1, 3*time.Second, 2, 4),
+		crossrefName: newSharedClient(scholarlyUA, 1, 1500*time.Millisecond, 3, 5),
+		openalexName: newSharedClient(scholarlyUA, 1, 1500*time.Millisecond, 3, 5),
+		s2Name:       newSharedClient(gatewayUA, 1, 3*time.Second, 2, 4),
 	}
 	gw := &searchGateway{
 		backends: map[string]SearchBackend{
