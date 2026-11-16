@@ -360,7 +360,7 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 		req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
 		req.Password = strings.TrimSpace(req.Password)
 		ctx := c.Request.Context()
-		if targetID == identity.UserID {
+		if sameUserID(targetID, identity.UserID) {
 			if req.CurrentPassword == "" {
 				adminFieldError(c, http.StatusBadRequest, "current_password", "current password is required")
 				return
@@ -446,7 +446,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 			return
 		}
 		gatewayTokenCache.PurgeAll()
-		if target.ID == identity.UserID {
+		if sameUserID(target.ID, identity.UserID) {
 			adminClearCredentials(c)
 		}
 		c.JSON(http.StatusOK, gin.H{"revoked_sessions": sessions, "revoked_tokens": tokens})

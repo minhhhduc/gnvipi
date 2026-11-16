@@ -842,3 +842,26 @@ func TestDBAdminAuth_SelfPasswordChangeUnlocksCachedGatewayToken(t *testing.T) {
 		})
 	}
 }
+
+func TestDBAdminAuth_SelfPasswordCanonicalUUIDVariants(t *testing.T) {
+	h := newDBAdminHarness(t)
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{name: "uppercase", id: strings.ToUpper(h.superuser.ID)},
+		{name: "dashless", id: strings.ReplaceAll(h.superuser.ID, "-", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users/"+tc.id+"/password", gin.H{
+				"password": "Valid-New-Password9!",
+			}, bearer(h.token))
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("POST without current_password = %d %s, want 400", res.Code, res.Body.String())
+			}
+			if decodeBody(t, res)["field"] != "current_password" {
+				t.Fatalf("expected current_password field error, got %s", res.Body.String())
+			}
+		})
+	}
+}
