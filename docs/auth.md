@@ -45,7 +45,8 @@ Every database-mode start ensures the account `gnvipi` exists:
 - Otherwise the account is created with the documented default password
   `gnvipi` and `must_change_password`, so the first sign-in must choose a real
   password before any other admin route answers. The startup log warns while
-  the default is still in use.
+  the default is still in use. The login policy refuses a password containing
+  the username, so only the seed can ever set that default.
 - An account named `gnvipi` that already exists with another role is promoted
   to root, keeping its password. An existing root row is never rewritten, so a
   password set in the console survives restarts.

@@ -276,7 +276,8 @@ function UserFormDialog({
     } else {
       // The edit PUT skips the username/password checks but still hits the same
       // display-name CHECK; an unknown server role must also be resolved first.
-      const field = displayNameError(displayName) ?? roleError(role);
+      // A locked role is not sent, so it needs no validation either.
+      const field = displayNameError(displayName) ?? (roleLocked ? null : roleError(role));
       if (field) {
         setError(field.message);
         return;
@@ -290,9 +291,11 @@ function UserFormDialog({
           body: { username: username.trim(), display_name: displayName.trim(), email: email.trim(), role, password },
         });
       } else {
+        // A locked role is never sent: root's role is fixed server-side and
+        // echoing it back would be rejected as a reserved-role write.
         await api(`/admin/api/users/${target?.id}`, {
           method: "PUT",
-          body: { display_name: displayName.trim(), email: email.trim(), role },
+          body: { display_name: displayName.trim(), email: email.trim(), ...(roleLocked ? {} : { role }) },
         });
       }
       onSaved();
@@ -333,7 +336,9 @@ function UserFormDialog({
           Role
           <select class="input mt-1" value={role} disabled={busy || roleLocked}
             onChange={(e) => setRole((e.target as HTMLSelectElement).value)}>
-            {!ROLES.includes(role) && <option value={role}>{role} (unknown)</option>}
+            {!ROLES.includes(role) && (
+              <option value={role}>{role === "root" ? "root (built-in)" : `${role} (unknown)`}</option>
+            )}
             {ROLES.map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
           {roleLocked && (
