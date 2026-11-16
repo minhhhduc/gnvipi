@@ -155,7 +155,8 @@ func newRequestCache(ttl time.Duration) *requestCache {
 func newSharedClient(userAgent string, capacity float64, interval time.Duration, maxRetries, failuresToOpen int) *sharedSearchClient {
 	return &sharedSearchClient{
 		httpClient: &http.Client{
-			Timeout: 20 * time.Second,
+			Timeout:   20 * time.Second,
+			Transport: searchURLPolicy().GuardTransport(nil, nil),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if !publicSearchHost(req.URL) {
 					return errSearchRedirect

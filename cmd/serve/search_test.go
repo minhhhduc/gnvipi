@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"golang.org/x/net/html"
 )
 
@@ -405,5 +408,82 @@ func TestConfiguredSearchImmutableTemplateSnapshot(t *testing.T) {
 	}
 	if len(seenHosts) != 0 {
 		t.Fatalf("expected no network requests on cache hit, saw %v", seenHosts)
+	}
+}
+
+type staticSearchResolver map[string][]net.IPAddr
+
+func (r staticSearchResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if addrs, ok := r[host]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+func TestSearchURLSSRFValidationAndDialProtection(t *testing.T) {
+	rejected := []string{
+		"https://localhost./search?q={query}",
+		"https://sub.localhost./search?q={query}",
+		"https://host.local./search?q={query}",
+		"https://0.0.0.0/search?q={query}",
+		"https://[::]/search?q={query}",
+		"https://[::1%25lo0]/search?q={query}",
+		"https://[2001:db8::1%25eth0]/search?q={query}",
+		"https://metadata.google.internal/search?q={query}",
+		"https://metadata.google.internal./search?q={query}",
+		"https://169.254.169.254/search?q={query}",
+		"https://[fd00:ec2::254]/search?q={query}",
+		"https://224.0.0.1/search?q={query}",
+	}
+	for _, raw := range rejected {
+		if validSearchURL(raw) {
+			t.Fatalf("validSearchURL(%q) = true, want false", raw)
+		}
+		target := strings.ReplaceAll(raw, "{query}", "test")
+		if u, err := url.Parse(target); err == nil && publicSearchHost(u) {
+			t.Fatalf("publicSearchHost(%q) = true, want false", target)
+		}
+	}
+
+	var hitLoopback bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitLoopback = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Both searchClient and newSharedClient must block dialing loopback at dial time.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/search?q=test", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := searchClient.Do(req); err == nil {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close response body: %v", cerr)
+		}
+		t.Fatalf("searchClient.Do(%q) succeeded, want dial-time SSRF error", srv.URL)
+	}
+	if hitLoopback {
+		t.Fatal("searchClient reached loopback httptest server")
+	}
+
+	sc := newSharedClient("test-ua", 10, time.Millisecond, 0, 5)
+	if _, err := sc.do(context.Background(), srv.URL+"/search?q=test", nil); err == nil {
+		t.Fatalf("newSharedClient.do(%q) succeeded, want dial-time SSRF error", srv.URL)
+	}
+	if hitLoopback {
+		t.Fatal("newSharedClient reached loopback httptest server")
+	}
+
+	// DNS resolution of a public hostname to loopback, link-local, or private IPs must be blocked at dial time.
+	for _, ip := range []string{"127.0.0.1", "169.254.169.254", "10.0.0.1"} {
+		resolver := staticSearchResolver{
+			"public.example.com": {{IP: net.ParseIP(ip)}},
+		}
+		guarded := newSharedClient("test-ua", 10, time.Millisecond, 0, 5)
+		guarded.httpClient.Transport = gatewayprovider.URLPolicy{DenyPrivate: true}.GuardTransport(nil, resolver)
+		if _, err := guarded.do(context.Background(), "https://public.example.com/search?q=test", nil); err == nil {
+			t.Fatalf("guarded.do for resolved IP %s succeeded, want dial-time SSRF error", ip)
+		}
 	}
 }
