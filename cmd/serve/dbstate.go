@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/db"
+	"github.com/minhhhduc/gnvipi/internal/mailer"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 	"github.com/minhhhduc/gnvipi/migrations"
 )
@@ -195,6 +196,12 @@ func openAppDB(ctx context.Context, autoMigrate bool) (*appDB, error) {
 	}
 	state := newAuthState(pool, &password)
 	state.keyring = keyring
+	smtpCfg, err := mailer.LoadConfigFrom(os.LookupEnv)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("smtp configuration: %w", err)
+	}
+	state.mailer = mailer.NewSMTPSender(smtpCfg)
 	retention, err := loadRetentionConfig(state.sessions)
 	if err != nil {
 		pool.Close()

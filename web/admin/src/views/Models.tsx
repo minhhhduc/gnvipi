@@ -389,6 +389,14 @@ function ProviderKeys({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [keyModels, setKeyModels] = useState<Record<string, KeyModel[]>>({});
   const [modelsLoading, setModelsLoading] = useState<string | null>(null);
+  const [reveal, setReveal] = useState<{
+    key: ProviderKey;
+    to: string;
+    otp: string;
+    secret: string | null;
+    error: string | null;
+    busy: boolean;
+  } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -454,6 +462,33 @@ function ProviderKeys({
       setExpanded(null);
     } finally {
       setModelsLoading(null);
+    }
+  };
+
+  const requestReveal = async (key: ProviderKey) => {
+    setReveal({ key, to: "", otp: "", secret: null, error: null, busy: true });
+    try {
+      const res = await api<{ to?: string }>(`${keyPath(key)}/reveal/request`, { method: "POST", body: {} });
+      setReveal({ key, to: res.to || "your email", otp: "", secret: null, error: null, busy: false });
+    } catch (err) {
+      toast(`Reveal failed: ${message(err)}`, "bad");
+      setReveal(null);
+    }
+  };
+
+  const verifyReveal = async () => {
+    if (!reveal || reveal.secret !== null) return;
+    const otp = reveal.otp.trim();
+    if (!otp) {
+      setReveal({ ...reveal, error: "Enter the 6-digit verification code" });
+      return;
+    }
+    setReveal({ ...reveal, error: null, busy: true });
+    try {
+      const res = await api<{ secret: string }>(`${keyPath(reveal.key)}/reveal`, { method: "POST", body: { otp } });
+      setReveal({ ...reveal, secret: res.secret, error: null, busy: false });
+    } catch (err) {
+      setReveal({ ...reveal, error: message(err), busy: false });
     }
   };
 
@@ -532,6 +567,9 @@ function ProviderKeys({
                         {canEditKey(reach) && (
                           <button class="btn btn-sm" onClick={() => setDialog({ kind: "edit", key })}>Edit</button>
                         )}{" "}
+                        {canEditKey(reach) && key.has_secret && (
+                          <button class="btn btn-sm" onClick={() => void requestReveal(key)}>Show</button>
+                        )}{" "}
                         {canTestKey(reach) && key.auth_scheme !== "none" && (
                           <button class="btn btn-sm" onClick={() => void runTest(key)}>Test</button>
                         )}{" "}
@@ -581,6 +619,48 @@ function ProviderKeys({
           onClose={() => setDialog(null)}
           onSaved={() => { setDialog(null); toast("Key created"); void load(); }}
         />
+      )}
+      {reveal && (
+        <Dialog
+          title={`Show key · ${reveal.key.name}`}
+          confirmLabel={reveal.secret !== null ? "Copy" : "Verify"}
+          busy={reveal.busy}
+          onCancel={() => setReveal(null)}
+          onConfirm={() => {
+            if (reveal.secret !== null) {
+              void navigator.clipboard.writeText(reveal.secret).then(
+                () => toast("Copied"),
+                () => toast("Copy failed", "bad"),
+              );
+            } else {
+              void verifyReveal();
+            }
+          }}
+        >
+          {reveal.secret !== null ? (
+            <div class="space-y-2">
+              <div class="text-xs text-dim">Decrypted credential for <b class="text-fg">{reveal.key.name}</b>:</div>
+              <pre class="mono overflow-x-auto rounded-lg border border-line bg-panel2 px-3 py-2 text-xs select-all">{reveal.secret}</pre>
+            </div>
+          ) : (
+            <div class="space-y-2">
+              <div class="text-xs text-dim">
+                {reveal.to ? <>Enter the 6-digit OTP sent to <b class="text-fg">{reveal.to}</b>.</> : "Sending verification code…"}
+              </div>
+              <input
+                class="input mono w-full"
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="123456"
+                value={reveal.otp}
+                disabled={reveal.busy}
+                onInput={(e) => setReveal({ ...reveal, otp: (e.target as HTMLInputElement).value })}
+              />
+              {reveal.error && <div class="text-xs text-bad">{reveal.error}</div>}
+            </div>
+          )}
+        </Dialog>
       )}
       {dialog?.kind === "edit" && (
         <KeyEditorDialog
