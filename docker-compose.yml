@@ -34,7 +34,7 @@ services:
     shm_size: "2gb"
     restart: unless-stopped
     command: ["-auto", "-addr", ":8080"]
-    # Compose waits for PostgreSQL health but never runs migrations or owner
+    # Compose waits for PostgreSQL health but never runs migrations or superuser
     # bootstrap automatically; run those CLI steps explicitly.
     depends_on:
       db:

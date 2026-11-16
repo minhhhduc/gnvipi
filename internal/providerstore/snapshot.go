@@ -128,14 +128,14 @@ type AvailableModel struct {
 // AvailableModels lists the concrete aliases a caller can resolve, with the
 // same personal-before-shared precedence as request-time routing. Hidden rows
 // and aliases that may not shadow a protected model are omitted, as are
-// wildcards (they are patterns, not selectable models). allOwners returns the
-// owner console's union view: every account's personal aliases plus shared.
-func (s *Snapshot) AvailableModels(userID string, allOwners bool) []AvailableModel {
+// wildcards (they are patterns, not selectable models). allAccounts returns the
+// superuser console's union view: every account's personal aliases plus shared.
+func (s *Snapshot) AvailableModels(userID string, allAccounts bool) []AvailableModel {
 	if s == nil {
 		return nil
 	}
 	owners := []string{userID}
-	if allOwners {
+	if allAccounts {
 		owners = owners[:0]
 		for owner := range s.personalEx {
 			owners = append(owners, owner)

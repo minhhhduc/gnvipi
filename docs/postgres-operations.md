@@ -90,7 +90,7 @@ set both DSNs explicitly.
 
 If you override any `GNVIPI_DB_*` value, set the matching URI-encoded
 `GNVIPI_DATABASE_URL` as well. Compose waits for the database health check but
-never runs migrations or creates the first owner; run those steps yourself.
+never runs migrations or creates the first superuser; run those steps yourself.
 
 The `serve` service in compose reads:
 
@@ -238,8 +238,8 @@ SELECT version, dirty FROM schema_migrations;
 -- Exactly one config row, with a positive version.
 SELECT count(*) AS row_count, max(version) FROM config_state WHERE version > 0;
 
--- At least one active owner remains.
-SELECT count(*) FROM users WHERE role = 'owner' AND status = 'active';
+-- At least one active superuser remains.
+SELECT count(*) FROM users WHERE role = 'superuser' AND status = 'active';
 
 -- Stored secrets are complete: ciphertext, nonce and version always travel together.
 SELECT count(*) FROM provider_keys
@@ -252,7 +252,7 @@ SELECT column_name FROM information_schema.columns
 ```
 
 Expected results: `dirty = false`; one `config_state` row with a version greater
-than zero; at least one active owner; zero incomplete secret rows. The secret
+than zero; at least one active superuser; zero incomplete secret rows. The secret
 columns are `secret_enc`, `secret_nonce`, `secret_kver` and `secret_last4`;
 there is no plaintext key column.
 
@@ -277,7 +277,7 @@ plain-format physical base backup, not a logical dump or a tar backup.
 - [ ] `/healthz` reports `degraded: false` and a fresh `snapshot_version`.
 - [ ] A provider key with a stored secret resolves; if its requests return 503
   because the credential cannot be decrypted, the master key does not match.
-- [ ] Sign-in works for an owner, and one request succeeds end to end.
+- [ ] Sign-in works for a superuser, and one request succeeds end to end.
 - [ ] Record elapsed time and any manual steps.
 
 Sessions and API tokens restored from a backup remain valid until they expire or
@@ -355,15 +355,15 @@ docker compose up -d --wait db
 $env:GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
 $env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
 
-# Build, migrate, bootstrap an owner, run.
+# Build, migrate, bootstrap a superuser, run.
 go build -o .\bin\serve.exe ./cmd/serve
 .\bin\serve.exe migrate
-'<temporary-password>' | .\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+'<temporary-password>' | .\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token
 $env:GNVIPI_GATEWAY_TOKEN='gw_...'
 .\scripts\run.ps1 -Claude
 ```
 
-Copy the token printed by `create-owner` before running `run.ps1`.
+Copy the token printed by `create-superuser` before running `run.ps1`.
 
 The compose volume survives `docker compose down`. Use `docker compose down -v`
 only when you intend to delete the development database; there is no undo.

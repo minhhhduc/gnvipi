@@ -41,7 +41,7 @@ const (
 	keyReachNone keyReach = iota
 	// keyReachDisable is an admin on a foreign key: metadata read and disabling
 	// only. Secrets, names, schemes, credential clearing, tests and deletion
-	// stay with the owner and the key's own user.
+	// stay with the superuser and the key's own user.
 	keyReachDisable
 	keyReachFull
 )
@@ -50,7 +50,7 @@ func keyReachFor(identity *adminIdentity, key *providerstore.KeyRow) keyReach {
 	if identity == nil {
 		return keyReachNone
 	}
-	if identity.Role.AtLeast(auth.RoleOwner) {
+	if identity.Role.AtLeast(auth.RoleSuperuser) {
 		return keyReachFull
 	}
 	if key.OwnerID != "" && sameUserID(key.OwnerID, identity.UserID) {
@@ -417,7 +417,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 }
 
 // createKeyOwner resolves owner_id without widening a user's reach: a user may
-// only create keys for themselves, and only the owner creates shared keys.
+// only create keys for themselves, and only a superuser creates shared keys.
 func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteRequest) (string, bool) {
 	present, shared, id, err := body.ownerScope()
 	if err != nil {
@@ -428,13 +428,13 @@ func createKeyOwner(c *gin.Context, identity *adminIdentity, body *keyWriteReque
 		return identity.UserID, true
 	}
 	if shared {
-		if !identity.Role.AtLeast(auth.RoleOwner) {
-			adminAPIError(c, http.StatusForbidden, "forbidden", "only the owner may create shared keys")
+		if !identity.Role.AtLeast(auth.RoleSuperuser) {
+			adminAPIError(c, http.StatusForbidden, "forbidden", "only a superuser may create shared keys")
 			return "", false
 		}
 		return "", true
 	}
-	if identity.Role.AtLeast(auth.RoleOwner) || sameUserID(id, identity.UserID) {
+	if identity.Role.AtLeast(auth.RoleSuperuser) || sameUserID(id, identity.UserID) {
 		return id, true
 	}
 	adminAPIError(c, http.StatusForbidden, "forbidden", "a key may only be created for yourself")

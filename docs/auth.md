@@ -17,18 +17,18 @@ Operational steps for PostgreSQL itself are in
   not fields on the provider.
 - A **personal key** has `owner_id` set. Only that user may route through it.
 - A **shared key** has `owner_id` NULL. Shared keys must use `auth_scheme =
-  none`, so a shared key never carries another user's credential. Only an owner
-  may create one.
+  none`, so a shared key never carries another user's credential. Only a
+  superuser may create one.
 - Routing never reads another user's key. If an alias exists but the caller has
   no usable key, the request returns 403; an unknown alias returns 404; an
   unresolvable credential returns 503.
 - Deleting a user cascades their sessions and tokens and deletes their personal
   keys, with an audit entry. Shared keys are unaffected.
-- The last active owner cannot be deleted, disabled or demoted. A database
+- The last active superuser cannot be deleted, disabled or demoted. A database
   trigger is the final authority, so the rule also holds outside the console.
-  Root counts as an owner-level account here, so promoting an owner to root
-  keeps the guard satisfied.
-- The built-in **root** account (`gnvipi`) sits above owner. It is seeded on
+  Root counts as a superuser-level account here, so promoting a superuser to
+  root keeps the guard satisfied.
+- The built-in **root** account (`gnvipi`) sits above superuser. It is seeded on
   every database-mode start and the database refuses to delete, rename, demote
   or disable it, so a console mistake or direct `DELETE` cannot remove the
   recovery identity. Root is not assignable: the admin API rejects
@@ -105,12 +105,12 @@ stored. Consequences:
 
 ## Roles
 
-Root holds every capability of an owner, on every route, and cannot be demoted.
-That includes the account selectors on the playground and config pages, where
-root may name any user id exactly as an owner may. The table lists what owner,
-admin and user reach.
+Root holds every capability of a superuser, on every route, and cannot be
+demoted. That includes the account selectors on the playground and config
+pages, where root may name any user id exactly as a superuser may. The table
+lists what superuser, admin and user reach.
 
-| Capability | Owner | Admin | User |
+| Capability | Superuser | Admin | User |
 |---|---|---|---|
 | Inference through own gateway token | yes | yes | yes |
 | Own sessions, password, gateway tokens | yes | yes | yes |
@@ -135,13 +135,13 @@ Notes:
 - An admin can read every provider key's metadata but cannot read a secret. On a
   key owned by someone else, or a shared key, an admin may only disable it; the
   name, scheme, credential and deletion stay with the owner or the key's user.
-- Shared keys are created and fully managed by the owner. No user owns them.
+- Shared keys are created and fully managed by a superuser. No user owns them.
 - A user may not hold an admin token. Admin tokens require a `read` or `write`
   scope and an expiry; gateway tokens have no scope and may be non-expiring.
 - `must_change_password` blocks every admin API route except login, logout,
   session lookup and password change, regardless of role.
 - Root is a superuser for every declared route, so it also reaches the screens
-  listed as owner-only. The console still applies the same CSRF and
+  listed as superuser-only. The console still applies the same CSRF and
   `must_change_password` gates, and its Users row has no role select, disable or
   delete control.
 - File mode is different: one `-admin-token` protects `/admin`, and
@@ -164,12 +164,12 @@ $env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
 go build -o .\bin\serve.exe ./cmd/serve
 .\bin\serve.exe migrate
 
-'<temporary-password>' | .\bin\serve.exe admin create-owner `
-  --username <owner> --email <owner@example.com> --display-name '<Owner>' `
+'<temporary-password>' | .\bin\serve.exe admin create-superuser `
+  --username <superuser> --email <superuser@example.com> --display-name '<Superuser>' `
   --with-gateway-token
 ```
 
-`create-owner` flags are `--username` (required), `--email`, `--display-name`
+`create-superuser` flags are `--username` (required), `--email`, `--display-name`
 and `--with-gateway-token`. Usernames are case-insensitive and 3 to 64
 characters. The password is read from stdin, never from a flag, and is never
 written to output or audit.
@@ -179,16 +179,16 @@ it also refuses an MSYS2/mintty pipe, because that pseudo-terminal is a named
 pipe and cannot be told apart from a real pipeline. Pipe from cmd.exe or
 PowerShell instead.
 
-The owner and the optional gateway token are created in one transaction.
+The superuser and the optional gateway token are created in one transaction.
 Nothing is printed before the commit. The token is printed once, with the
 `gw_` prefix, and the plaintext is not stored. Save it in a password manager
 before closing the terminal. If stdout fails after the commit, the error names
-the owner that exists and the recovery command.
+the superuser that exists and the recovery command.
 
 Example output:
 
 ```text
-owner "<owner>" created (id <uuid>)
+superuser "<superuser>" created (id <uuid>)
 gateway token (shown once): gw_...
 ```
 
@@ -198,14 +198,15 @@ gateway token (shown once): gw_...
 
 - In file mode it is the normal admin token.
 - In database mode it is a **bootstrap** token. It authenticates only while the
-  `users` table is empty, and only to create the first owner through the admin
-  API. It cannot create a second user, a non-owner, or read any other route.
+  `users` table is empty, and only to create the first superuser through the
+  admin API. It cannot create a second user, a non-superuser, or read any other
+  route.
   Once any user exists it is ignored, even if still set. It never authenticates
   `/v1` requests.
 
 The console route is `POST /admin/api/users` with the bootstrap bearer token and
-a body of `{"username":"<owner>","password":"<password>","role":"owner"}`. The
-`serve admin create-owner` command is usually simpler.
+a body of `{"username":"<superuser>","password":"<password>","role":"superuser"}`.
+The `serve admin create-superuser` command is usually simpler.
 
 An explicit `-admin-token` value overrides `GNVIPI_ADMIN_TOKEN`, including an
 explicit empty value, which disables bootstrap. On a non-loopback bind, prefer
@@ -249,22 +250,22 @@ The user signs in with the temporary password and changes it. Because the reset
 revokes gateway tokens, mint a new token afterwards if the account still needs
 programmatic access.
 
-If an owner is available, the console can perform the same reset on the Users
+If a superuser is available, the console can perform the same reset on the Users
 page. The command is the fallback when no session can be created.
 
 ### Lost gateway token
 
 Sign in to the console and create a new gateway token for the account. The token
-is shown once. An owner can create a gateway token for any user; admin and user
+is shown once. A superuser can create a gateway token for any user; admin and user
 accounts can only create tokens for themselves. Resetting the password also
 revokes the old token, but it is not required just to replace one.
 
 ### Lost `GNVIPI_ADMIN_TOKEN`
 
-After the first owner exists the bootstrap token is ignored, so losing it has no
+After the first superuser exists the bootstrap token is ignored, so losing it has no
 effect. If the database is still empty and the token is lost, set a new
-`GNVIPI_ADMIN_TOKEN` before creating the first owner, or use
-`serve admin create-owner`.
+`GNVIPI_ADMIN_TOKEN` before creating the first superuser, or use
+`serve admin create-superuser`.
 
 ### Lost master key
 
@@ -314,7 +315,7 @@ Rules verified in the schema and resolver:
   the secret.
 - `key_env` is restricted to the `GNVIPI_KEY_*` namespace. `GNVIPI_MASTER_KEY`
   and other names are rejected.
-- The admin API refuses a new `key_ref` (422) for every role, the owner
+- The admin API refuses a new `key_ref` (422) for every role, the superuser
   included: a reference points into the adjacent `secrets.json`, which the
   gateway reads once at startup and never again. Store the secret value instead.
 - `key_ref` rows that already exist are materialized into a stored secret at
@@ -361,7 +362,7 @@ With `GNVIPI_DATABASE_URL` set, `automode` and `cycle` are **per account**:
 
 - They live in `user_routing_prefs`, one row per user, deleted with the user.
 - `GET`/`PUT /admin/api/config/automode` and `/cycle` act as the signed-in
-  account. An owner may pass `?user_id=<uuid>` to read or edit another
+  account. A superuser may pass `?user_id=<uuid>` to read or edit another
   account; anyone else naming a foreign id gets the same 404 as a missing one.
 - Resolution order is the account's own setting, then the global default, then
   a typed "not configured" error. The chosen target must resolve through the
@@ -373,7 +374,7 @@ With `GNVIPI_DATABASE_URL` set, `automode` and `cycle` are **per account**:
   `field_errors.models`. Each write is one transaction and is audited as
   `routing.automode.update` or `routing.cycle.update` with the model list.
 - File-backed mode (no `GNVIPI_DATABASE_URL`) keeps the single global
-  behaviour, edited by owner and admin accounts.
+  behaviour, edited by superuser and admin accounts.
 
 ## `scripts/run.ps1 -Claude`
 
@@ -402,7 +403,7 @@ $env:GNVIPI_GATEWAY_TOKEN='gw_...'
 To create the token:
 
 ```powershell
-.\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+.\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token
 ```
 
 or sign in to `/admin` and create a gateway token on the account page.

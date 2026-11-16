@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { computeAutoModeOptions, computeCycleAvailableOptions, computeCycleUnselected } from "../lib/helpers";
-import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
+import { isSuperuserLevelRole, type AdminUser } from "../lib/auth";
 import type { CycleConfig, ModelsResponse, UserList } from "../lib/types";
 import { Card, CardHead, Empty, IconChevronDown, IconChevronUp, IconX, PageHeader } from "../components/ui";
 import { HealthPill } from "../components/Shell";
@@ -95,8 +95,8 @@ export function ConfigView({ user }: { user: AdminUser }) {
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<UserList["users"]>([]);
   const [targetUser, setTargetUser] = useState("");
-  const isOwner = isOwnerLevelRole(user.role);
-  // Only an owner may address another account; everyone else edits their own.
+  const isSuperuser = isSuperuserLevelRole(user.role);
+  // Only a superuser may address another account; everyone else edits their own.
   const userQuery = targetUser ? `?user_id=${encodeURIComponent(targetUser)}` : "";
 
   const loadConfig = (account: string) => {
@@ -130,7 +130,7 @@ export function ConfigView({ user }: { user: AdminUser }) {
 
   useEffect(() => {
     loadConfig("");
-    if (!isOwner) return;
+    if (!isSuperuser) return;
     api<UserList>("/admin/api/users?limit=200")
       .then((list) => setAccounts(list.users || []))
       .catch(() => setAccounts([]));
@@ -227,7 +227,7 @@ export function ConfigView({ user }: { user: AdminUser }) {
         <HealthPill />
       </PageHeader>
 
-      {isOwner && (
+      {isSuperuser && (
         <Card>
           <div class="flex items-center gap-2 px-[15px] py-3">
             <label class="text-xs font-semibold" for="config-account">Account</label>
@@ -242,7 +242,7 @@ export function ConfigView({ user }: { user: AdminUser }) {
                 <option key={account.id} value={account.id}>{account.username} ({account.role})</option>
               ))}
             </select>
-            <p class="ml-auto text-[11px] text-dim">Owners may read and edit another account's settings.</p>
+            <p class="ml-auto text-[11px] text-dim">Superusers may read and edit another account's settings.</p>
           </div>
         </Card>
       )}

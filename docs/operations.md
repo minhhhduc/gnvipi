@@ -71,7 +71,7 @@ Database-backed sign-in, roles and bootstrap are in [auth.md](auth.md).
 `automode` is a Claude-side alias: requests to it are forwarded, unchanged, to the
 model selected for your account. With a database-backed gateway each account has
 its own target, resolved through that account's keys plus shared `none` keys; an
-owner may edit another account's settings from the config page. Without a
+superuser may edit another account's settings from the config page. Without a
 database the setting stays process-wide.
 
 The **Config** page (`/config`) always exposes the virtual model

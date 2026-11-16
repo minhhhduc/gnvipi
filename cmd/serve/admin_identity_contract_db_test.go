@@ -144,7 +144,7 @@ func TestDBAdminIdentity_UserCRUDRoleMatrix(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("user read self = %d, want 200 (body %s)", res.Code, res.Body.String())
 	}
-	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/users/"+h.owner.ID, nil, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/users/"+h.superuser.ID, nil, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("user read owner = %d, want 404 (body %s)", res.Code, res.Body.String())
 	}
@@ -224,7 +224,7 @@ func TestDBAdminIdentity_TokenCRUDRoleMatrix(t *testing.T) {
 	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/tokens", gin.H{
 		"name":    "cross-user",
 		"kind":    string(auth.TokenKindGateway),
-		"user_id": h.owner.ID,
+		"user_id": h.superuser.ID,
 	}, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("user create cross-user token = %d, want 404 (body %s)", res.Code, res.Body.String())

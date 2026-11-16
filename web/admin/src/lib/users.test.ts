@@ -59,10 +59,10 @@ describe("user list parsing", () => {
   });
 });
 
-describe("owner gating", () => {
-  it("lets owner-level accounts manage accounts", () => {
+describe("superuser gating", () => {
+  it("lets superuser-level accounts manage accounts", () => {
     expect(canManageUsers("root")).toBe(true);
-    expect(canManageUsers("owner")).toBe(true);
+    expect(canManageUsers("superuser")).toBe(true);
     expect(canManageUsers("admin")).toBe(false);
     expect(canManageUsers("user")).toBe(false);
   });
@@ -87,7 +87,7 @@ describe("new user validation", () => {
     [{ username: "   " }, "username", "Username is required"],
     [{ password: "short" }, "password", "Password must be 12–128 characters"],
     [{ password: "x".repeat(129) }, "password", "Password must be 12–128 characters"],
-    [{ role: "root" }, "role", "Role must be owner, admin or user"],
+    [{ role: "root" }, "role", "Role must be superuser, admin or user"],
     [{ display_name: "x".repeat(201) }, "display_name", "Display name must be at most 200 characters"],
   ])("rejects %j on %s", (patch, field, message) => {
     expect(validateNewUser({ ...valid, ...patch })).toEqual({ field, message });
@@ -102,9 +102,11 @@ describe("new user validation", () => {
 describe("edit safeguards", () => {
   it("blocks a save until an unknown role is resolved", () => {
     expect(roleError("admin")).toBeNull();
-    expect(roleError("superuser")).toEqual({ field: "role", message: "Role must be owner, admin or user" });
+    expect(roleError("superuser")).toBeNull();
+    // The pre-rename role and root are both refused.
+    expect(roleError("owner")).toEqual({ field: "role", message: "Role must be superuser, admin or user" });
     // Root is seeded by the server and is not assignable from the console.
-    expect(roleError("root")).toEqual({ field: "role", message: "Role must be owner, admin or user" });
+    expect(roleError("root")).toEqual({ field: "role", message: "Role must be superuser, admin or user" });
   });
 
   it("never edits the signed-in account's own role", () => {

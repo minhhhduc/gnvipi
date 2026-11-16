@@ -1,7 +1,7 @@
 import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../lib/api";
-import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
+import { isSuperuserLevelRole, type AdminUser } from "../lib/auth";
 import type { KeyModel, ModelInfo, ModelsResponse, NvidiaRescanResult, Provider, ProviderKey, TestResult } from "../lib/types";
 import { buildUpstreamModel } from "../lib/helpers";
 import { dateLabel, message } from "../lib/admin";
@@ -48,7 +48,7 @@ type KeyDialogState =
   | { kind: "delete"; key: ProviderKey }
   | null;
 
-/** Owner/admin-only trigger for a live Playground catalog rescan. */
+/** Superuser/admin-only trigger for a live Playground catalog rescan. */
 export function NvidiaRescanButton({ role, busy, onClick }: { role: string; busy: boolean; onClick: () => void }) {
   if (!canManageProviders(role)) return null;
   return (
@@ -620,7 +620,7 @@ function KeyEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const canShare = target === null && isOwnerLevelRole(user.role);
+  const canShare = target === null && isSuperuserLevelRole(user.role);
   const [name, setName] = useState(target?.name ?? "");
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
   const [authKey, setAuthKey] = useState("");

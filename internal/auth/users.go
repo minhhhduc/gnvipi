@@ -69,8 +69,8 @@ func mapUserWriteError(err error) error {
 		}
 	case "P0001":
 		switch {
-		case strings.Contains(pgErr.Message, "last active owner"):
-			return ErrLastOwner
+		case strings.Contains(pgErr.Message, "last active superuser"):
+			return ErrLastSuperuser
 		case strings.Contains(pgErr.Message, "root account"):
 			return ErrRootProtected
 		}
@@ -90,8 +90,8 @@ type CreateUserInput struct {
 	CreatedBy          string
 }
 
-// CreateUser inserts a user. Role must be owner, admin or user. The database
-// enforces username/email uniqueness and the last-owner invariant.
+// CreateUser inserts a user. Role must be superuser, admin or user. The database
+// enforces username/email uniqueness and the last-superuser invariant.
 func CreateUser(ctx context.Context, q Querier, in CreateUserInput) (*User, error) {
 	username := strings.TrimSpace(in.Username)
 	if n := utf8.RuneCountInString(username); n < 3 || n > 64 {
@@ -128,7 +128,7 @@ type UpdateUserInput struct {
 }
 
 // UpdateUser applies a patch in one transaction. Changing the last active
-// owner's role or status returns ErrLastOwner from the database trigger.
+// superuser's role or status returns ErrLastSuperuser from the database trigger.
 // Setting status to disabled also revokes every session and API token in the
 // same transaction, so re-enabling the account does not resurrect credentials
 // that were live before the disable.
@@ -197,8 +197,8 @@ func UpdateUserTx(ctx context.Context, tx Querier, id string, in UpdateUserInput
 	return u, nil
 }
 
-// DeleteUser removes a user. Deleting the last active owner returns
-// ErrLastOwner from the database trigger.
+// DeleteUser removes a user. Deleting the last active superuser returns
+// ErrLastSuperuser from the database trigger.
 func DeleteUser(ctx context.Context, q Querier, id string) error {
 	tag, err := q.Exec(ctx, `DELETE FROM users WHERE id = $1::uuid`, id)
 	if err != nil {

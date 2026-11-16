@@ -7,7 +7,7 @@ vi.mock("../lib/context", () => ({
   useGateway: () => ({ navigate: vi.fn() }),
 }));
 
-type TestRole = "root" | "owner" | "admin" | "user";
+type TestRole = "root" | "superuser" | "admin" | "user";
 
 function textContent(value: ComponentChildren): string {
   return toChildArray(value)
@@ -39,7 +39,7 @@ function renderShell(role: TestRole): string {
 }
 
 describe("Shell role navigation", () => {
-  it.each(["owner", "admin"] as const)("shows operator screens to %s", (role) => {
+  it.each(["superuser", "admin"] as const)("shows operator screens to %s", (role) => {
     const text = renderShell(role);
     expect(text).toContain("Dashboard");
     expect(text).toContain("Usage log");
@@ -57,9 +57,9 @@ describe("Shell role navigation", () => {
     expect(text).not.toContain("Chrome");
   });
 
-  it("shows the owner-only Audit screen to owner-level roles only", () => {
+  it("shows the superuser-only Audit screen to superuser-level roles only", () => {
     expect(renderShell("root")).toContain("Audit");
-    expect(renderShell("owner")).toContain("Audit");
+    expect(renderShell("superuser")).toContain("Audit");
     expect(renderShell("admin")).not.toContain("Audit");
     expect(renderShell("user")).not.toContain("Audit");
   });
@@ -73,7 +73,7 @@ describe("Shell role navigation", () => {
 });
 
 it("keeps the logs together at the end of the nav", () => {
-  const nav = renderShell("owner");
+  const nav = renderShell("superuser");
   const order = ["Dashboard", "Playground", "Models", "Config", "Chrome", "API Keys", "Users", "Usage log", "Audit"];
   const positions = order.map((label) => nav.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);

@@ -1,13 +1,13 @@
-import { isOwnerLevelRole, type AdminRole } from "./auth";
+import { isSuperuserLevelRole, type AdminRole } from "./auth";
 import type { AdminUserRecord, UserList } from "./types";
 import { optionalString } from "./admin";
 
 /**
- * Account administration is owner-only. The router gates the page as well; this
+ * Account administration is superuser-only. The router gates the page as well; this
  * is the second check the views use before rendering any mutation control.
  */
 export function canManageUsers(role: AdminRole): boolean {
-  return isOwnerLevelRole(role);
+  return isSuperuserLevelRole(role);
 }
 
 export interface FieldError {
@@ -15,9 +15,9 @@ export interface FieldError {
   message: string;
 }
 
-export const ROLES: readonly string[] = ["owner", "admin", "user"];
+export const ROLES: readonly string[] = ["superuser", "admin", "user"];
 
-/** The owner account picker loads one server-capped page. */
+/** The account picker loads one server-capped page. */
 export const USER_LIST_MAX = 200;
 
 /** The server validates lengths with utf8.RuneCountInString, so count runes. */
@@ -27,7 +27,7 @@ function runeLength(value: string): number {
 
 export function roleError(role: string): FieldError | null {
   if (ROLES.includes(role)) return null;
-  return { field: "role", message: "Role must be owner, admin or user" };
+  return { field: "role", message: "Role must be superuser, admin or user" };
 }
 
 /** The server's display-name CHECK, shared by create and edit. */

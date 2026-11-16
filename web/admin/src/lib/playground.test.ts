@@ -95,7 +95,7 @@ describe("streamPlaygroundChat", () => {
     });
   });
 
-  it("adds the owner account selector to the query", async () => {
+  it("adds the superuser account selector to the query", async () => {
     const fetchMock = vi.fn().mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
     vi.stubGlobal("document", { cookie: "" });
     vi.stubGlobal("fetch", fetchMock);

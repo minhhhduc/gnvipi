@@ -195,7 +195,7 @@ func TestAdminRoutingConfigPerCallerDB(t *testing.T) {
 		}
 		return id
 	}
-	owner := createUser("route-owner", "owner")
+	superuser := createUser("route-superuser", "superuser")
 	admin := createUser("route-admin", "admin")
 	member := createUser("route-member", "user")
 
@@ -219,7 +219,7 @@ func TestAdminRoutingConfigPerCallerDB(t *testing.T) {
 			t.Fatalf("insert alias: %v", err)
 		}
 	}
-	seedKey(owner, "owner-model")
+	seedKey(superuser, "superuser-model")
 	seedKey(admin, "admin-model")
 	seedKey(member, "member-model")
 
@@ -243,7 +243,7 @@ func TestAdminRoutingConfigPerCallerDB(t *testing.T) {
 		return engine
 	}
 	adminEngine := newEngine(&adminIdentity{UserID: admin, Role: auth.RoleAdmin})
-	ownerEngine := newEngine(&adminIdentity{UserID: owner, Role: auth.RoleOwner})
+	superuserEngine := newEngine(&adminIdentity{UserID: superuser, Role: auth.RoleSuperuser})
 
 	// Admin edits their own account and cannot address another one.
 	if out := makeRequest(t, adminEngine, http.MethodPost, "/admin/api/config/automode",
@@ -251,10 +251,10 @@ func TestAdminRoutingConfigPerCallerDB(t *testing.T) {
 		t.Fatalf("admin own automode = %d: %s", out.Code, out.Body.String())
 	}
 	if out := makeRequest(t, adminEngine, http.MethodPost, "/admin/api/config/automode",
-		map[string]any{"model": "admin-model", "user_id": owner}, nil); out.Code != http.StatusNotFound {
+		map[string]any{"model": "admin-model", "user_id": superuser}, nil); out.Code != http.StatusNotFound {
 		t.Fatalf("admin foreign automode = %d, want 404: %s", out.Code, out.Body.String())
 	}
-	if out := makeRequest(t, adminEngine, http.MethodGet, "/admin/api/config/cycle?user_id="+owner, nil, nil); out.Code != http.StatusNotFound {
+	if out := makeRequest(t, adminEngine, http.MethodGet, "/admin/api/config/cycle?user_id="+superuser, nil, nil); out.Code != http.StatusNotFound {
 		t.Fatalf("admin foreign cycle GET = %d, want 404: %s", out.Code, out.Body.String())
 	}
 	// An alias reachable only through the member's key is rejected for admin.
@@ -263,16 +263,16 @@ func TestAdminRoutingConfigPerCallerDB(t *testing.T) {
 		t.Fatalf("admin cross-account target = %d, want 400: %s", out.Code, out.Body.String())
 	}
 
-	// The owner may address another account.
-	if out := makeRequest(t, ownerEngine, http.MethodPost, "/admin/api/config/automode",
+	// The superuser may address another account.
+	if out := makeRequest(t, superuserEngine, http.MethodPost, "/admin/api/config/automode",
 		map[string]any{"model": "member-model", "user_id": member}, nil); out.Code != http.StatusOK {
-		t.Fatalf("owner foreign automode = %d: %s", out.Code, out.Body.String())
+		t.Fatalf("superuser foreign automode = %d: %s", out.Code, out.Body.String())
 	}
-	if out := makeRequest(t, ownerEngine, http.MethodGet,
+	if out := makeRequest(t, superuserEngine, http.MethodGet,
 		"/admin/api/config/automode?user_id="+member, nil, nil); out.Code != http.StatusOK {
-		t.Fatalf("owner foreign automode GET = %d: %s", out.Code, out.Body.String())
+		t.Fatalf("superuser foreign automode GET = %d: %s", out.Code, out.Body.String())
 	} else if body := decodeBody(t, out); body["model"] != "member-model" {
-		t.Fatalf("owner read member automode = %v", body["model"])
+		t.Fatalf("superuser read member automode = %v", body["model"])
 	}
 
 	// Unknown aliases are a field error, and PUT is equivalent to POST.

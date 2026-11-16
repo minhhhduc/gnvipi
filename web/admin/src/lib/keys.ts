@@ -1,4 +1,4 @@
-import { isOwnerLevelRole, type AdminUser } from "./auth";
+import { isSuperuserLevelRole, type AdminUser } from "./auth";
 import type { KeyModel, ProviderKey, ProviderModel } from "./types";
 
 export type KeyReach = "full" | "disable" | "none";
@@ -90,17 +90,17 @@ export function keyOwnerLabel(user: AdminUser, key: ProviderKey): string {
 }
 
 /**
- * Per-row reach, mirroring the server: the owner reaches every key, a key's
+ * Per-row reach, mirroring the server: a superuser reaches every key, a key's
  * owner reaches it fully, an admin reaches a foreign key only to disable it.
  */
 export function keyReach(user: AdminUser, key: ProviderKey): KeyReach {
-  if (isOwnerLevelRole(user.role)) return "full";
+  if (isSuperuserLevelRole(user.role)) return "full";
   if (key.owner_id && key.owner_id === user.id) return "full";
   return user.role === "admin" ? "disable" : "none";
 }
 
 export function canManageProviders(role: string): boolean {
-  return isOwnerLevelRole(role) || role === "admin";
+  return isSuperuserLevelRole(role) || role === "admin";
 }
 
 export function canEditKey(reach: KeyReach): boolean {
@@ -166,7 +166,7 @@ function keyPayload(input: KeyFormInput): Record<string, unknown> {
   return payload;
 }
 
-/** Create body. A shared key (`owner_id: null`) is owner-only on the server. */
+/** Create body. A shared key (`owner_id: null`) is superuser-only on the server. */
 export function keyCreatePayload(input: KeyFormInput, options: { shared?: boolean } = {}): Record<string, unknown> {
   const payload = keyPayload(input);
   if (options.shared) payload.owner_id = null;

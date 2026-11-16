@@ -1,6 +1,6 @@
 // Package auth implements the GNVIPI authentication core: Argon2id password
 // hashing, users, browser sessions, API tokens, login lockout, CSRF helpers,
-// audit writes and owner bootstrap/recovery.
+// audit writes and superuser bootstrap/recovery.
 //
 // The package stores only hashes for sessions and API tokens. Plaintext
 // passwords and tokens never leave the caller.
@@ -29,21 +29,21 @@ type DB interface {
 }
 
 // Role is a user role. There is deliberately no viewer role. Root is the
-// built-in account above owner: it is seeded on every install and the database
-// refuses to delete, rename, demote or disable it.
+// built-in account above superuser: it is seeded on every install and the
+// database refuses to delete, rename, demote or disable it.
 type Role string
 
 const (
-	RoleRoot  Role = "root"
-	RoleOwner Role = "owner"
-	RoleAdmin Role = "admin"
-	RoleUser  Role = "user"
+	RoleRoot      Role = "root"
+	RoleSuperuser Role = "superuser"
+	RoleAdmin     Role = "admin"
+	RoleUser      Role = "user"
 )
 
 // Valid reports whether r is one of the persisted roles.
 func (r Role) Valid() bool {
 	switch r {
-	case RoleRoot, RoleOwner, RoleAdmin, RoleUser:
+	case RoleRoot, RoleSuperuser, RoleAdmin, RoleUser:
 		return true
 	}
 	return false
@@ -56,7 +56,7 @@ func (r Role) rank() int {
 		return 1
 	case RoleAdmin:
 		return 2
-	case RoleOwner:
+	case RoleSuperuser:
 		return 3
 	case RoleRoot:
 		return 4
@@ -89,7 +89,7 @@ var (
 	ErrInvalidStatus           = errors.New("auth: invalid status")
 	ErrUsernameTaken           = errors.New("auth: username already exists")
 	ErrEmailTaken              = errors.New("auth: email already exists")
-	ErrLastOwner               = errors.New("auth: last active owner cannot be removed, demoted or disabled")
+	ErrLastSuperuser           = errors.New("auth: last active superuser cannot be removed, demoted or disabled")
 	ErrRootProtected           = errors.New("auth: the built-in root account cannot be deleted, renamed, demoted or disabled")
 	ErrInvalidCredentials      = errors.New("auth: invalid credentials")
 	ErrAccountLocked           = errors.New("auth: account temporarily locked")
@@ -102,6 +102,6 @@ var (
 	ErrInvalidTokenScope       = errors.New("auth: admin tokens require a read or write scope; gateway tokens have none")
 	ErrInvalidTokenExpiry      = errors.New("auth: token expiry must be a future time within the allowed window")
 	ErrTokenNoExpiryNotAllowed = errors.New("auth: admin tokens require an expiry")
-	ErrUsersExist              = errors.New("auth: users already exist; bootstrap creates the first owner only")
+	ErrUsersExist              = errors.New("auth: users already exist; bootstrap creates the first superuser only")
 	ErrAuditDetailsTooLarge    = errors.New("auth: audit details exceed 8192 bytes")
 )

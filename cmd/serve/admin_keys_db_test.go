@@ -638,14 +638,14 @@ func TestDBAdminKeys_ValidationAndCredentialSources(t *testing.T) {
 
 	// A key_ref names an entry in the imported secrets file, which this gateway
 	// materializes into stored ciphertext at startup and never reads again. A
-	// fresh reference is therefore refused for every role, the owner included:
+	// fresh reference is therefore refused for every role, the superuser included:
 	// accepting one would create a key no request can route.
 	for _, caller := range []struct {
 		name    string
 		headers map[string]string
 	}{
 		{"user", prepareKeyActor(t, h, "key-ref-user", auth.RoleUser).headers},
-		{"owner", bearer(h.token)},
+		{"superuser", bearer(h.token)},
 	} {
 		res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
 			"name": caller.name + " ref", "key_ref": "env:ISSUE203",

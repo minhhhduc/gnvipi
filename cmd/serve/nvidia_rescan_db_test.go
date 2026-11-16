@@ -35,7 +35,7 @@ func TestDBAdminNvidiaRescanRoleMatrix(t *testing.T) {
 		headers map[string]string
 		want    int
 	}{
-		{"owner", bearer(h.token), http.StatusOK},
+		{"superuser", bearer(h.token), http.StatusOK},
 		{"admin", bearer(adminToken), http.StatusOK},
 		{"user", cookieAuth(userSession, userCSRF), http.StatusForbidden},
 		{"anonymous", nil, http.StatusUnauthorized},

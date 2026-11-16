@@ -133,7 +133,7 @@ describe("token create payload", () => {
     );
   });
 
-  it("addresses another account only when the owner names one", () => {
+  it("addresses another account only when a superuser names one", () => {
     expect(tokenCreatePayload({ name: "ops", kind: "gateway", expiry: "default", userId: "user-2" })).toMatchObject({
       user_id: "user-2",
     });

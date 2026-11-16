@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
 import { useUi } from "../components/ui";
 import { Card, CardHead, Dialog, Empty, PageHeader, Pager } from "../components/ui";
-import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
+import { isSuperuserLevelRole, type AdminUser } from "../lib/auth";
 import type { AdminUserRecord, TokenRecord } from "../lib/types";
 import {
   defaultExpiryLabel,
@@ -40,15 +40,15 @@ function statusPill(status: TokenStatus) {
 
 export function TokensView({ user }: { user: AdminUser }) {
   const { toast, setBanner } = useUi();
-  const owner = isOwnerLevelRole(user.role);
+  const superuser = isSuperuserLevelRole(user.role);
   const [tokens, setTokens] = useState<TokenRecord[]>([]);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
-  // Owners may read another account's tokens one account at a time; every other
-  // role is pinned to its own tokens by the server.
+  // Superusers may read another account's tokens one account at a time; every
+  // other role is pinned to its own tokens by the server.
   const [accounts, setAccounts] = useState<AdminUserRecord[]>([]);
   const [accountID, setAccountID] = useState("");
   const requestId = useRef(0);
@@ -58,7 +58,7 @@ export function TokensView({ user }: { user: AdminUser }) {
     setLoading(true);
     setLoadError(null);
     const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-    if (owner && accountID) query.set("user_id", accountID);
+    if (superuser && accountID) query.set("user_id", accountID);
     try {
       const body = await api<unknown>(`/admin/api/tokens?${query.toString()}`);
       if (thisRequest !== requestId.current) return;
@@ -87,13 +87,13 @@ export function TokensView({ user }: { user: AdminUser }) {
   }, [limit, offset, accountID]);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!superuser) return;
     api<unknown>(`/admin/api/users?limit=${USER_LIST_MAX}`)
       .then((body) => setAccounts(parseUserList(body).users))
       // The token list still works for the caller's own account; the selector
       // just stays limited to "My tokens".
       .catch(() => setAccounts([]));
-  }, [owner]);
+  }, [superuser]);
 
   const target = accountID ? accounts.find((account) => account.id === accountID) : undefined;
   const targetRole = target?.role ?? user.role;
@@ -110,14 +110,14 @@ export function TokensView({ user }: { user: AdminUser }) {
     <>
       <PageHeader
         title="API Keys"
-        sub={owner ? "Gateway and admin keys for every account" : "Your gateway API keys"}
+        sub={superuser ? "Gateway and admin keys for every account" : "Your gateway API keys"}
       >
         <button class="btn btn-primary" onClick={() => setDialog({ kind: "create" })}>New API key</button>
       </PageHeader>
 
       <Card>
-        <CardHead title={owner ? "All API keys" : "My API keys"}>
-          {owner && (
+        <CardHead title={superuser ? "All API keys" : "My API keys"}>
+          {superuser && (
             <>
               <label class="flex items-center gap-1.5 text-xs text-dim">
                 Account
@@ -211,7 +211,7 @@ export function TokensView({ user }: { user: AdminUser }) {
 
       {dialog?.kind === "create" && (
         <CreateTokenDialog
-          owner={owner}
+          superuser={superuser}
           targetRole={targetRole}
           targetID={accountID}
           onClose={() => setDialog(null)}
@@ -237,13 +237,13 @@ export function TokensView({ user }: { user: AdminUser }) {
 }
 
 function CreateTokenDialog({
-  owner,
+  superuser,
   targetRole,
   targetID,
   onClose,
   onCreated,
 }: {
-  owner: boolean;
+  superuser: boolean;
   targetRole: string;
   targetID: string;
   onClose: () => void;
@@ -268,7 +268,7 @@ function CreateTokenDialog({
         name,
         kind,
         scope: kind === "admin" ? scope : undefined,
-        userId: owner && targetID ? targetID : undefined,
+        userId: superuser && targetID ? targetID : undefined,
         expiry,
       });
       const created = parseCreatedToken(await api("/admin/api/tokens", { method: "POST", body: payload }));

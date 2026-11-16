@@ -27,7 +27,7 @@ const adminSessionLifetime = 12 * time.Hour
 // intercepted here. Install it before registering admin routes. With a database
 // identity store (dbAuth non-nil) the JSON API authenticates against the
 // database instead, so this gate leaves /admin/api alone. The shared token is a
-// bootstrap credential there: once an owner exists it stops being valid here
+// bootstrap credential there: once a superuser exists it stops being valid here
 // too, and the gate behaves as if no token were configured.
 func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 	loopback := adminLoopbackBind(addr)
@@ -56,17 +56,17 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 			adminAccessError(c, http.StatusForbidden, "Admin mutations require the same origin; cross-site requests are not allowed.")
 			return
 		}
-		// GNVIPI_ADMIN_TOKEN is bootstrap-only. Once the first owner exists it is
+		// GNVIPI_ADMIN_TOKEN is bootstrap-only. Once the first superuser exists it is
 		// ignored everywhere, including the legacy surface guarded here, so the
 		// legacy shared-token login and header access both stop working.
 		activeToken := token
 		if dbAuth != nil {
-			ownerExists, err := dbAuth.ownerExists(r.Context())
+			superuserExists, err := dbAuth.superuserExists(r.Context())
 			if err != nil {
 				adminAccessError(c, http.StatusServiceUnavailable, "Admin identity store is unavailable; try again shortly.")
 				return
 			}
-			if ownerExists {
+			if superuserExists {
 				activeToken = ""
 			}
 		}

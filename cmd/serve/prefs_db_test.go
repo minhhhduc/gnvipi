@@ -121,8 +121,8 @@ func TestDBSettings_AuditRecordsMaskChange(t *testing.T) {
 		Scan(&action, &actorType, &userID); err != nil {
 		t.Fatalf("read audit row: %v", err)
 	}
-	if action != "model.state.update" || strings.TrimSpace(userID) != h.owner.ID {
-		t.Fatalf("audit row = %q by %q, want model.state.update by %s", action, userID, h.owner.ID)
+	if action != "model.state.update" || strings.TrimSpace(userID) != h.superuser.ID {
+		t.Fatalf("audit row = %q by %q, want model.state.update by %s", action, userID, h.superuser.ID)
 	}
 	if actorType != "token" {
 		t.Fatalf("audit actor_type = %q, want token", actorType)

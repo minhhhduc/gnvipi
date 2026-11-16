@@ -13,7 +13,7 @@ func TestSanitizeDetailsAllowlist(t *testing.T) {
 	clean, err := SanitizeDetails(map[string]any{
 		"user_id":          "11111111-1111-1111-1111-111111111111",
 		"name":             "Alice",
-		"role":             "owner",
+		"role":             "superuser",
 		"status":           "active",
 		"action":           "user.update",
 		"enabled":          true,
@@ -38,7 +38,7 @@ func TestSanitizeDetailsAllowlist(t *testing.T) {
 			t.Errorf("non-allowlisted key %q persisted: %#v", key, clean[key])
 		}
 	}
-	if clean["role"] != "owner" || clean["count"] != 3 ||
+	if clean["role"] != "superuser" || clean["count"] != 3 ||
 		clean["enabled"] != true || clean["name"] != "Alice" {
 		t.Fatalf("allowed metadata changed or dropped: %#v", clean)
 	}

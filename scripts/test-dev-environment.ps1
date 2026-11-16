@@ -181,7 +181,7 @@ public static class NativeToolStub {
   Clear-RunEnvironment
   $missing = Invoke-RunScenario @{ Claude = $true }
   Assert-DevEnvironment ($missing.Error -match 'GNVIPI_GATEWAY_TOKEN') '-Claude without a token must fail with the token requirement'
-  Assert-DevEnvironment ($missing.Output -match 'admin create-owner --username <owner> --with-gateway-token') 'missing-token output must document owner bootstrap'
+  Assert-DevEnvironment ($missing.Output -match 'admin create-superuser --username <superuser> --with-gateway-token') 'missing-token output must document superuser bootstrap'
   Assert-DevEnvironment ($missing.Ports -notcontains 8080) 'missing-token flow must not inspect the default gateway port'
 
   Clear-RunEnvironment

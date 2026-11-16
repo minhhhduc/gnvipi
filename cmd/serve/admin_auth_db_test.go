@@ -21,21 +21,21 @@ import (
 )
 
 const (
-	dbOwnerUsername = "owner"
-	dbOwnerPassword = "Crimson-Harbor7-Velvet!"
-	dbUserPassword  = "Tundra-Lantern7-Cobalt!"
-	dbTestOrigin    = "http://127.0.0.1:8080"
+	dbSuperuserUsername = "owner"
+	dbSuperuserPassword = "Crimson-Harbor7-Velvet!"
+	dbUserPassword      = "Tundra-Lantern7-Cobalt!"
+	dbTestOrigin        = "http://127.0.0.1:8080"
 )
 
 // dbAdminHarness is the production admin wiring backed by a real PostgreSQL
 // server: migrations, identity tables, sessions, tokens and audit rows.
 type dbAdminHarness struct {
-	engine *gin.Engine
-	pool   *pgxpool.Pool
-	prefs  *modelPrefs
-	state  *authState
-	owner  *auth.User
-	token  string
+	engine    *gin.Engine
+	pool      *pgxpool.Pool
+	prefs     *modelPrefs
+	state     *authState
+	superuser *auth.User
+	token     string
 }
 
 // newDBAdminHarness applies the real migrations and wires the admin API exactly
@@ -61,18 +61,18 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 	// The harness serves http://127.0.0.1:8080, i.e. a loopback bind, which is
 	// the one configuration where plaintext cookies are allowed.
 	state.loopbackBind = true
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username:    dbOwnerUsername,
+	superuser, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username:    dbSuperuserUsername,
 		Email:       "owner@example.test",
-		DisplayName: "Owner",
-		Password:    dbOwnerPassword,
+		DisplayName: "Superuser",
+		Password:    dbSuperuserPassword,
 	}, state.password)
 	if err != nil {
-		t.Fatalf("create owner: %v", err)
+		t.Fatalf("create superuser: %v", err)
 	}
 	expiry := time.Now().Add(time.Hour)
 	token, _, err := auth.CreateAPIToken(ctx, pool, auth.CreateAPITokenInput{
-		UserID: owner.ID,
+		UserID: superuser.ID,
 		Kind:   auth.TokenKindAdmin,
 		Name:   "harness",
 		Scope:  auth.ScopeWrite,
@@ -90,12 +90,15 @@ func newDBAdminHarness(t *testing.T) *dbAdminHarness {
 	engine := gin.New()
 	engine.Use(adminAPIAuthorization(state))
 	registerAdminAPIRoutes(engine, prefs, nil, nil, state)
-	return &dbAdminHarness{engine: engine, pool: pool, prefs: prefs, state: state, owner: owner, token: token}
+	return &dbAdminHarness{engine: engine, pool: pool, prefs: prefs, state: state, superuser: superuser, token: token}
 }
 
-// adminTestDDL is the production initial migration with its hardcoded public
-// search_path rewritten so the schema installs into a throwaway schema.
-func adminTestDDL(schema string) (string, error) {
+// adminTestDDLBase is the production schema up to the root account, with the
+// hardcoded public search_path in 0001 rewritten so the schema installs into a
+// throwaway schema. adminTestDDL appends the superuser rename on top; the
+// runtime-grants test needs the two halves separated so 0002 executes in the
+// same order as a real upgrade, against the pre-rename function name.
+func adminTestDDLBase(schema string) (string, error) {
 	raw, err := migrations.FS.ReadFile("0001_init.up.sql")
 	if err != nil {
 		return "", err
@@ -118,6 +121,20 @@ func adminTestDDL(schema string) (string, error) {
 	}
 	ddl := strings.ReplaceAll(string(raw), "SET search_path = public, pg_temp", "SET search_path = "+schema+", pg_temp")
 	return ddl + "\n" + string(catalog) + "\n" + string(routing) + "\n" + string(nameLabel) + "\n" + string(rootAccount), nil
+}
+
+// adminTestDDL is the current production schema: the base schema plus the
+// owner-to-superuser rename.
+func adminTestDDL(schema string) (string, error) {
+	base, err := adminTestDDLBase(schema)
+	if err != nil {
+		return "", err
+	}
+	superuserRole, err := migrations.FS.ReadFile("0007_superuser_role.up.sql")
+	if err != nil {
+		return "", err
+	}
+	return base + "\n" + string(superuserRole), nil
 }
 
 // newAdminTestPool installs the production schema into a throwaway schema, so
@@ -270,12 +287,12 @@ func TestDBAdminAuth_LoginSessionLogout(t *testing.T) {
 		t.Fatalf("anonymous GET /admin/api/users = %d %s, want 401 authentication_required", res.Code, res.Body.String())
 	}
 
-	res = makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{"username": dbOwnerUsername, "password": "Definitely-Not-The-Password9!"}, nil)
+	res = makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{"username": dbSuperuserUsername, "password": "Definitely-Not-The-Password9!"}, nil)
 	if res.Code != http.StatusUnauthorized || decodeBody(t, res)["code"] != "invalid_credentials" {
 		t.Fatalf("login with wrong password = %d %s, want 401 invalid_credentials", res.Code, res.Body.String())
 	}
 
-	session, csrf := h.login(t, dbOwnerUsername, dbOwnerPassword)
+	session, csrf := h.login(t, dbSuperuserUsername, dbSuperuserPassword)
 
 	res = makeRequest(t, h.engine, http.MethodGet, adminSessionPath, nil, map[string]string{
 		"Cookie": auth.SessionCookieName + "=" + session,
@@ -284,15 +301,15 @@ func TestDBAdminAuth_LoginSessionLogout(t *testing.T) {
 		t.Fatalf("GET %s = %d, want 200 (body %s)", adminSessionPath, res.Code, res.Body.String())
 	}
 	user, _ := decodeBody(t, res)["user"].(map[string]any)
-	if user["id"] != h.owner.ID || user["role"] != string(auth.RoleOwner) {
-		t.Fatalf("session identity = %v, want owner %s", user, h.owner.ID)
+	if user["id"] != h.superuser.ID || user["role"] != string(auth.RoleSuperuser) {
+		t.Fatalf("session identity = %v, want superuser %s", user, h.superuser.ID)
 	}
 
 	// Signing in again from a browser that still holds the old cookie rotates
 	// the session: the superseded token stops working immediately.
 	res = makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{
-		"username": dbOwnerUsername,
-		"password": dbOwnerPassword,
+		"username": dbSuperuserUsername,
+		"password": dbSuperuserPassword,
 	}, map[string]string{"Cookie": auth.SessionCookieName + "=" + session})
 	if res.Code != http.StatusOK {
 		t.Fatalf("second login = %d, want 200 (body %s)", res.Code, res.Body.String())
@@ -360,7 +377,7 @@ func TestDBAdminAuth_RoleAndMustChangePassword(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("user GET own record = %d, want 200 (body %s)", res.Code, res.Body.String())
 	}
-	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/users/"+h.owner.ID, nil, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/users/"+h.superuser.ID, nil, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("user GET owner record = %d, want 404 (body %s)", res.Code, res.Body.String())
 	}
@@ -408,7 +425,7 @@ func TestDBAdminAuth_TokenScopeAndUndeclaredRoute(t *testing.T) {
 
 func TestDBAdminAuth_ExplicitBearerTakesPrecedenceOverCookie(t *testing.T) {
 	h := newDBAdminHarness(t)
-	session, _ := h.login(t, dbOwnerUsername, dbOwnerPassword)
+	session, _ := h.login(t, dbSuperuserUsername, dbSuperuserPassword)
 
 	res := makeRequest(t, h.engine, http.MethodPost, "/admin/api/users", gin.H{
 		"username": "bearer-wins",
@@ -499,7 +516,7 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 
 	const changedPassword = "Quartz-Meadow8-Signal!"
 	res = makeRequest(t, h.engine, http.MethodPost, adminPasswordPath, gin.H{
-		"current_password": dbOwnerPassword,
+		"current_password": dbSuperuserPassword,
 		"new_password":     changedPassword,
 	}, bearer(h.token))
 	if res.Code != http.StatusNoContent {
@@ -508,7 +525,7 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 	var changeActor, changeActorID string
 	err = h.pool.QueryRow(t.Context(),
 		`SELECT actor_type, actor_id::text FROM audit_log WHERE action = 'user.password_change' AND target_id = $1 ORDER BY id DESC LIMIT 1`,
-		h.owner.ID).Scan(&changeActor, &changeActorID)
+		h.superuser.ID).Scan(&changeActor, &changeActorID)
 	if err != nil {
 		t.Fatalf("read user.password_change audit row: %v", err)
 	}
@@ -529,7 +546,7 @@ func TestDBAdminAuth_AuditTrail(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &details); err != nil {
 			t.Fatalf("decode user audit details: %v", err)
 		}
-		assertNoPasswordMaterial(t, details, dbUserPassword, dbOwnerPassword, changedPassword)
+		assertNoPasswordMaterial(t, details, dbUserPassword, dbSuperuserPassword, changedPassword)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate user audit details: %v", err)
@@ -550,8 +567,8 @@ func TestDBAdminAuth_PlaintextLoginRequiresLoopback(t *testing.T) {
 	registerAdminAPIRoutes(engine, setupTestPrefs(t), nil, nil, &exposed)
 
 	res := makeRequest(t, engine, http.MethodPost, adminLoginPath, gin.H{
-		"username": dbOwnerUsername,
-		"password": dbOwnerPassword,
+		"username": dbSuperuserUsername,
+		"password": dbSuperuserPassword,
 	}, nil)
 	if res.Code != http.StatusForbidden || decodeBody(t, res)["code"] != "https_required" {
 		t.Fatalf("plaintext login on a public bind = %d %s, want 403 https_required", res.Code, res.Body.String())
@@ -678,13 +695,13 @@ func TestDBAdminAuth_RehashDoesNotOverwriteChangedPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash replacement password: %v", err)
 	}
-	if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.owner.ID, replacement); err != nil {
+	if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.superuser.ID, replacement); err != nil {
 		t.Fatalf("replace password hash: %v", err)
 	}
 
-	adminRehashPassword(t.Context(), h.state, h.owner.ID, dbOwnerPassword, h.owner.PasswordHash)
+	adminRehashPassword(t.Context(), h.state, h.superuser.ID, dbSuperuserPassword, h.superuser.PasswordHash)
 	var got string
-	if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.owner.ID).Scan(&got); err != nil {
+	if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.superuser.ID).Scan(&got); err != nil {
 		t.Fatalf("read password hash: %v", err)
 	}
 	if got != replacement {
@@ -707,33 +724,33 @@ func TestDBAdminAuth_LoginRehashesPreviousPepperAndParameters(t *testing.T) {
 			t.Setenv(previousPepperEnv, tc.oldPepper)
 			h := newDBAdminHarness(t)
 
-			stale, err := auth.HashPassword(dbOwnerPassword, auth.Params{
+			stale, err := auth.HashPassword(dbSuperuserPassword, auth.Params{
 				Memory: 8192, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32,
 			}, []byte(tc.oldPepper))
 			if err != nil {
 				t.Fatalf("hash stale password: %v", err)
 			}
-			if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.owner.ID, stale); err != nil {
+			if _, err := h.pool.Exec(t.Context(), `UPDATE users SET password_hash = $2 WHERE id = $1::uuid`, h.superuser.ID, stale); err != nil {
 				t.Fatalf("store stale password hash: %v", err)
 			}
 
 			res := makeRequest(t, h.engine, http.MethodPost, adminLoginPath, gin.H{
-				"username": dbOwnerUsername,
-				"password": dbOwnerPassword,
+				"username": dbSuperuserUsername,
+				"password": dbSuperuserPassword,
 			}, nil)
 			if res.Code != http.StatusOK {
 				t.Fatalf("login with previous pepper = %d, want 200 (body %s)", res.Code, res.Body.String())
 			}
 
 			var upgraded string
-			if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.owner.ID).Scan(&upgraded); err != nil {
+			if err := h.pool.QueryRow(t.Context(), `SELECT password_hash FROM users WHERE id = $1::uuid`, h.superuser.ID).Scan(&upgraded); err != nil {
 				t.Fatalf("read upgraded password hash: %v", err)
 			}
-			ok, needsRehash, err := auth.VerifyPassword(dbOwnerPassword, upgraded, h.state.login.Params, []byte(tc.currentPepper))
+			ok, needsRehash, err := auth.VerifyPassword(dbSuperuserPassword, upgraded, h.state.login.Params, []byte(tc.currentPepper))
 			if err != nil || !ok || needsRehash {
 				t.Fatalf("upgraded hash = ok %v rehash %v err %v", ok, needsRehash, err)
 			}
-			oldOK, _, err := auth.VerifyPassword(dbOwnerPassword, upgraded, h.state.login.Params, []byte(tc.oldPepper))
+			oldOK, _, err := auth.VerifyPassword(dbSuperuserPassword, upgraded, h.state.login.Params, []byte(tc.oldPepper))
 			if err != nil {
 				t.Fatalf("verify upgraded hash with old pepper: %v", err)
 			}

@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// BootstrapConfig controls hashing during owner creation and recovery.
+// BootstrapConfig controls hashing during superuser creation and recovery.
 type BootstrapConfig struct {
 	Params            Params
 	Pepper            []byte
@@ -25,28 +25,28 @@ func (c BootstrapConfig) normalized() BootstrapConfig {
 	return c
 }
 
-// CreateOwnerInput is the first-owner bootstrap request. The password is
+// CreateSuperuserInput is the first-superuser bootstrap request. The password is
 // supplied by the caller (for example an interactive CLI prompt); there is no
 // default password.
-type CreateOwnerInput struct {
+type CreateSuperuserInput struct {
 	Username    string
 	Email       string
 	DisplayName string
 	Password    string
 }
 
-// CreateFirstOwner creates the first owner only when users is empty. The
+// CreateFirstSuperuser creates the first superuser only when users is empty. The
 // advisory lock makes concurrent bootstraps serialize; the loser sees the
 // committed user and returns ErrUsersExist. The user and audit row commit in
 // one transaction.
-func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
+func CreateFirstSuperuser(ctx context.Context, db DB, in CreateSuperuserInput, cfg BootstrapConfig) (*User, error) {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort cleanup/best-effort parse
 
-	u, err := CreateFirstOwnerTx(ctx, tx, in, cfg)
+	u, err := CreateFirstSuperuserTx(ctx, tx, in, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -56,13 +56,13 @@ func CreateFirstOwner(ctx context.Context, db DB, in CreateOwnerInput, cfg Boots
 	return u, nil
 }
 
-// CreateFirstOwnerTx performs the bootstrap inside a caller-owned transaction
+// CreateFirstSuperuserTx performs the bootstrap inside a caller-owned transaction
 // and leaves the commit to the caller, so related rows (for example a gateway
-// token) can be written atomically with the owner. The advisory lock is
+// token) can be written atomically with the superuser. The advisory lock is
 // transaction-scoped, so tx must be a real transaction: a connection pool also
 // satisfies Querier but would release the lock as soon as the statement ends,
-// letting two concurrent bootstraps create two owners.
-func CreateFirstOwnerTx(ctx context.Context, tx pgx.Tx, in CreateOwnerInput, cfg BootstrapConfig) (*User, error) {
+// letting two concurrent bootstraps create two superusers.
+func CreateFirstSuperuserTx(ctx context.Context, tx pgx.Tx, in CreateSuperuserInput, cfg BootstrapConfig) (*User, error) {
 	cfg = cfg.normalized()
 	username := strings.TrimSpace(in.Username)
 	if n := utf8.RuneCountInString(username); n < 3 || n > 64 {
@@ -90,7 +90,7 @@ func CreateFirstOwnerTx(ctx context.Context, tx pgx.Tx, in CreateOwnerInput, cfg
 		Username:     username,
 		Email:        in.Email,
 		DisplayName:  in.DisplayName,
-		Role:         RoleOwner,
+		Role:         RoleSuperuser,
 		PasswordHash: hash,
 	})
 	if err != nil {

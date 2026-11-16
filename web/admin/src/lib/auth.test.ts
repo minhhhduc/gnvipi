@@ -26,7 +26,7 @@ describe("authentication screen selection", () => {
   });
 
   it("forces every role through password change before the console", () => {
-    expect(authScreenFor({ ...user(true), role: "owner" })).toBe("password-change");
+    expect(authScreenFor({ ...user(true), role: "superuser" })).toBe("password-change");
     expect(authScreenFor({ ...user(true), role: "admin" })).toBe("password-change");
     expect(authScreenFor(user(true))).toBe("password-change");
   });
@@ -45,10 +45,10 @@ describe("authentication screen selection", () => {
 describe("admin session validation", () => {
   const valid = { user: user(false), csrf_token: "csrf-token" };
 
-  it("accepts only active root, owner, admin, and user sessions", () => {
+  it("accepts only active root, superuser, admin, and user sessions", () => {
     expect(parseAuthSession(valid)).toEqual(valid);
     expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "root" } }).user.role).toBe("root");
-    expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "owner" } }).user.role).toBe("owner");
+    expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "superuser" } }).user.role).toBe("superuser");
     expect(parseAuthSession({ ...valid, user: { ...valid.user, role: "admin" } }).user.role).toBe("admin");
   });
 
@@ -61,9 +61,9 @@ describe("admin session validation", () => {
     },
   );
 
-  it("treats root, owner and admin as operators", () => {
+  it("treats root, superuser and admin as operators", () => {
     expect(isOperatorRole("root")).toBe(true);
-    expect(isOperatorRole("owner")).toBe(true);
+    expect(isOperatorRole("superuser")).toBe(true);
     expect(isOperatorRole("admin")).toBe(true);
     expect(isOperatorRole("user")).toBe(false);
   });

@@ -38,7 +38,7 @@ function user(id: string, role: AdminUser["role"]): AdminUser {
   };
 }
 
-const owner = user("owner-1", "owner");
+const superuser = user("superuser-1", "superuser");
 const admin = user("admin-1", "admin");
 const regular = user("user-1", "user");
 
@@ -156,8 +156,8 @@ describe("secret masking", () => {
 });
 
 describe("role gates", () => {
-  it("gives the owner full reach and confines everyone else to their own keys", () => {
-    expect(keyReach(owner, key({ owner_id: "someone-else" }))).toBe("full");
+  it("gives a superuser full reach and confines everyone else to their own keys", () => {
+    expect(keyReach(superuser, key({ owner_id: "someone-else" }))).toBe("full");
     expect(keyReach(admin, key({ owner_id: admin.id }))).toBe("full");
     expect(keyReach(admin, key({ owner_id: regular.id }))).toBe("disable");
     expect(keyReach(regular, key({ owner_id: regular.id }))).toBe("full");
@@ -166,7 +166,7 @@ describe("role gates", () => {
   });
 
   it("gates provider management and foreign-key actions", () => {
-    expect(canManageProviders("owner")).toBe(true);
+    expect(canManageProviders("superuser")).toBe(true);
     expect(canManageProviders("admin")).toBe(true);
     expect(canManageProviders("user")).toBe(false);
 
@@ -246,7 +246,7 @@ describe("key payload building", () => {
     ).not.toHaveProperty("key_ref");
   });
 
-  it("marks an owner-created shared key with owner_id null", () => {
+  it("marks a superuser-created shared key with owner_id null", () => {
     expect(keyCreatePayload({ name: "shared", enabled: true, authScheme: "none" }, { shared: true })).toEqual({
       name: "shared",
       enabled: true,

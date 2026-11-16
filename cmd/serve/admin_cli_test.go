@@ -44,18 +44,18 @@ func TestParseCreateOwnerArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		args    []string
-		want    createOwnerOptions
+		want    createSuperuserOptions
 		wantErr bool
 	}{
 		{
 			name: "all flags",
 			args: []string{"--username", " owner ", "--email", "owner@example.com", "--display-name", "Owner", "--with-gateway-token"},
-			want: createOwnerOptions{Username: "owner", Email: "owner@example.com", DisplayName: "Owner", WithGatewayToken: true},
+			want: createSuperuserOptions{Username: "owner", Email: "owner@example.com", DisplayName: "Owner", WithGatewayToken: true},
 		},
 		{
 			name: "username only",
 			args: []string{"--username=owner"},
-			want: createOwnerOptions{Username: "owner"},
+			want: createSuperuserOptions{Username: "owner"},
 		},
 		{name: "missing username", args: nil, wantErr: true},
 		{name: "blank username", args: []string{"--username", "  "}, wantErr: true},
@@ -64,7 +64,7 @@ func TestParseCreateOwnerArgs(t *testing.T) {
 		{
 			name: "display name at limit",
 			args: []string{"--username", "owner", "--display-name", strings.Repeat("x", 200)},
-			want: createOwnerOptions{Username: "owner", DisplayName: strings.Repeat("x", 200)},
+			want: createSuperuserOptions{Username: "owner", DisplayName: strings.Repeat("x", 200)},
 		},
 		{
 			name:    "display name too long",
@@ -73,18 +73,18 @@ func TestParseCreateOwnerArgs(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseCreateOwnerArgs(tc.args)
+			got, err := parseCreateSuperuserArgs(tc.args)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("parseCreateOwnerArgs(%v) = %+v, want error", tc.args, got)
+					t.Fatalf("parseCreateSuperuserArgs(%v) = %+v, want error", tc.args, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("parseCreateOwnerArgs(%v): %v", tc.args, err)
+				t.Fatalf("parseCreateSuperuserArgs(%v): %v", tc.args, err)
 			}
 			if got != tc.want {
-				t.Fatalf("parseCreateOwnerArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
+				t.Fatalf("parseCreateSuperuserArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
 			}
 		})
 	}
@@ -177,25 +177,25 @@ func TestCreateOwnerDB(t *testing.T) {
 	cfg := cliTestPasswordConfig()
 	var out bytes.Buffer
 
-	opts := createOwnerOptions{
+	opts := createSuperuserOptions{
 		Username:         "owner",
 		Email:            "owner@example.com",
 		DisplayName:      "Owner",
 		WithGatewayToken: true,
 	}
-	if err := createOwner(ctx, pool, opts, dbOwnerPassword, &cfg, &out); err != nil {
-		t.Fatalf("createOwner: %v", err)
+	if err := createSuperuser(ctx, pool, opts, dbSuperuserPassword, &cfg, &out); err != nil {
+		t.Fatalf("createSuperuser: %v", err)
 	}
 	if n, err := auth.CountUsers(ctx, pool); err != nil || n != 1 {
 		t.Fatalf("user count = %d, %v; want 1", n, err)
 	}
-	if strings.Contains(out.String(), dbOwnerPassword) {
-		t.Fatal("createOwner wrote the password to stdout")
+	if strings.Contains(out.String(), dbSuperuserPassword) {
+		t.Fatal("createSuperuser wrote the password to stdout")
 	}
 
 	// Bootstrap runs exactly once: the second attempt sees the committed owner.
-	if err := createOwner(ctx, pool, createOwnerOptions{Username: "second"}, dbOwnerPassword, &cfg, &out); !errors.Is(err, auth.ErrUsersExist) {
-		t.Fatalf("second createOwner = %v, want ErrUsersExist", err)
+	if err := createSuperuser(ctx, pool, createSuperuserOptions{Username: "second"}, dbSuperuserPassword, &cfg, &out); !errors.Is(err, auth.ErrUsersExist) {
+		t.Fatalf("second createSuperuser = %v, want ErrUsersExist", err)
 	}
 
 	// The gateway token is printed exactly once and is usable.
@@ -238,15 +238,15 @@ func TestCreateOwnerStdoutFailureDB(t *testing.T) {
 	ctx := t.Context()
 	cfg := cliTestPasswordConfig()
 
-	err := createOwner(ctx, pool, createOwnerOptions{
+	err := createSuperuser(ctx, pool, createSuperuserOptions{
 		Username:         "owner",
 		Email:            "owner@example.com",
 		WithGatewayToken: true,
-	}, dbOwnerPassword, &cfg, errorWriter{})
+	}, dbSuperuserPassword, &cfg, errorWriter{})
 	if err == nil {
-		t.Fatal("createOwner succeeded with a failing stdout")
+		t.Fatal("createSuperuser succeeded with a failing stdout")
 	}
-	for _, want := range []string{`owner "owner" was created`, "unrecoverable", "reset-password", "broken pipe"} {
+	for _, want := range []string{`superuser "owner" was created`, "unrecoverable", "reset-password", "broken pipe"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("stdout failure error = %q, want %q", err, want)
 		}
@@ -284,10 +284,10 @@ func TestAdminBootstrapTokenLegacySurfaceDB(t *testing.T) {
 		t.Fatalf("bootstrap token on empty install = %d, want 204 (body %s)", res.Code, res.Body.String())
 	}
 
-	if _, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username: "owner", Email: "owner@example.com", Password: dbOwnerPassword,
+	if _, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username: "owner", Email: "owner@example.com", Password: dbSuperuserPassword,
 	}, cfg); err != nil {
-		t.Fatalf("create owner: %v", err)
+		t.Fatalf("create superuser: %v", err)
 	}
 
 	res = makeRequest(t, engine, http.MethodGet, "/admin/providers", nil, bearer(dbBootstrapToken))
@@ -311,11 +311,11 @@ func TestResetPasswordDB(t *testing.T) {
 	pool := requireCLITestPool(t)
 	ctx := t.Context()
 	cfg := cliTestPasswordConfig()
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username: "owner", Email: "owner@example.com", Password: dbOwnerPassword,
+	owner, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username: "owner", Email: "owner@example.com", Password: dbSuperuserPassword,
 	}, cfg)
 	if err != nil {
-		t.Fatalf("create owner: %v", err)
+		t.Fatalf("create superuser: %v", err)
 	}
 	session, _, err := auth.CreateSession(ctx, pool, auth.CreateSessionInput{UserID: owner.ID}, auth.DefaultSessionConfig())
 	if err != nil {
@@ -384,14 +384,14 @@ func TestAdminBootstrapTokenDB(t *testing.T) {
 	res = makeRequest(t, engine, http.MethodPost, "/admin/api/users", gin.H{
 		"username": "owner",
 		"email":    "owner@example.com",
-		"role":     string(auth.RoleOwner),
-		"password": dbOwnerPassword,
+		"role":     string(auth.RoleSuperuser),
+		"password": dbSuperuserPassword,
 	}, bearer(dbBootstrapToken))
 	if res.Code != http.StatusCreated {
 		t.Fatalf("bootstrap create owner = %d, want 201 (body %s)", res.Code, res.Body.String())
 	}
 	created := decodeBody(t, res)
-	if created["role"] != string(auth.RoleOwner) {
+	if created["role"] != string(auth.RoleSuperuser) {
 		t.Fatalf("bootstrap created role = %v, want owner", created["role"])
 	}
 	if n, err := auth.CountUsers(t.Context(), pool); err != nil || n != 1 {
@@ -401,8 +401,8 @@ func TestAdminBootstrapTokenDB(t *testing.T) {
 	// After the first owner exists the bootstrap token is ignored.
 	res = makeRequest(t, engine, http.MethodPost, "/admin/api/users", gin.H{
 		"username": "second",
-		"role":     string(auth.RoleOwner),
-		"password": dbOwnerPassword,
+		"role":     string(auth.RoleSuperuser),
+		"password": dbSuperuserPassword,
 	}, bearer(dbBootstrapToken))
 	if res.Code != http.StatusUnauthorized || decodeBody(t, res)["code"] != "invalid_credentials" {
 		t.Fatalf("bootstrap token after owner = %d %s, want 401 invalid_credentials", res.Code, res.Body.String())
