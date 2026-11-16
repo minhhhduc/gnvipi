@@ -86,7 +86,7 @@ func TestDBAdminTokens_RevealOTPFlow(t *testing.T) {
 		badOTP = "111111"
 	}
 	badRes := makeRequest(t, h.engine, http.MethodPost, "/admin/api/tokens/"+tokenID+"/reveal", gin.H{
-		"code": badOTP,
+		"otp": badOTP,
 	}, headers)
 	if badRes.Code != http.StatusForbidden {
 		t.Fatalf("wrong OTP = %d, want 403 (%s)", badRes.Code, badRes.Body.String())
@@ -94,7 +94,7 @@ func TestDBAdminTokens_RevealOTPFlow(t *testing.T) {
 
 	// 5. Valid OTP returns the exact plaintext token.
 	okRes := makeRequest(t, h.engine, http.MethodPost, "/admin/api/tokens/"+tokenID+"/reveal", gin.H{
-		"code": otp,
+		"otp": otp,
 	}, headers)
 	if okRes.Code != http.StatusOK {
 		t.Fatalf("valid OTP = %d, want 200 (%s)", okRes.Code, okRes.Body.String())
@@ -106,7 +106,7 @@ func TestDBAdminTokens_RevealOTPFlow(t *testing.T) {
 
 	// 6. OTP is single-use; replaying it fails.
 	replayRes := makeRequest(t, h.engine, http.MethodPost, "/admin/api/tokens/"+tokenID+"/reveal", gin.H{
-		"code": otp,
+		"otp": otp,
 	}, headers)
 	if replayRes.Code != http.StatusForbidden {
 		t.Fatalf("replayed OTP = %d, want 403 (%s)", replayRes.Code, replayRes.Body.String())

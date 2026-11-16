@@ -77,7 +77,7 @@ export function TokensView({ user }: { user: AdminUser }) {
     try {
       const res = await api<{ token?: string }>(`/admin/api/tokens/${encodeURIComponent(reveal.token.id)}/reveal`, {
         method: "POST",
-        body: JSON.stringify({ code: reveal.code.trim() }),
+        body: JSON.stringify({ otp: reveal.code.trim() }),
       });
       setReveal((r) => (r ? { ...r, busy: false, secret: res.token ?? "" } : r));
     } catch (err) {
