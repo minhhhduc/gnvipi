@@ -138,7 +138,11 @@ func adminTestDDL(schema string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base + "\n" + string(superuserRole) + "\n" + string(guardRootPromotion), nil
+	catalogInvalidation, err := migrations.FS.ReadFile("0009_nvidia_catalog_invalidation.up.sql")
+	if err != nil {
+		return "", err
+	}
+	return base + "\n" + string(superuserRole) + "\n" + string(guardRootPromotion) + "\n" + string(catalogInvalidation), nil
 }
 
 // newAdminTestPool installs the production schema into a throwaway schema, so

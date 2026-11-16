@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
@@ -152,9 +153,9 @@ func (p *modelPrefs) commitPrefsDB(identity *adminIdentity, edit func(*prefsFile
 	return nil
 }
 
-// applySnapshotDB publishes the mask, deletion and search settings from a
-// committed configuration snapshot so every running instance stays in sync with
-// remote writes.
+// applySnapshotDB publishes the mask, deletion, search settings, and NVIDIA
+// catalog from a committed configuration snapshot so every running instance
+// stays in sync with remote writes and rescans.
 func (p *modelPrefs) applySnapshotDB(snapshot *providerstore.Snapshot) {
 	if p == nil || snapshot == nil {
 		return
@@ -169,8 +170,12 @@ func (p *modelPrefs) applySnapshotDB(snapshot *providerstore.Snapshot) {
 		}
 		p.applySettingsLocked(&file)
 	}
+	catalogRead := p.catalogRead
 	maskNotify := p.onMaskChange
 	p.mu.Unlock()
+	if catalogRead != nil {
+		models.Replace(snapshot.NvidiaCatalog())
+	}
 	if maskNotify != nil {
 		maskNotify()
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 // KeyDiagnostic reports a key excluded from routing. Codes and messages never
@@ -65,13 +66,14 @@ type Snapshot struct {
 	// sharedIDs maps a shared mapping's public id to the shared candidates that
 	// answer it. Personal mappings never appear here: an id addresses a shared
 	// mapping only.
-	sharedIDs   map[string]*sharedID
-	knownEx     map[string]bool
-	knownWc     []string
-	modelState  map[string]ModelStateRow
-	settings    Settings
-	diagnostic  []KeyDiagnostic
-	isProtected func(string) bool
+	sharedIDs     map[string]*sharedID
+	knownEx       map[string]bool
+	knownWc       []string
+	modelState    map[string]ModelStateRow
+	nvidiaCatalog map[string]models.ModelInfo
+	settings      Settings
+	diagnostic    []KeyDiagnostic
+	isProtected   func(string) bool
 }
 
 // Version returns the config_state.version this snapshot was built from.
@@ -117,6 +119,19 @@ func (s *Snapshot) ModelState() (hidden, deleted []string) {
 	slices.Sort(hidden)
 	slices.Sort(deleted)
 	return hidden, deleted
+}
+
+// NvidiaCatalog returns a defensive copy of the NVIDIA Playground catalog
+// read in this snapshot.
+func (s *Snapshot) NvidiaCatalog() map[string]models.ModelInfo {
+	if s == nil {
+		return nil
+	}
+	out := make(map[string]models.ModelInfo, len(s.nvidiaCatalog))
+	for id, info := range s.nvidiaCatalog {
+		out[id] = info
+	}
+	return out
 }
 
 // Provider returns a defensive copy of a provider definition.
@@ -367,16 +382,37 @@ func BuildSnapshot(rows Rows, version int64, opts BuildOptions) (*Snapshot, erro
 		return nil, fmt.Errorf("%w: negative config version %d", ErrInvalidConfig, version)
 	}
 	snap := &Snapshot{
-		version:     version,
-		loadedAt:    now(),
-		providers:   make(map[string]*provider.Provider, len(rows.Providers)),
-		personalEx:  make(map[string]map[string][]*candidate),
-		personalWc:  make(map[string][]*candidate),
-		sharedEx:    make(map[string][]*candidate),
-		sharedIDs:   make(map[string]*sharedID),
-		knownEx:     make(map[string]bool),
-		modelState:  make(map[string]ModelStateRow, len(rows.ModelState)),
-		isProtected: opts.IsProtected,
+		version:       version,
+		loadedAt:      now(),
+		providers:     make(map[string]*provider.Provider, len(rows.Providers)),
+		personalEx:    make(map[string]map[string][]*candidate),
+		personalWc:    make(map[string][]*candidate),
+		sharedEx:      make(map[string][]*candidate),
+		sharedIDs:     make(map[string]*sharedID),
+		knownEx:       make(map[string]bool),
+		modelState:    make(map[string]ModelStateRow, len(rows.ModelState)),
+		nvidiaCatalog: make(map[string]models.ModelInfo, len(rows.NvidiaModels)),
+	}
+	for _, row := range rows.NvidiaModels {
+		if row.Model == "" || row.Slug == "" || row.Namespace == "" || row.FunctionID == "" {
+			return nil, fmt.Errorf("%w: nvidia catalog entry %q is incomplete", ErrInvalidConfig, row.Model)
+		}
+		if _, exists := snap.nvidiaCatalog[row.Model]; exists {
+			return nil, fmt.Errorf("%w: duplicate nvidia catalog entry %q", ErrInvalidConfig, row.Model)
+		}
+		snap.nvidiaCatalog[row.Model] = models.ModelInfo{
+			Slug:       row.Slug,
+			Namespace:  row.Namespace,
+			FunctionID: row.FunctionID,
+		}
+	}
+	if len(snap.nvidiaCatalog) > 0 || opts.IsProtected != nil {
+		snap.isProtected = func(model string) bool {
+			if _, ok := snap.nvidiaCatalog[model]; ok {
+				return true
+			}
+			return opts.IsProtected != nil && opts.IsProtected(model)
+		}
 	}
 
 	// Providers first: keys and models must reference a valid definition.
