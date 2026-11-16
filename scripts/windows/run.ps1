@@ -32,7 +32,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot   # scripts/.. = repo root
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # scripts/windows/../.. = repo root
 Set-Location -Path $root
 
 # Ensure the local model catalog exists (gitignored - holds per-machine keys).

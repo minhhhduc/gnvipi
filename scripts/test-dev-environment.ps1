@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$runScript = Join-Path $PSScriptRoot 'run.ps1'
+$runScript = Join-Path $PSScriptRoot 'windows\run.ps1'
 $composeFile = Join-Path $root 'docker-compose.yml'
 $failures = [System.Collections.Generic.List[string]]::new()
 $checks = 0
