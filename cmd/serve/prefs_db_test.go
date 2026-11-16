@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
 // dbSettingsHarness wires the admin API with database-mode settings on top of
@@ -202,5 +203,64 @@ func TestDBChampionStateRoundTrip(t *testing.T) {
 	saveChampionState(ctx, db, second)
 	if got := loadChampionState(ctx, db); got.ChampionURL != second.ChampionURL || len(got.FallbackURLs) != 0 {
 		t.Fatalf("champion after rebenchmark = %+v, want %+v", got, second)
+	}
+}
+
+func TestDBSettings_TwoInstanceSequentialAndRemoteRefresh(t *testing.T) {
+	h := newDBAdminHarness(t)
+	ctx := t.Context()
+
+	prefsA := &modelPrefs{dbSettings: &dbSettingsStore{pool: h.pool}}
+	runtimeA, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(h.pool), providerRuntimeOptions{
+		OnPublish: prefsA.applySnapshotDB,
+	})
+	if err != nil {
+		t.Fatalf("open runtimeA: %v", err)
+	}
+	t.Cleanup(runtimeA.Close)
+	prefsA.dbSettings.runtime = runtimeA
+
+	prefsB := &modelPrefs{dbSettings: &dbSettingsStore{pool: h.pool}}
+	runtimeB, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(h.pool), providerRuntimeOptions{
+		OnPublish: prefsB.applySnapshotDB,
+	})
+	if err != nil {
+		t.Fatalf("open runtimeB: %v", err)
+	}
+	t.Cleanup(runtimeB.Close)
+	prefsB.dbSettings.runtime = runtimeB
+
+	// Instance A hides model X.
+	if err := prefsA.setHiddenAs(nil, []string{"nvidia/masked-x"}); err != nil {
+		t.Fatalf("A setHiddenAs: %v", err)
+	}
+
+	// Before B reloads its snapshot (B's local hidden set is still empty),
+	// B saves a search URL. This must NOT erase A's committed mask.
+	if err := prefsB.setSearchURLAs(nil, "https://search.example.test/?q={query}"); err != nil {
+		t.Fatalf("B setSearchURLAs: %v", err)
+	}
+
+	hidden, _, err := providerstore.LoadModelState(ctx, h.pool)
+	if err != nil {
+		t.Fatalf("load model state: %v", err)
+	}
+	if len(hidden) != 1 || hidden[0] != "nvidia/masked-x" {
+		t.Fatalf("committed hidden = %v, want [nvidia/masked-x]", hidden)
+	}
+	if !prefsB.isHidden("nvidia/masked-x") {
+		t.Fatal("B lost A's hidden model in local state")
+	}
+
+	// Instance A reloads its snapshot and must observe B's search URL while
+	// keeping its own mask.
+	if err := runtimeA.store.Reload(ctx); err != nil {
+		t.Fatalf("A reload: %v", err)
+	}
+	if got := prefsA.searchTemplate(); got != "https://search.example.test/?q={query}" {
+		t.Fatalf("A searchTemplate after reload = %q, want B's URL", got)
+	}
+	if !prefsA.isHidden("nvidia/masked-x") {
+		t.Fatal("A lost hidden model after reload")
 	}
 }

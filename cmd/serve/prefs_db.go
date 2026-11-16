@@ -61,9 +61,12 @@ func searchState(url string) string {
 	return "configured"
 }
 
-// save commits one mask/deleted/search snapshot and audits it in the same
-// transaction. The config-version triggers publish the change to every process.
-func (s *dbSettingsStore) save(ctx context.Context, identity *adminIdentity, hidden, deleted []string, searchURL string) error {
+// update reads the latest committed mask/deleted/search state inside a
+// serialized transaction, applies edit, commits, and audits in the same
+// transaction. Reading from PostgreSQL rather than process-local memory ensures
+// sequential or concurrent writes on different instances never clobber
+// unrelated settings.
+func (s *dbSettingsStore) update(ctx context.Context, identity *adminIdentity, edit func(*prefsFile) error) (prefsFile, error) {
 	actor := ""
 	target := ""
 	if identity != nil {
@@ -71,26 +74,48 @@ func (s *dbSettingsStore) save(ctx context.Context, identity *adminIdentity, hid
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("model state: %w", err)
+		return prefsFile{}, fmt.Errorf("model state: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
-	if err := providerstore.ReplaceModelState(ctx, tx, hidden, deleted, actor); err != nil {
-		return err
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('gnvipi:settings'))`); err != nil {
+		return prefsFile{}, fmt.Errorf("model state: %w", err)
 	}
-	if err := providerstore.PutSetting(ctx, tx, "search", map[string]string{"url": searchURL}, actor); err != nil {
-		return err
+	hidden, deleted, err := providerstore.LoadModelState(ctx, tx)
+	if err != nil {
+		return prefsFile{}, err
+	}
+	var setting struct {
+		URL string `json:"url"`
+	}
+	if _, err := providerstore.LoadSettingObject(ctx, tx, "search", &setting); err != nil {
+		return prefsFile{}, err
+	}
+	file := prefsFile{
+		MasksID:   hidden,
+		DeletedID: deleted,
+		SearchURL: setting.URL,
+	}
+	if err := edit(&file); err != nil {
+		return prefsFile{}, err
+	}
+	if err := providerstore.ReplaceModelState(ctx, tx, file.MasksID, file.DeletedID, actor); err != nil {
+		return prefsFile{}, err
+	}
+	if err := providerstore.PutSetting(ctx, tx, "search", map[string]string{"url": file.SearchURL}, actor); err != nil {
+		return prefsFile{}, err
 	}
 	if identity != nil {
 		if err := writeAdminAudit(ctx, tx, identity, "model.state.update", "models", target, target,
-			map[string]any{"hidden": len(hidden), "deleted": len(deleted), "search": searchURL != ""}); err != nil {
-			return err
+			map[string]any{"hidden": len(file.MasksID), "deleted": len(file.DeletedID), "search": file.SearchURL != ""}); err != nil {
+			return prefsFile{}, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("model state: %w", err)
+		return prefsFile{}, fmt.Errorf("model state: %w", err)
 	}
 	s.reload(ctx)
-	return nil
+	return file, nil
 }
 
 // reload publishes a fresh snapshot now; the watcher would publish it on the
@@ -113,16 +138,11 @@ func (p *modelPrefs) commitPrefsDB(identity *adminIdentity, edit func(*prefsFile
 	if providersChanged {
 		return fmt.Errorf("provider configuration is not file-backed in database mode")
 	}
+	file, err := p.dbSettings.update(context.Background(), identity, edit)
+	if err != nil {
+		return err
+	}
 	p.mu.Lock()
-	file := p.prefsFileLocked()
-	if err := edit(&file); err != nil {
-		p.mu.Unlock()
-		return err
-	}
-	if err := p.dbSettings.save(context.Background(), identity, file.MasksID, file.DeletedID, file.SearchURL); err != nil {
-		p.mu.Unlock()
-		return err
-	}
 	p.applySettingsLocked(&file)
 	maskNotify := p.onMaskChange
 	p.mu.Unlock()
@@ -132,22 +152,28 @@ func (p *modelPrefs) commitPrefsDB(identity *adminIdentity, edit func(*prefsFile
 	return nil
 }
 
-// prefsFileLocked snapshots the database-owned settings as a prefsFile so file
-// and database commits share one edit closure shape. Providers, automode and
-// cycle are absent: PostgreSQL and the per-account rows own those.
-func (p *modelPrefs) prefsFileLocked() prefsFile {
-	file := prefsFile{
-		SearchURL: p.searchURL,
-		MasksID:   make([]string, 0, len(p.hidden)),
-		DeletedID: make([]string, 0, len(p.deleted)),
+// applySnapshotDB publishes the mask, deletion and search settings from a
+// committed configuration snapshot so every running instance stays in sync with
+// remote writes.
+func (p *modelPrefs) applySnapshotDB(snapshot *providerstore.Snapshot) {
+	if p == nil || snapshot == nil {
+		return
 	}
-	for id := range p.hidden {
-		file.MasksID = append(file.MasksID, id)
+	p.mu.Lock()
+	if p.dbSettings != nil {
+		hidden, deleted := snapshot.ModelState()
+		file := prefsFile{
+			MasksID:   hidden,
+			DeletedID: deleted,
+			SearchURL: snapshot.Settings().Search.URL,
+		}
+		p.applySettingsLocked(&file)
 	}
-	for id := range p.deleted {
-		file.DeletedID = append(file.DeletedID, id)
+	maskNotify := p.onMaskChange
+	p.mu.Unlock()
+	if maskNotify != nil {
+		maskNotify()
 	}
-	return file
 }
 
 // applySettingsLocked publishes mask, deletions and search template. It leaves
