@@ -328,11 +328,22 @@ try {
 
   # Wait for gateway to become healthy, then launch Claude Code pointing to it.
   $deadline = (Get-Date).AddSeconds(30)
+  $ready = $false
   while ((Get-Date) -lt $deadline) {
+    if ($proc.HasExited) { break }
     try {
       Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
+      $ready = $true
       break
     } catch { Start-Sleep -Milliseconds 500 }
+  }
+  if (-not $ready) {
+    if ($proc.HasExited) {
+      Write-Host "serve.exe exited (code $($proc.ExitCode)) before becoming healthy - skipping claude" -ForegroundColor Red
+    } else {
+      Write-Host "serve.exe did not become healthy within 30s - skipping claude" -ForegroundColor Red
+    }
+    return
   }
   $env:ANTHROPIC_BASE_URL = "http://localhost:$Port"
   $env:ANTHROPIC_AUTH_TOKEN = $gatewayToken
