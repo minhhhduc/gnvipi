@@ -92,12 +92,9 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 		return false, ErrV2SourceChanged
 	}
 
-	var ownerID string
-	if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE username = $1 AND role = 'superuser' AND status = 'active'`, owner).Scan(&ownerID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("providerstore: active superuser %q not found", owner)
-		}
-		return false, fmt.Errorf("providerstore: find import owner: %w", err)
+	ownerID, err := findImportOwnerID(ctx, tx, owner)
+	if err != nil {
+		return false, err
 	}
 	providerIDs := make([]string, len(doc.Providers))
 	for i := range doc.Providers {
@@ -310,4 +307,20 @@ func nullableInt(value int) any {
 		return nil
 	}
 	return value
+}
+
+type importOwnerQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func findImportOwnerID(ctx context.Context, q importOwnerQuerier, owner string) (string, error) {
+	var ownerID string
+	const query = `SELECT id::text FROM users WHERE username = $1 AND role IN ('superuser', 'root') AND status = 'active'`
+	if err := q.QueryRow(ctx, query, owner).Scan(&ownerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("providerstore: active superuser or root %q not found", owner)
+		}
+		return "", fmt.Errorf("providerstore: find import owner: %w", err)
+	}
+	return ownerID, nil
 }
