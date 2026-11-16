@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 )
 
 func TestAnthropicToResponsesConversationAndTools(t *testing.T) {
@@ -197,4 +198,122 @@ func runAnthropicAdapter(t *testing.T, baseURL, body string) *httptest.ResponseR
 	req.Header.Set("Content-Type", "application/json")
 	e.ServeHTTP(w, req)
 	return w
+}
+
+func mustWriteSSE(t *testing.T, w http.ResponseWriter, s string) {
+	t.Helper()
+	if _, err := io.WriteString(w, s); err != nil {
+		t.Errorf("write SSE: %v", err)
+	}
+}
+
+func TestAnthropicResponsesPassthroughStreamingFailuresAndIncomplete(t *testing.T) {
+	t.Run("response.failed", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			mustWriteSSE(t, w, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-fixture\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"dummy upstream failure\"}}}\n\n")
+			mustWriteSSE(t, w, "data: [DONE]\n\n")
+		}))
+		defer up.Close()
+
+		w := runAnthropicAdapter(t, up.URL, `{"model":"gateway/muse","stream":true,"messages":[{"role":"user","content":"ping"}]}`)
+		body := w.Body.String()
+		if !strings.Contains(body, "event: error") || !strings.Contains(body, "dummy upstream failure") {
+			t.Fatalf("expected Anthropic error event, got:\n%s", body)
+		}
+		if strings.Contains(body, "message_stop") || strings.Contains(body, "end_turn") {
+			t.Fatalf("unexpected success terminal in failed stream:\n%s", body)
+		}
+	})
+
+	t.Run("error event", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			mustWriteSSE(t, w, "event: error\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"too many requests\"}\n\n")
+			mustWriteSSE(t, w, "data: [DONE]\n\n")
+		}))
+		defer up.Close()
+
+		w := runAnthropicAdapter(t, up.URL, `{"model":"gateway/muse","stream":true,"messages":[{"role":"user","content":"ping"}]}`)
+		body := w.Body.String()
+		if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"rate_limit_error"`) || !strings.Contains(body, "too many requests") {
+			t.Fatalf("expected Anthropic rate_limit_error event, got:\n%s", body)
+		}
+		if strings.Contains(body, "message_stop") || strings.Contains(body, "end_turn") {
+			t.Fatalf("unexpected success terminal in error stream:\n%s", body)
+		}
+	})
+
+	t.Run("response.incomplete", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			mustWriteSSE(t, w, "event: response.created\ndata: {\"response\":{\"id\":\"resp_inc\",\"usage\":{\"input_tokens\":5}}}\n\n")
+			mustWriteSSE(t, w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n")
+			mustWriteSSE(t, w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"partial\"}\n\n")
+			mustWriteSSE(t, w, "event: response.output_item.done\ndata: {\"output_index\":0}\n\n")
+			mustWriteSSE(t, w, "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_inc\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":42}}}\n\n")
+		}))
+		defer up.Close()
+
+		w := runAnthropicAdapter(t, up.URL, `{"model":"gateway/muse","stream":true,"messages":[{"role":"user","content":"ping"}]}`)
+		body := w.Body.String()
+		if !strings.Contains(body, `"stop_reason":"max_tokens"`) {
+			t.Fatalf("expected stop_reason max_tokens, got:\n%s", body)
+		}
+		if !strings.Contains(body, `"output_tokens":42`) {
+			t.Fatalf("expected output_tokens 42, got:\n%s", body)
+		}
+		if !strings.Contains(body, "message_stop") {
+			t.Fatalf("expected message_stop, got:\n%s", body)
+		}
+		if strings.Contains(body, "end_turn") {
+			t.Fatalf("unexpected end_turn in incomplete stream:\n%s", body)
+		}
+	})
+}
+
+func TestAnthropicResponsesPassthroughStreamingAbruptEOF(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		mustWriteSSE(t, w, "event: response.created\ndata: {\"response\":{\"id\":\"resp_eof\",\"usage\":{\"input_tokens\":5}}}\n\n")
+		mustWriteSSE(t, w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n")
+		mustWriteSSE(t, w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"partial\"}\n\n")
+	}))
+	defer up.Close()
+
+	gin.SetMode(gin.TestMode)
+	const model = "gateway/muse-abrupt-eof"
+	p := &modelPrefs{providers: []customProvider{{Name: "gateway", Model: "muse-abrupt-eof", BaseURL: up.URL, ResponsesOnly: true}}}
+	e := gin.New()
+	e.Use(anthropicResponsesPassthrough(p))
+	e.POST("/v1/messages", func(c *gin.Context) { t.Fatal("adapter fell through") })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"`+model+`","stream":true,"messages":[{"role":"user","content":"ping"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	e.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "text_delta") {
+		t.Fatalf("expected text_delta before EOF, got:\n%s", body)
+	}
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"api_error"`) || !strings.Contains(body, "upstream stream ended before completion") {
+		t.Fatalf("expected Anthropic api_error event on abrupt EOF, got:\n%s", body)
+	}
+	for _, forbidden := range []string{"message_delta", "message_stop", "end_turn", "tool_use"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unexpected %s in abrupt-EOF stream:\n%s", forbidden, body)
+		}
+	}
+
+	var stats *nvidia.ModelStats
+	for _, row := range nvidia.GlobalStats.Snapshot() {
+		if row.Model == model {
+			r := row
+			stats = &r
+			break
+		}
+	}
+	if stats == nil || stats.Requests != 1 || stats.Errors != 1 {
+		t.Fatalf("expected failed=true recorded in stats, got: %+v", stats)
+	}
 }
