@@ -6,6 +6,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/minhhhduc/gnvipi/migrations"
 )
 
 func TestRedactDSN(t *testing.T) {
@@ -362,6 +364,26 @@ func TestAutoMigrateAllowed(t *testing.T) {
 	}
 	if AutoMigrateAllowed("production") || AutoMigrateAllowed(" PRODUCTION ") {
 		t.Fatal("auto-migrate must be refused in production")
+	}
+}
+
+func TestGuardRootPromotionMigrationEmbedded(t *testing.T) {
+	latest, err := LatestVersion(migrations.FS)
+	if err != nil {
+		t.Fatalf("LatestVersion: %v", err)
+	}
+	if latest < 8 {
+		t.Fatalf("LatestVersion = %d, want >= 8", latest)
+	}
+	up, err := migrations.FS.ReadFile("0008_guard_root_promotion.up.sql")
+	if err != nil {
+		t.Fatalf("read 0008 up migration: %v", err)
+	}
+	if !strings.Contains(string(up), "NEW.role NOT IN ('superuser', 'root')") {
+		t.Fatalf("0008 up migration missing root-preserving NEW.role guard")
+	}
+	if _, err := migrations.FS.ReadFile("0008_guard_root_promotion.down.sql"); err != nil {
+		t.Fatalf("read 0008 down migration: %v", err)
 	}
 }
 
