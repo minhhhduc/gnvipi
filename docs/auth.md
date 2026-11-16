@@ -262,7 +262,7 @@ this; there is no precedence and no fallback between sources.
 |---|---|---|
 | Stored secret | `secret_enc` (+ `secret_nonce`, `secret_kver`) | Decrypted at request time with the keyring. Encrypted at write time from console or `import-v2`. |
 | Environment | `key_env` | Read from the gateway process environment at request time. |
-| Reference | `key_ref` | Resolved at runtime from the `secrets.json` beside the configured models file. |
+| Reference | `key_ref` | Legacy only. Converted into a stored secret at startup from the `secrets.json` beside the configured models file; the admin API rejects new `key_ref` writes. |
 
 Rules verified in the schema and resolver:
 
@@ -275,9 +275,14 @@ Rules verified in the schema and resolver:
   the secret.
 - `key_env` is restricted to the `GNVIPI_KEY_*` namespace. `GNVIPI_MASTER_KEY`
   and other names are rejected.
-- `key_ref` writes require owner or admin. A `key_ref` created this way is
-  resolved against the adjacent secrets file; a missing file means those keys
-  return a credential-unavailable 503 rather than falling back.
+- The admin API refuses a new `key_ref` (422) for every role, the owner
+  included: a reference points into the adjacent `secrets.json`, which the
+  gateway reads once at startup and never again. Store the secret value instead.
+- `key_ref` rows that already exist are materialized into a stored secret at
+  startup, before routing is published. A reference missing from the file (or a
+  gateway without `GNVIPI_MASTER_KEY`) leaves the row untouched, is logged by key
+  id, and keeps returning the credential-unavailable 503 rather than falling
+  back.
 
 Basic auth secrets are JSON objects with `username` and `password`. Bearer and
 header secrets are the raw token value.

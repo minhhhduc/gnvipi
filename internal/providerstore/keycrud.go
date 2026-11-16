@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -224,6 +225,70 @@ func DeleteProviderKey(ctx context.Context, q Querier, providerID, keyID string)
 		return ErrKeyNotFound
 	}
 	return nil
+}
+
+// MaterializeKeyRefs converts every key_ref row into a stored encrypted secret
+// resolved through refs, the imported secrets map. A database-backed gateway
+// therefore never resolves a credential from a JSON file at request time.
+//
+// Rows whose reference is absent from refs are left untouched and returned by
+// id: they already degrade to ErrUnsupportedReference, so the caller reports
+// them once at startup instead of failing. The conversion is idempotent; a
+// repeated run finds no key_ref rows.
+func MaterializeKeyRefs(ctx context.Context, q Querier, keyring *Keyring, refs RefResolver) (migrated int, unresolved []string, err error) {
+	if keyring == nil {
+		return 0, nil, ErrMissingMasterKey
+	}
+	rows, err := q.Query(ctx, `SELECT id::text, COALESCE(owner_id::text, ''), auth_scheme, key_ref
+		FROM provider_keys WHERE key_ref IS NOT NULL AND key_ref <> ''`)
+	if err != nil {
+		return 0, nil, fmt.Errorf("providerstore: list key references: %w", err)
+	}
+	type reference struct{ id, ownerID, scheme, ref string }
+	var pending []reference
+	for rows.Next() {
+		var r reference
+		if err := rows.Scan(&r.id, &r.ownerID, &r.scheme, &r.ref); err != nil {
+			rows.Close()
+			return 0, nil, fmt.Errorf("providerstore: scan key reference: %w", err)
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, nil, fmt.Errorf("providerstore: list key references: %w", err)
+	}
+	rows.Close()
+	for _, r := range pending {
+		if refs == nil {
+			unresolved = append(unresolved, r.id)
+			continue
+		}
+		value, ok := refs.ResolveRef(ctx, r.ref)
+		if !ok {
+			unresolved = append(unresolved, r.id)
+			continue
+		}
+		plaintext := []byte(value)
+		scopeOwner := KeyRow{OwnerID: r.ownerID}.ScopeOwner()
+		ciphertext, nonce, keyVersion, err := keyring.Encrypt(plaintext, r.id, scopeOwner, r.scheme)
+		if err != nil {
+			return migrated, unresolved, err
+		}
+		tag, err := q.Exec(ctx, `UPDATE provider_keys
+			SET secret_enc = $2, secret_nonce = $3, secret_kver = $4, secret_last4 = $5,
+				key_ref = NULL, updated_at = now()
+			WHERE id = $1::uuid AND key_ref = $6`,
+			r.id, ciphertext, nonce, keyVersion, SecretLast4(plaintext, r.scheme), r.ref)
+		if err != nil {
+			return migrated, unresolved, fmt.Errorf("providerstore: store materialized key %s: %w", r.id, err)
+		}
+		if tag.RowsAffected() == 1 {
+			migrated++
+		}
+	}
+	slices.Sort(unresolved)
+	return migrated, unresolved, nil
 }
 
 // KeyModel is one decoded key_models row.

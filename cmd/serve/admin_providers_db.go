@@ -495,8 +495,6 @@ func applyProviderAuth(c *gin.Context, ctx context.Context, tx pgx.Tx, state *au
 		adminFieldError(c, http.StatusUnprocessableEntity, "auth.key", "auth.scheme none does not accept a credential")
 		return false
 	}
-	allowKeyRef := identity != nil && (identity.Role == auth.RoleOwner || identity.Role == auth.RoleAdmin)
-
 	var target *providerstore.KeyRecord
 	if len(existing) > 0 {
 		keys := make([]providerstore.KeyRow, len(existing))
@@ -510,6 +508,14 @@ func applyProviderAuth(c *gin.Context, ctx context.Context, tx pgx.Tx, state *au
 				break
 			}
 		}
+	}
+	if keyRef != "" && (target == nil || keyRef != target.KeyRef) {
+		// A reference names an entry in the imported secrets file, which this
+		// gateway materializes into stored ciphertext at startup and never reads
+		// again; a fresh reference would create a key no request can route.
+		adminFieldError(c, http.StatusUnprocessableEntity, "auth.key_ref",
+			"key_ref is not supported with a database-backed gateway; store the secret value instead")
+		return false
 	}
 	if target != nil {
 		// An echo of the stored auth (GET never returns auth.key) is not a write,
@@ -527,7 +533,7 @@ func applyProviderAuth(c *gin.Context, ctx context.Context, tx pgx.Tx, state *au
 			adminAPIError(c, http.StatusForbidden, "forbidden", "this key belongs to another user")
 			return false
 		}
-		patch := providerstore.KeyPatch{AuthScheme: &scheme, Secret: secret, AllowKeyRef: allowKeyRef}
+		patch := providerstore.KeyPatch{AuthScheme: &scheme, Secret: secret}
 		if scheme == providerstore.SchemeHeader {
 			patch.AuthHeaderName = &headerName
 		}
@@ -568,7 +574,7 @@ func applyProviderAuth(c *gin.Context, ctx context.Context, tx pgx.Tx, state *au
 		adminAPIError(c, http.StatusInternalServerError, "internal_error", "allocate provider key id failed")
 		return false
 	}
-	patch := providerstore.KeyPatch{AuthScheme: &scheme, Secret: secret, AllowKeyRef: allowKeyRef}
+	patch := providerstore.KeyPatch{AuthScheme: &scheme, Secret: secret}
 	if scheme == providerstore.SchemeHeader {
 		patch.AuthHeaderName = &headerName
 	}

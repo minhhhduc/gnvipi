@@ -299,10 +299,11 @@ func runServer() (err error) {
 			} else {
 				orderedURLs = append([]string{state.ChampionURL}, append(state.FallbackURLs, candidates...)...)
 				log.Printf("captcha: champion=%s score=%dms", state.ChampionURL, state.ScoreMS)
+				saveChampionState(ctx, appState, state)
 			}
-		} else if state := captcha.LoadChampion(captcha.ChampionStateFile()); state.ChampionURL != "" {
+		} else if state := loadChampionState(ctx, appState); state.ChampionURL != "" {
 			orderedURLs = append([]string{state.ChampionURL}, append(state.FallbackURLs, candidates...)...)
-			log.Printf("captcha: loaded champion=%s from disk", state.ChampionURL)
+			log.Printf("captcha: loaded champion=%s from %s", state.ChampionURL, championStateSource(appState))
 		}
 		urlProvider := captcha.NewRotatingURLProvider(uniqueURLs(orderedURLs))
 		browserCfg := captcha.BrowserConfig{Proxy: proxyURL, URLProvider: urlProvider}

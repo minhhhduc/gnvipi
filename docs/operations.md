@@ -103,15 +103,22 @@ endpoint supporting web search:
 | Data | Default Location | Override |
 |---|---|---|
 | Catalog, admin settings, provider API keys (file mode) | `internal/models/playground_models.json` | `-models-file` |
-| Catalog, admin settings, provider keys, masks, deletions, search template (database mode) | PostgreSQL schema from `migrations/` | `GNVIPI_DATABASE_URL` |
+| Catalog, admin settings, provider keys, masks, deletions, search template, captcha champion state (database mode) | PostgreSQL schema from `migrations/` | `GNVIPI_DATABASE_URL` |
 | Request history | User cache: `gnvipi/stats.jsonl` | `GNVIPI_STATS_FILE` |
-| Captcha champion state | User cache: `gnvipi/playground-state.json` | `GNVIPI_CAPTCHA_STATE` |
+| Captcha champion state (file mode) | User cache: `gnvipi/playground-state.json` | `GNVIPI_CAPTCHA_STATE` |
 
 User cache resolves to:
 
 - Linux: `~/.cache` (or `$XDG_CACHE_HOME`)
 - macOS: `~/Library/Caches`
 - Windows: `%LOCALAPPDATA%`
+
+In database mode the gateway writes no state files: the captcha champion lives
+in `system_state` under the `captcha_champion` key, and provider keys carry
+encrypted secrets. The only file it may still read for state is a legacy
+`secrets.json`: at startup, rows whose credential is a `key_ref` into that file
+are converted into stored ciphertext (see `docs/auth.md`), after which the file
+is not read again.
 
 Overrides are file paths; the default stats log lives beside the captcha state
 file. A missing models file uses the embedded catalog, but its parent directory
