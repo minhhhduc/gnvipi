@@ -369,13 +369,9 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 		}
 	}
 	if !stopped {
-		startMessage("", nil)
-		stop := "end_turn"
-		if usedTool {
-			stop = "tool_use"
-		}
-		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": 0}})
-		emit("message_stop", map[string]any{"type": "message_stop"})
+		failed = true
+		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream ended before completion"}})
+		stopped = true
 	}
 	nvidiaRecord(model, nil, start, true, failed)
 }
