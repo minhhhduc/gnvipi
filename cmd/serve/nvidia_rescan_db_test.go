@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
@@ -140,5 +147,84 @@ func TestDBNvidiaRescan_CrossInstanceRefresh(t *testing.T) {
 	}
 	if _, err := models.Lookup("acme/role-test"); err != nil {
 		t.Fatalf("Instance B did not publish new catalog model: %v", err)
+	}
+}
+
+func TestDBNvidiaRescan_LeastPrivilege(t *testing.T) {
+	restoreModels(t)
+	h := newDBAdminHarness(t)
+	ctx := t.Context()
+
+	var schema string
+	if err := h.pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
+		t.Fatalf("query current_schema: %v", err)
+	}
+	var suffix [6]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		t.Fatalf("role suffix: %v", err)
+	}
+	suffixHex := hex.EncodeToString(suffix[:])
+	appRole := "rescan_app_" + suffixHex
+	maintRole := "rescan_maint_" + suffixHex
+	schemaSQL := pgx.Identifier{schema}.Sanitize()
+	appRoleSQL := pgx.Identifier{appRole}.Sanitize()
+	maintRoleSQL := pgx.Identifier{maintRole}.Sanitize()
+
+	// Verify runtime role cannot write nvidia_models while maintenance role can.
+	if _, err := h.pool.Exec(ctx, "CREATE ROLE "+appRoleSQL+" NOLOGIN; CREATE ROLE "+maintRoleSQL+" NOLOGIN;"); err != nil {
+		t.Skipf("test database user cannot create roles: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		_, _ = h.pool.Exec(cleanupCtx, "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "+schemaSQL+" FROM "+appRoleSQL+", "+maintRoleSQL) //nolint:errcheck // best-effort cleanup
+		_, _ = h.pool.Exec(cleanupCtx, "REVOKE ALL PRIVILEGES ON SCHEMA "+schemaSQL+" FROM "+appRoleSQL+", "+maintRoleSQL)               //nolint:errcheck // best-effort cleanup
+		_, _ = h.pool.Exec(cleanupCtx, "DROP ROLE IF EXISTS "+appRoleSQL+", "+maintRoleSQL)                                              //nolint:errcheck // best-effort cleanup
+	})
+	if _, err := h.pool.Exec(ctx, `
+		GRANT USAGE ON SCHEMA `+schemaSQL+` TO `+appRoleSQL+`, `+maintRoleSQL+`;
+		GRANT SELECT ON nvidia_models, config_state, providers, provider_keys, key_models, model_state, settings TO `+appRoleSQL+`;
+		REVOKE INSERT, UPDATE, DELETE ON nvidia_models FROM `+appRoleSQL+`;
+		GRANT SELECT, INSERT, DELETE ON nvidia_models TO `+maintRoleSQL+`;
+	`); err != nil {
+		t.Fatalf("configure role grants: %v", err)
+	}
+
+	openRolePool := func(roleSQL string) *pgxpool.Pool {
+		t.Helper()
+		cfg := h.pool.Config().Copy()
+		cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+			_, err := c.Exec(ctx, "SET search_path TO "+schemaSQL+", public; SET ROLE "+roleSQL)
+			return err
+		}
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatalf("open pool for %s: %v", roleSQL, err)
+		}
+		t.Cleanup(pool.Close)
+		return pool
+	}
+	appPool := openRolePool(appRoleSQL)
+	maintPool := openRolePool(maintRoleSQL)
+
+	stubNvidiaDiscovery(t, rescanFixture(
+		models.PlaygroundRow{Model: "acme/role-test", Slug: "role-test", Namespace: "qc69jvmznzxy", FunctionID: "77777777-7777-7777-7777-777777777777"},
+	))
+
+	// Runtime role must fail to write nvidia_models with SQLSTATE 42501.
+	deniedPrefs := &modelPrefs{catalogRead: appPool, catalogWrite: appPool}
+	_, err := deniedPrefs.rescanNvidiaCatalog(ctx)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("expected SQLSTATE 42501 with runtime role, got: %v", err)
+	}
+
+	// Maintenance role must succeed in writing nvidia_models.
+	prefsA := &modelPrefs{catalogRead: appPool, catalogWrite: maintPool}
+	res, err := prefsA.rescanNvidiaCatalog(ctx)
+	if err != nil {
+		t.Fatalf("rescan with maintenance role: %v", err)
+	}
+	if res.Added != 1 {
+		t.Fatalf("res.Added = %d, want 1", res.Added)
 	}
 }
