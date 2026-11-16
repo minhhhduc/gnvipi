@@ -53,8 +53,8 @@ databases, bypasses row security, owns public objects, or inherits privileges
 from another role. Keep `gnvipi_app` non-privileged and free of memberships.
 
 Use `sslmode=verify-full` for every non-local host. The gateway refuses a
-non-local DSN without it. `localhost`, `127.0.0.1` and `::1` are treated as
-local.
+non-local DSN without it. `localhost`, `127.0.0.1`, `::1`, and local Unix domain
+socket paths (e.g. `host=/var/run/postgresql`) are treated as local.
 
 ### Pool settings
 
@@ -95,7 +95,7 @@ never runs migrations or creates the first superuser; run those steps yourself.
 The `serve` service in compose reads:
 
 ```yaml
-GNVIPI_DATABASE_URL: postgres://...@db:5432/gnvipi?sslmode=disable
+GNVIPI_DATABASE_URL: postgres://...@/gnvipi?host=/var/run/postgresql&sslmode=disable
 GNVIPI_MASTER_KEY: "${GNVIPI_MASTER_KEY:-}"
 GNVIPI_DB_MAX_CONNS: "10"
 ```

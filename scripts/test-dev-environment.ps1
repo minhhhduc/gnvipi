@@ -23,9 +23,17 @@ Assert-DevEnvironment $dbMatch.Success 'docker-compose.yml must define a db serv
 Assert-DevEnvironment ($dbBlock -match '(?m)^    image: postgres:17-alpine\s*$') 'db must use postgres:17-alpine'
 Assert-DevEnvironment ($dbBlock -match 'pg_isready') 'db must have a pg_isready healthcheck'
 Assert-DevEnvironment ($dbBlock -match '(?m)^      - gnvipi_db:/var/lib/postgresql/data\s*$') 'db must mount the named gnvipi_db volume'
+Assert-DevEnvironment ($dbBlock -match '(?m)^      - gnvipi_pgsock:/var/run/postgresql\s*$') 'db must mount the named gnvipi_pgsock volume'
 Assert-DevEnvironment ($compose -match '(?ms)^volumes:\r?\n  gnvipi_db:\s*$') 'compose must declare the gnvipi_db named volume'
+Assert-DevEnvironment ($compose -match '(?ms)^volumes:.*\r?\n  gnvipi_pgsock:\s*$') 'compose must declare the gnvipi_pgsock named volume'
 Assert-DevEnvironment ($dbBlock -notmatch '8080') 'the db-only service must not publish or inspect port 8080'
 Assert-DevEnvironment ($compose -notmatch 'GNVIPI_MASTER_KEY:\s*["'']?\$\{GNVIPI_MASTER_KEY:\?') 'db-only compose startup must not require a serve-only master key'
+
+$serveMatch = [regex]::Match($compose, '(?ms)^  serve:\r?\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|^volumes:)')
+$serveBlock = $serveMatch.Groups['body'].Value
+Assert-DevEnvironment $serveMatch.Success 'docker-compose.yml must define a serve service'
+Assert-DevEnvironment ($serveBlock -match '(?m)^      - gnvipi_pgsock:/var/run/postgresql\s*$') 'serve must mount the named gnvipi_pgsock volume'
+Assert-DevEnvironment ($serveBlock -match '(?m)^\s*GNVIPI_DATABASE_URL:\s*\$\{GNVIPI_DATABASE_URL:-postgres://[^@]+@/gnvipi\?host=/var/run/postgresql') 'serve default GNVIPI_DATABASE_URL must use the local Unix domain socket'
 
 # `docker compose up -d` returns before PostgreSQL is healthy, so the documented
 # bootstrap must wait for the healthcheck before migrating.

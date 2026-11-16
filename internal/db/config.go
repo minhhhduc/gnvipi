@@ -161,7 +161,8 @@ func AutoMigrateAllowed(env string) bool {
 }
 
 // ValidateDSN checks that raw is a postgres URL and applies the spec's TLS
-// rule: non-local hosts require sslmode=verify-full.
+// rule: non-local hosts require sslmode=verify-full. Local TCP loopback hosts
+// and local Unix domain sockets do not require TLS.
 func ValidateDSN(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
@@ -169,6 +170,9 @@ func ValidateDSN(raw string) error {
 	}
 	host := u.Hostname()
 	if host == "" {
+		if isLocalUnixSocket(u.Query().Get("host")) {
+			return nil
+		}
 		return fmt.Errorf("invalid database URL %s: missing host", RedactDSN(raw))
 	}
 	if isLocalHost(host) {
@@ -178,6 +182,20 @@ func ValidateDSN(raw string) error {
 		return fmt.Errorf("database host %q is not local; sslmode=verify-full is required", host)
 	}
 	return nil
+}
+
+func isLocalUnixSocket(rawHost string) bool {
+	rawHost = strings.TrimSpace(rawHost)
+	if rawHost == "" {
+		return false
+	}
+	for _, part := range strings.Split(rawHost, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(part, "/") || part == "/" {
+			return false
+		}
+	}
+	return true
 }
 
 func isLocalHost(host string) bool {

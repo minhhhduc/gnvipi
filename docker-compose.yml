@@ -14,6 +14,7 @@ services:
       POSTGRES_DB: ${GNVIPI_DB_NAME:-gnvipi}
     volumes:
       - gnvipi_db:/var/lib/postgresql/data
+      - gnvipi_pgsock:/var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -39,11 +40,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - gnvipi_pgsock:/var/run/postgresql
     environment:
       CHROME_PROXY: ${CHROME_PROXY:-}
-      # Dev-only DSN. Override the whole URL when changing any GNVIPI_DB_*
-      # value above; credentials are runtime-only and never baked into images.
-      GNVIPI_DATABASE_URL: ${GNVIPI_DATABASE_URL:-postgres://gnvipi_dev:gnvipi_dev_only@db:5432/gnvipi?sslmode=disable}
+      # Dev-only DSN over the shared Unix domain socket. Override the whole URL
+      # when changing any GNVIPI_DB_* value above or targeting a remote host;
+      # credentials are runtime-only and never baked into images.
+      GNVIPI_DATABASE_URL: ${GNVIPI_DATABASE_URL:-postgres://gnvipi_dev:gnvipi_dev_only@/gnvipi?host=/var/run/postgresql&sslmode=disable}
       # No default secret: keep interpolation optional for db-only selection,
       # but set a real key before starting the serve service.
       GNVIPI_MASTER_KEY: "${GNVIPI_MASTER_KEY:-}"
@@ -57,3 +61,4 @@ services:
 
 volumes:
   gnvipi_db:
+  gnvipi_pgsock:
