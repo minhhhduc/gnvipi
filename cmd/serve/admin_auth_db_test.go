@@ -134,7 +134,11 @@ func adminTestDDL(schema string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base + "\n" + string(superuserRole), nil
+	guardRootPromotion, err := migrations.FS.ReadFile("0008_guard_root_promotion.up.sql")
+	if err != nil {
+		return "", err
+	}
+	return base + "\n" + string(superuserRole) + "\n" + string(guardRootPromotion), nil
 }
 
 // newAdminTestPool installs the production schema into a throwaway schema, so
