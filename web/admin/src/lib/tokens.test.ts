@@ -205,6 +205,15 @@ describe("token list parsing", () => {
     expect(JSON.stringify(parsed)).not.toContain("secret");
   });
 
+  it("preserves can_reveal when provided as a boolean", () => {
+    const parsed = parseTokenList({
+      tokens: [{ ...body.tokens[0], can_reveal: true }],
+      limit: 50,
+      offset: 0,
+    });
+    expect(parsed.tokens[0].can_reveal).toBe(true);
+  });
+
   it("rejects a malformed list body", () => {
     expect(() => parseTokenList({ tokens: "nope" })).toThrow("Invalid tokens response");
     expect(() => parseTokenList(null)).toThrow("Invalid tokens response");

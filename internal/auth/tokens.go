@@ -81,6 +81,7 @@ type APIToken struct {
 	LastUsedAt  *time.Time
 	RevokedAt   *time.Time
 	CreatedAt   time.Time
+	CanReveal   bool
 }
 
 // CreateAPITokenInput describes a new personal token.
@@ -94,13 +95,14 @@ type CreateAPITokenInput struct {
 }
 
 const tokenColumns = `id::text, user_id::text, kind, name, token_prefix,
-	COALESCE(scope, ''), expires_at, last_used_at, revoked_at, created_at`
+	COALESCE(scope, ''), expires_at, last_used_at, revoked_at, created_at,
+	(token_enc IS NOT NULL)`
 
 func scanToken(row pgx.Row) (*APIToken, error) {
 	var t APIToken
 	var kind, scope string
 	if err := row.Scan(&t.ID, &t.UserID, &kind, &t.Name, &t.TokenPrefix,
-		&scope, &t.ExpiresAt, &t.LastUsedAt, &t.RevokedAt, &t.CreatedAt); err != nil {
+		&scope, &t.ExpiresAt, &t.LastUsedAt, &t.RevokedAt, &t.CreatedAt, &t.CanReveal); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -108,6 +110,57 @@ func scanToken(row pgx.Row) (*APIToken, error) {
 	}
 	t.Kind, t.Scope = TokenKind(kind), Scope(scope)
 	return &t, nil
+}
+
+// SetAPITokenCipher stores the optional AES-GCM encrypted copy of a newly
+// created API token so it can be revealed later after OTP verification.
+func SetAPITokenCipher(ctx context.Context, q Querier, tokenID string, enc, nonce []byte, kver int) error {
+	tag, err := q.Exec(ctx, `
+		UPDATE api_tokens
+		SET token_enc = $2, token_nonce = $3, token_kver = $4
+		WHERE id = $1::uuid`, tokenID, enc, nonce, kver)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// APITokenCipher holds the encrypted copy and metadata needed to verify
+// ownership and decrypt an API token for OTP-protected reveal.
+type APITokenCipher struct {
+	ID      string
+	UserID  string
+	Name    string
+	Revoked bool
+	Enc     []byte
+	Nonce   []byte
+	KVer    int
+}
+
+// GetAPITokenCipher loads the encrypted copy and metadata for tokenID.
+func GetAPITokenCipher(ctx context.Context, q Querier, tokenID string) (*APITokenCipher, error) {
+	var out APITokenCipher
+	var kver *int
+	err := q.QueryRow(ctx, `
+		SELECT id::text, user_id::text, name, (revoked_at IS NOT NULL),
+		       token_enc, token_nonce, token_kver
+		FROM api_tokens
+		WHERE id = $1::uuid`, tokenID).Scan(
+		&out.ID, &out.UserID, &out.Name, &out.Revoked, &out.Enc, &out.Nonce, &kver,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if kver != nil {
+		out.KVer = *kver
+	}
+	return &out, nil
 }
 
 // CreateAPIToken validates kind/scope/expiry, generates a prefixed random

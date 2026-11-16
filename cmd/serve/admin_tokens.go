@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ func registerAdminTokenRoutes(engine *gin.Engine, state *authState) {
 	engine.GET("/admin/api/tokens", handleAdminListTokens(state))
 	engine.POST("/admin/api/tokens", handleAdminCreateToken(state))
 	engine.DELETE("/admin/api/tokens/:id", handleAdminRevokeToken(state))
+	engine.POST("/admin/api/tokens/:id/reveal/request", handleAdminTokenRevealRequest(state))
+	engine.POST("/admin/api/tokens/:id/reveal", handleAdminTokenReveal(state))
 }
 
 func adminTokenJSON(token *auth.APIToken) gin.H {
@@ -28,6 +31,7 @@ func adminTokenJSON(token *auth.APIToken) gin.H {
 		"last_used_at": token.LastUsedAt,
 		"revoked_at":   token.RevokedAt,
 		"created_at":   token.CreatedAt,
+		"can_reveal":   token.CanReveal,
 	}
 }
 
@@ -185,6 +189,18 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the token")
 			return
 		}
+		if state.keyring != nil {
+			enc, nonce, kver, encErr := state.keyring.Encrypt([]byte(raw), token.ID, token.UserID, "api_token")
+			if encErr != nil {
+				adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not encrypt the token")
+				return
+			}
+			if setErr := auth.SetAPITokenCipher(ctx, tx, token.ID, enc, nonce, kver); setErr != nil {
+				adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not store the token")
+				return
+			}
+			token.CanReveal = true
+		}
 		if err := writeAdminAudit(ctx, tx, identity, "token.create", "token", token.ID, token.UserID, map[string]any{
 			"user_id": token.UserID,
 			"kind":    string(token.Kind),
@@ -251,5 +267,114 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 		// Revocation must not wait for the TTL window.
 		gatewayTokenCache.PurgeAll()
 		c.Status(http.StatusNoContent)
+	}
+}
+
+func loadRevealableAPIToken(c *gin.Context, state *authState, identity *adminIdentity) (*auth.APITokenCipher, bool) {
+	ctx := c.Request.Context()
+	record, err := auth.GetAPITokenCipher(ctx, state.pool, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, auth.ErrNotFound) || isInvalidUUID(err) {
+			adminNotFoundResponse(c)
+			return nil, false
+		}
+		adminAPIError(c, http.StatusInternalServerError, "token_unavailable", "could not read the token")
+		return nil, false
+	}
+	if !identity.Role.AtLeast(auth.RoleSuperuser) && !sameUserID(record.UserID, identity.UserID) {
+		adminNotFoundResponse(c)
+		return nil, false
+	}
+	if record.Revoked {
+		adminFieldError(c, http.StatusBadRequest, "token", "revoked tokens cannot be revealed")
+		return nil, false
+	}
+	if len(record.Enc) == 0 || len(record.Nonce) == 0 || record.KVer <= 0 || state.keyring == nil {
+		adminFieldError(c, http.StatusUnprocessableEntity, "token", "token was created without reveal encryption")
+		return nil, false
+	}
+	return record, true
+}
+
+func handleAdminTokenRevealRequest(state *authState) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity := adminIdentityOf(c)
+		record, ok := loadRevealableAPIToken(c, state, identity)
+		if !ok {
+			return
+		}
+		if state.mailer == nil || !state.mailer.Enabled() {
+			adminAPIError(c, http.StatusServiceUnavailable, "smtp_unavailable", "SMTP is not configured on this server")
+			return
+		}
+		if state.revealOTP == nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "OTP store unavailable")
+			return
+		}
+		ctx := c.Request.Context()
+		recipient, err := auth.GetUserByID(ctx, state.pool, record.UserID)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "lookup token owner failed")
+			return
+		}
+		if strings.TrimSpace(recipient.Email) == "" {
+			adminFieldError(c, http.StatusBadRequest, "email", "token owner has no email configured")
+			return
+		}
+		code, err := state.revealOTP.Issue(identity.UserID, "token:"+record.ID, time.Now())
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "generate OTP failed")
+			return
+		}
+		subject := fmt.Sprintf("Verification code to reveal API key %q", record.Name)
+		body := fmt.Sprintf("Your one-time verification code to reveal API key %q is: %s\n\nThis code expires in 5 minutes.", record.Name, code)
+		if err := state.mailer.Send(ctx, recipient.Email, subject, body); err != nil {
+			adminAPIError(c, http.StatusBadGateway, "email_failed", "could not send verification email")
+			return
+		}
+		if err := writeAdminAudit(ctx, state.pool, identity, "token.reveal_otp_sent", "token", record.ID, record.UserID, map[string]any{
+			"name": record.Name,
+		}); err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "audit_unavailable", "could not record the reveal request")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"sent":               true,
+			"to":                 maskEmail(recipient.Email),
+			"expires_in_seconds": int(revealOTPTTL.Seconds()),
+		})
+	}
+}
+
+func handleAdminTokenReveal(state *authState) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity := adminIdentityOf(c)
+		record, ok := loadRevealableAPIToken(c, state, identity)
+		if !ok {
+			return
+		}
+		var req struct {
+			OTP string `json:"otp"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			adminAPIError(c, http.StatusBadRequest, "invalid_body", "expected a JSON object with otp")
+			return
+		}
+		if state.revealOTP == nil || !state.revealOTP.Verify(identity.UserID, "token:"+record.ID, req.OTP, time.Now()) {
+			adminAPIError(c, http.StatusForbidden, "invalid_otp", "invalid or expired verification code")
+			return
+		}
+		plaintext, err := state.keyring.Decrypt(record.Enc, record.Nonce, record.ID, record.UserID, "api_token", record.KVer)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "credential_unavailable", "stored token material cannot be decrypted")
+			return
+		}
+		if err := writeAdminAudit(c.Request.Context(), state.pool, identity, "token.reveal", "token", record.ID, record.UserID, map[string]any{
+			"name": record.Name,
+		}); err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "audit_unavailable", "could not record the token reveal")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"token": string(plaintext)})
 	}
 }
