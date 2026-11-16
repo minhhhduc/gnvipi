@@ -36,7 +36,7 @@ func adminTokenJSON(token *auth.APIToken) gin.H {
 // stays unprobeable.
 func adminTokenTarget(c *gin.Context, identity *adminIdentity) (string, bool) {
 	target := strings.TrimSpace(c.Query("user_id"))
-	if target == "" || target == identity.UserID {
+	if target == "" || sameUserID(target, identity.UserID) {
 		return identity.UserID, true
 	}
 	if !identity.Role.AtLeast(auth.RoleSuperuser) {
@@ -102,7 +102,7 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 		identity := adminIdentityOf(c)
 		ctx := c.Request.Context()
 		target := identity.UserID
-		if raw := strings.TrimSpace(req.UserID); raw != "" && raw != identity.UserID {
+		if raw := strings.TrimSpace(req.UserID); raw != "" && !sameUserID(raw, identity.UserID) {
 			if !identity.Role.AtLeast(auth.RoleSuperuser) {
 				adminNotFoundResponse(c)
 				return
@@ -218,7 +218,7 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "token_unavailable", "could not read the token")
 			return
 		}
-		if !identity.Role.AtLeast(auth.RoleSuperuser) && token.UserID != identity.UserID {
+		if !identity.Role.AtLeast(auth.RoleSuperuser) && !sameUserID(token.UserID, identity.UserID) {
 			adminNotFoundResponse(c)
 			return
 		}

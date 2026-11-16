@@ -385,7 +385,7 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 				adminAPIError(c, http.StatusForbidden, "forbidden", "this action is not permitted for your role")
 				return
 			}
-			if reach == ownSelf && perm.subjectParam && c.Param("id") != identity.UserID {
+			if reach == ownSelf && perm.subjectParam && !sameUserID(c.Param("id"), identity.UserID) {
 				adminNotFoundResponse(c)
 				return
 			}
@@ -570,7 +570,7 @@ func adminPasswordChangeAllowed(c *gin.Context, identity *adminIdentity) bool {
 	if c.Request.URL.Path == adminPasswordPath || c.Request.URL.Path == adminLogoutPath {
 		return true
 	}
-	return c.FullPath() == "/admin/api/users/:id/password" && c.Param("id") == identity.UserID
+	return c.FullPath() == "/admin/api/users/:id/password" && sameUserID(c.Param("id"), identity.UserID)
 }
 
 func bearerCredential(r *http.Request) (raw string, present, wellFormed bool) {
