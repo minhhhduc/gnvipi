@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 func TestBuildSnapshotValid(t *testing.T) {
@@ -334,5 +336,46 @@ func TestBuildSnapshotModelState(t *testing.T) {
 	}
 	if !reflect.DeepEqual(deleted, []string{"b-deleted"}) {
 		t.Fatalf("deleted = %v, want [b-deleted]", deleted)
+	}
+}
+
+func TestBuildSnapshotNvidiaCatalog(t *testing.T) {
+	rows := baseRows()
+	rows.NvidiaModels = []models.PlaygroundRow{
+		{Model: "acme/alpha", Slug: "alpha", Namespace: "ns1", FunctionID: "11111111-1111-1111-1111-111111111111"},
+	}
+
+	snap := mustBuildSnapshot(t, rows, 2, BuildOptions{Now: fixedNow})
+	catalog := snap.NvidiaCatalog()
+	if len(catalog) != 1 || catalog["acme/alpha"].Slug != "alpha" {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+	// Mutating the returned map must not mutate the snapshot.
+	catalog["acme/injected"] = models.ModelInfo{Slug: "injected"}
+	if _, exists := snap.NvidiaCatalog()["acme/injected"]; exists {
+		t.Fatal("mutated snapshot catalog through returned map")
+	}
+
+	// Catalog models in the snapshot are protected against non-shadowing aliases.
+	if snap.isProtected == nil || !snap.isProtected("acme/alpha") {
+		t.Fatal("snapshot did not mark catalog model as protected")
+	}
+	if snap.isProtected("other/model") {
+		t.Fatal("snapshot unexpectedly marked non-catalog model as protected")
+	}
+}
+
+func TestBuildSnapshotRejectsInvalidNvidiaCatalog(t *testing.T) {
+	incomplete := baseRows()
+	incomplete.NvidiaModels = []models.PlaygroundRow{{Model: "acme/bad", Slug: "bad"}}
+	if _, err := BuildSnapshot(incomplete, 1, BuildOptions{Now: fixedNow}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("incomplete catalog err = %v, want ErrInvalidConfig", err)
+	}
+
+	dup := baseRows()
+	entry := models.PlaygroundRow{Model: "acme/dup", Slug: "dup", Namespace: "ns1", FunctionID: "11111111-1111-1111-1111-111111111111"}
+	dup.NvidiaModels = []models.PlaygroundRow{entry, entry}
+	if _, err := BuildSnapshot(dup, 1, BuildOptions{Now: fixedNow}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("duplicate catalog err = %v, want ErrInvalidConfig", err)
 	}
 }

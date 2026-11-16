@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 // RowSource supplies a consistent configuration read and the current
@@ -168,6 +169,24 @@ func (s *DBRowSource) LoadConfig(ctx context.Context) (Rows, int64, error) {
 		return Rows{}, 0, fmt.Errorf("providerstore: read settings: %w", err)
 	}
 	settingRows.Close()
+
+	catalogRows, err := tx.Query(ctx, nvidiaCatalogQuery)
+	if err != nil {
+		return Rows{}, 0, fmt.Errorf("providerstore: read nvidia catalog: %w", err)
+	}
+	for catalogRows.Next() {
+		var row models.PlaygroundRow
+		if err := catalogRows.Scan(&row.Model, &row.Slug, &row.Namespace, &row.FunctionID); err != nil {
+			catalogRows.Close()
+			return Rows{}, 0, fmt.Errorf("providerstore: scan nvidia catalog: %w", err)
+		}
+		rows.NvidiaModels = append(rows.NvidiaModels, row)
+	}
+	if err := catalogRows.Err(); err != nil {
+		catalogRows.Close()
+		return Rows{}, 0, fmt.Errorf("providerstore: read nvidia catalog: %w", err)
+	}
+	catalogRows.Close()
 
 	if err := tx.Commit(ctx); err != nil {
 		return Rows{}, 0, fmt.Errorf("providerstore: commit snapshot transaction: %w", err)

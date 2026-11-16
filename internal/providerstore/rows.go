@@ -16,6 +16,7 @@ import (
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/provider"
+	"github.com/minhhhduc/gnvipi/internal/models"
 )
 
 // ProviderRow is one providers row. JSONB columns are raw bytes so the
@@ -96,11 +97,12 @@ type SettingRow struct {
 
 // Rows is the complete configuration read in one snapshot transaction.
 type Rows struct {
-	Providers  []ProviderRow
-	Keys       []KeyRow
-	KeyModels  []KeyModelRow
-	ModelState []ModelStateRow
-	Settings   []SettingRow
+	Providers    []ProviderRow
+	Keys         []KeyRow
+	KeyModels    []KeyModelRow
+	ModelState   []ModelStateRow
+	Settings     []SettingRow
+	NvidiaModels []models.PlaygroundRow
 }
 
 // Settings holds the validated automode/cycle/search settings.

@@ -90,6 +90,9 @@ func (p *modelPrefs) rescanNvidiaCatalog(ctx context.Context) (nvidiaRescanResul
 		}
 		models.Replace(next)
 		p.notifyCatalogChanged()
+		if p.dbSettings != nil {
+			p.dbSettings.reload(ctx)
+		}
 		return result, nil
 	}
 
