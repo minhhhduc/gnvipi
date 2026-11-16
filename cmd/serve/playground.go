@@ -39,7 +39,7 @@ func playgroundTargetUser(c *gin.Context, identity *adminIdentity) (string, bool
 		return "", false
 	}
 	requested := strings.TrimSpace(c.Query("user_id"))
-	if identity.Role != auth.RoleOwner {
+	if !identity.Role.AtLeast(auth.RoleOwner) {
 		if requested != "" && requested != identity.UserID {
 			adminNotFoundResponse(c)
 			return "", false
