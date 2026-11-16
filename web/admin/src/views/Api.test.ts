@@ -10,12 +10,13 @@ describe("curlSample", () => {
     expect(curlSample("responses", "x")).toContain("/v1/responses");
   });
 
-  it("puts automode in the gateway-wide Claude Code settings env", () => {
+  it("puts $your_model placeholders in the gateway-wide Claude Code settings env", () => {
     const settings = JSON.parse(claudeCodeSettings("http://gw:8081"));
-    expect(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL).toBe("automode");
+    expect(settings.env.ANTHROPIC_MODEL).toBe("$your_model");
+    expect(settings.env.ANTHROPIC_SMALL_FAST_MODEL).toBe("$your_model");
+    expect(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL).toBe("$your_model");
     expect(settings.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
     expect(settings.env.ANTHROPIC_BASE_URL).toBe("http://gw:8081");
-    expect(settings.env).not.toHaveProperty("ANTHROPIC_MODEL");
   });
 
   it("uses x-api-key for Anthropic messages", () => {

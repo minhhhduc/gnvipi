@@ -10,7 +10,7 @@ export const guideOrigin = typeof window === "undefined" ? "http://localhost:808
 
 /**
  * Claude Code setup as a gateway-wide block for ~/.claude/settings.json.
- * automode plugs into auto-mode classification; the main model is untouched.
+ * Replace "$your_model" with a configured alias or built-in "automode" / "cycle".
  */
 export function claudeCodeSettings(origin: string): string {
   return `{
@@ -18,8 +18,10 @@ export function claudeCodeSettings(origin: string): string {
     "ANTHROPIC_BASE_URL": "${origin}",
     "ANTHROPIC_AUTH_TOKEN": "$GNVIPI_GATEWAY_TOKEN",
     "ANTHROPIC_API_KEY": "",
+    "ANTHROPIC_MODEL": "$your_model",
+    "ANTHROPIC_SMALL_FAST_MODEL": "$your_model",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_AUTO_MODE_MODEL": "automode"
+    "CLAUDE_CODE_AUTO_MODE_MODEL": "$your_model"
   }
 }`;
 }
