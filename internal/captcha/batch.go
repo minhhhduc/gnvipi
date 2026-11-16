@@ -100,9 +100,9 @@ func allFresh(tokens, prev []string) bool {
 func HarnessPageFor(sitekey string, batch int) string {
 	html := fmt.Sprintf(`<!doctype html><html><head>
 <meta charset="utf-8"><title>captcha harness</title>
-<style>body{margin:0;font-family:system-ui}#root{padding:8px</style>
+<style>body{margin:0;font-family:system-ui}#root{padding:8px}</style>
 </head><body>
-<div id="root</div>
+<div id="root"></div>
 <script>
 window.__SITEKEY = %q;
 window.__BATCH = %d;
@@ -135,7 +135,7 @@ window.__BATCH = %d;
   }
 })();
 </script>
-</body</html>`, sitekey, batch)
+</body></html>`, sitekey, batch)
 	return "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(html))
 }
 
