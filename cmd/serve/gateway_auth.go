@@ -123,11 +123,11 @@ func gatewayAuth(keyList string, states ...*authState) gin.HandlerFunc {
 		if valid && key != "" && consistent && db != nil && db.pool != nil {
 			// Repeated requests with the same token reuse the cached identity for
 			// at most TokenCacheTTL; revoke/expiry apply within that window.
-			identity, cached := gatewayTokenCache.Lookup(key, auth.TokenKindGateway)
+			identity, gen, cached := gatewayTokenCache.LookupWithGen(key, auth.TokenKindGateway)
 			if !cached {
 				if validated, err := auth.ValidateAPIToken(c.Request.Context(), db.pool, key, auth.TokenKindGateway, time.Now()); err == nil {
 					identity = *validated
-					gatewayTokenCache.Store(key, auth.TokenKindGateway, identity)
+					gatewayTokenCache.StoreIfGen(key, auth.TokenKindGateway, identity, gen)
 					cached = true
 				}
 			}
