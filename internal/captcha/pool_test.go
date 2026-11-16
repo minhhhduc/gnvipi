@@ -573,3 +573,58 @@ func newStaticPool(t *testing.T, entries ...entry) *Pool {
 		cancel:    cancel,
 	}
 }
+
+func TestPoolBatchSizeExceedingSizeDoesNotDeadlock(t *testing.T) {
+	cases := []struct {
+		name      string
+		size      int
+		batchSize int
+		wantBatch int
+	}{
+		{name: "batch 3 size 2", size: 2, batchSize: 3, wantBatch: 2},
+		{name: "batch 3 size 1", size: 1, batchSize: 3, wantBatch: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			var lastN atomic.Int32
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			pool := NewPool(ctx, nil, PoolConfig{
+				Size:      tc.size,
+				Workers:   1,
+				BatchSize: tc.batchSize,
+				TTL:       time.Minute,
+				ExtractN: func(ctx context.Context, n int) ([]string, error) {
+					c := calls.Add(1)
+					lastN.Store(int32(n))
+					out := make([]string, n)
+					for i := 0; i < n; i++ {
+						out[i] = fmt.Sprintf("tok-%d-%d", c, i)
+					}
+					return out, nil
+				},
+			})
+			defer pool.Close()
+
+			takeCtx, takeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer takeCancel()
+			tok, err := pool.Take(takeCtx)
+			if err != nil {
+				t.Fatalf("Take failed (pool deadlocked): %v", err)
+			}
+			if tok == "" {
+				t.Fatal("expected non-empty token")
+			}
+
+			if calls.Load() == 0 {
+				t.Fatal("expected extractor to be called at least once")
+			}
+			if got := int(lastN.Load()); got != tc.wantBatch {
+				t.Fatalf("extractN called with n=%d, want %d", got, tc.wantBatch)
+			}
+		})
+	}
+}
