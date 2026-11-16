@@ -411,7 +411,7 @@ func TestMigrationsApply(t *testing.T) {
 	}
 
 	wantTriggers := map[string][]string{
-		"users":         {"users_set_updated_at", "users_guard_last_owner_bu", "users_guard_last_owner_bd", "users_bump_config_on_delete"},
+		"users":         {"users_set_updated_at", "users_guard_last_superuser_bu", "users_guard_last_superuser_bd", "users_bump_config_on_delete"},
 		"providers":     {"providers_set_updated_at", "providers_bump_config"},
 		"provider_keys": {"provider_keys_set_updated_at", "provider_keys_scope_immutable_bu", "provider_keys_bump_config"},
 		"key_models":    {"key_models_sync_scope_bi", "key_models_sync_scope_bu", "key_models_bump_config"},
@@ -797,35 +797,35 @@ func TestKeyModelsScopeDriftAndCompositeFK(t *testing.T) {
 	})
 }
 
-func TestLastActiveOwnerProtected(t *testing.T) {
+func TestLastActiveSuperuserProtected(t *testing.T) {
 	conn, ctx := testConn(t)
 
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
-		insertUser(t, ctx, tx, "owner-one", "owner")
-		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'user' WHERE username = 'owner-one'`); err == nil ||
-			!strings.Contains(err.Error(), "last active owner") {
-			t.Fatalf("demote = %v, want last-owner error", err)
+		insertUser(t, ctx, tx, "superuser-one", "superuser")
+		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'user' WHERE username = 'superuser-one'`); err == nil ||
+			!strings.Contains(err.Error(), "last active superuser") {
+			t.Fatalf("demote = %v, want last-superuser error", err)
 		}
 	})
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
-		insertUser(t, ctx, tx, "owner-one", "owner")
-		if _, err := tx.Exec(ctx, `UPDATE users SET status = 'disabled' WHERE username = 'owner-one'`); err == nil ||
-			!strings.Contains(err.Error(), "last active owner") {
-			t.Fatalf("disable = %v, want last-owner error", err)
+		insertUser(t, ctx, tx, "superuser-one", "superuser")
+		if _, err := tx.Exec(ctx, `UPDATE users SET status = 'disabled' WHERE username = 'superuser-one'`); err == nil ||
+			!strings.Contains(err.Error(), "last active superuser") {
+			t.Fatalf("disable = %v, want last-superuser error", err)
 		}
 	})
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
-		insertUser(t, ctx, tx, "owner-one", "owner")
-		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE username = 'owner-one'`); err == nil ||
-			!strings.Contains(err.Error(), "last active owner") {
-			t.Fatalf("delete = %v, want last-owner error", err)
+		insertUser(t, ctx, tx, "superuser-one", "superuser")
+		if _, err := tx.Exec(ctx, `DELETE FROM users WHERE username = 'superuser-one'`); err == nil ||
+			!strings.Contains(err.Error(), "last active superuser") {
+			t.Fatalf("delete = %v, want last-superuser error", err)
 		}
 	})
 	withRollback(t, ctx, conn, func(tx pgx.Tx) {
-		insertUser(t, ctx, tx, "owner-one", "owner")
-		insertUser(t, ctx, tx, "owner-two", "owner")
-		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'user' WHERE username = 'owner-one'`); err != nil {
-			t.Fatalf("demoting one of two owners must be allowed: %v", err)
+		insertUser(t, ctx, tx, "superuser-one", "superuser")
+		insertUser(t, ctx, tx, "superuser-two", "superuser")
+		if _, err := tx.Exec(ctx, `UPDATE users SET role = 'user' WHERE username = 'superuser-one'`); err != nil {
+			t.Fatalf("demoting one of two superusers must be allowed: %v", err)
 		}
 	})
 }

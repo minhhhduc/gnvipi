@@ -21,38 +21,38 @@ import (
 	"github.com/minhhhduc/gnvipi/migrations"
 )
 
-type createOwnerOptions struct {
+type createSuperuserOptions struct {
 	Username         string
 	Email            string
 	DisplayName      string
 	WithGatewayToken bool
 }
 
-// parseCreateOwnerArgs keeps flag handling separate from database work so
+// parseCreateSuperuserArgs keeps flag handling separate from database work so
 // argument errors are testable without PostgreSQL. The password is never a
-// flag; it is read from stdin by runCreateOwnerCommand.
-func parseCreateOwnerArgs(args []string) (createOwnerOptions, error) {
-	var opts createOwnerOptions
-	flags := flag.NewFlagSet("admin create-owner", flag.ContinueOnError)
+// flag; it is read from stdin by runCreateSuperuserCommand.
+func parseCreateSuperuserArgs(args []string) (createSuperuserOptions, error) {
+	var opts createSuperuserOptions
+	flags := flag.NewFlagSet("admin create-superuser", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	flags.StringVar(&opts.Username, "username", "", "owner username")
-	flags.StringVar(&opts.Email, "email", "", "owner email")
-	flags.StringVar(&opts.DisplayName, "display-name", "", "owner display name")
-	flags.BoolVar(&opts.WithGatewayToken, "with-gateway-token", false, "print a one-time gateway token for the owner")
+	flags.StringVar(&opts.Username, "username", "", "superuser username")
+	flags.StringVar(&opts.Email, "email", "", "superuser email")
+	flags.StringVar(&opts.DisplayName, "display-name", "", "superuser display name")
+	flags.BoolVar(&opts.WithGatewayToken, "with-gateway-token", false, "print a one-time gateway token for the superuser")
 	if err := flags.Parse(args); err != nil {
-		return opts, errors.New("serve admin create-owner: invalid arguments")
+		return opts, errors.New("serve admin create-superuser: invalid arguments")
 	}
 	if flags.NArg() != 0 {
-		return opts, fmt.Errorf("serve admin create-owner accepts no positional arguments (got %d)", flags.NArg())
+		return opts, fmt.Errorf("serve admin create-superuser accepts no positional arguments (got %d)", flags.NArg())
 	}
 	opts.Username = strings.TrimSpace(opts.Username)
 	opts.Email = strings.TrimSpace(opts.Email)
 	opts.DisplayName = strings.TrimSpace(opts.DisplayName)
 	if opts.Username == "" {
-		return opts, errors.New("serve admin create-owner requires --username <name>")
+		return opts, errors.New("serve admin create-superuser requires --username <name>")
 	}
 	if utf8.RuneCountInString(opts.DisplayName) > 200 {
-		return opts, errors.New("serve admin create-owner: --display-name must be at most 200 characters")
+		return opts, errors.New("serve admin create-superuser: --display-name must be at most 200 characters")
 	}
 	return opts, nil
 }
@@ -71,7 +71,7 @@ func parseResetPasswordArgs(args []string) (string, error) {
 
 // readAdminPassword reads one line from stdin. It is never printed or logged.
 // The run commands refuse a terminal so the password is not echoed; pipe it in
-// (for example: printf '%s\n' "$GNVIPI_OWNER_PASSWORD" | serve admin create-owner ...).
+// (for example: printf '%s\n' "$GNVIPI_SUPERUSER_PASSWORD" | serve admin create-superuser ...).
 func readAdminPassword(r io.Reader) (string, error) {
 	line, err := bufio.NewReader(io.LimitReader(r, 8192)).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -111,8 +111,8 @@ func adminPasswordInput(stdin io.Reader) (io.Reader, error) {
 	return stdin, nil
 }
 
-func runCreateOwnerCommand(ctx context.Context, args []string, lookup func(string) (string, bool), stdin io.Reader, stdout io.Writer) error {
-	opts, err := parseCreateOwnerArgs(args)
+func runCreateSuperuserCommand(ctx context.Context, args []string, lookup func(string) (string, bool), stdin io.Reader, stdout io.Writer) error {
+	opts, err := parseCreateSuperuserArgs(args)
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func runCreateOwnerCommand(ctx context.Context, args []string, lookup func(strin
 		return err
 	}
 	defer pool.Close()
-	return createOwner(ctx, pool, opts, password, &cfg, stdout)
+	return createSuperuser(ctx, pool, opts, password, &cfg, stdout)
 }
 
 func runResetPasswordCommand(ctx context.Context, args []string, lookup func(string) (string, bool), stdin io.Reader) error {
@@ -188,17 +188,17 @@ func openAdminPool(ctx context.Context, lookup func(string) (string, bool)) (*pg
 	return pool, nil
 }
 
-// createOwner creates the first owner and, when requested, a gateway token in
+// createSuperuser creates the first superuser and, when requested, a gateway token in
 // the same transaction. Nothing is printed until the transaction commits, so a
 // failed token write leaves no half-bootstrapped database.
-func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOptions, password string, cfg *auth.BootstrapConfig, stdout io.Writer) error {
+func createSuperuser(ctx context.Context, pool *pgxpool.Pool, opts createSuperuserOptions, password string, cfg *auth.BootstrapConfig, stdout io.Writer) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }() //nolint:errcheck // best-effort rollback after an aborted write
 
-	owner, err := auth.CreateFirstOwnerTx(ctx, tx, auth.CreateOwnerInput{
+	superuser, err := auth.CreateFirstSuperuserTx(ctx, tx, auth.CreateSuperuserInput{
 		Username:    opts.Username,
 		Email:       opts.Email,
 		DisplayName: opts.DisplayName,
@@ -209,7 +209,7 @@ func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOption
 	}
 	var raw string
 	if opts.WithGatewayToken {
-		raw, err = createGatewayToken(ctx, tx, owner.ID)
+		raw, err = createGatewayToken(ctx, tx, superuser.ID)
 		if err != nil {
 			return err
 		}
@@ -217,27 +217,27 @@ func createOwner(ctx context.Context, pool *pgxpool.Pool, opts createOwnerOption
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "owner %q created (id %s)\n", owner.Username, owner.ID); err != nil {
-		return stdoutWriteError(owner, opts.WithGatewayToken, err)
+	if _, err := fmt.Fprintf(stdout, "superuser %q created (id %s)\n", superuser.Username, superuser.ID); err != nil {
+		return stdoutWriteError(superuser, opts.WithGatewayToken, err)
 	}
 	if opts.WithGatewayToken {
 		if _, err := fmt.Fprintf(stdout, "gateway token (shown once): %s\n", raw); err != nil {
-			return stdoutWriteError(owner, true, err)
+			return stdoutWriteError(superuser, true, err)
 		}
 	}
 	return nil
 }
 
-// stdoutWriteError reports a post-commit output failure. The owner and any
+// stdoutWriteError reports a post-commit output failure. The superuser and any
 // gateway token are already committed, and the plaintext token exists nowhere
 // else, so the operator must be told exactly what survived and how to recover
 // instead of seeing a generic write error.
-func stdoutWriteError(owner *auth.User, withGatewayToken bool, err error) error {
-	recovery := fmt.Sprintf("recover access with `serve admin reset-password %s`", owner.Username)
+func stdoutWriteError(superuser *auth.User, withGatewayToken bool, err error) error {
+	recovery := fmt.Sprintf("recover access with `serve admin reset-password %s`", superuser.Username)
 	if withGatewayToken {
-		return fmt.Errorf("owner %q was created (id %s) but the one-time gateway token could not be written to stdout and is unrecoverable; %s or sign in to the admin console and mint a new token: %w", owner.Username, owner.ID, recovery, err)
+		return fmt.Errorf("superuser %q was created (id %s) but the one-time gateway token could not be written to stdout and is unrecoverable; %s or sign in to the admin console and mint a new token: %w", superuser.Username, superuser.ID, recovery, err)
 	}
-	return fmt.Errorf("owner %q was created (id %s) but the confirmation could not be written to stdout; %s: %w", owner.Username, owner.ID, recovery, err)
+	return fmt.Errorf("superuser %q was created (id %s) but the confirmation could not be written to stdout; %s: %w", superuser.Username, superuser.ID, recovery, err)
 }
 
 // createGatewayToken writes the token row and its audit entry in the caller's

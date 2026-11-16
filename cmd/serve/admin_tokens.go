@@ -31,7 +31,7 @@ func adminTokenJSON(token *auth.APIToken) gin.H {
 	}
 }
 
-// adminTokenTarget resolves whose tokens a request addresses. Only an owner may
+// adminTokenTarget resolves whose tokens a request addresses. Only a superuser may
 // name another account; anyone else naming one is answered 404 so the id space
 // stays unprobeable.
 func adminTokenTarget(c *gin.Context, identity *adminIdentity) (string, bool) {
@@ -39,7 +39,7 @@ func adminTokenTarget(c *gin.Context, identity *adminIdentity) (string, bool) {
 	if target == "" || target == identity.UserID {
 		return identity.UserID, true
 	}
-	if !identity.Role.AtLeast(auth.RoleOwner) {
+	if !identity.Role.AtLeast(auth.RoleSuperuser) {
 		adminNotFoundResponse(c)
 		return "", false
 	}
@@ -103,14 +103,14 @@ func handleAdminCreateToken(state *authState) gin.HandlerFunc {
 		ctx := c.Request.Context()
 		target := identity.UserID
 		if raw := strings.TrimSpace(req.UserID); raw != "" && raw != identity.UserID {
-			if !identity.Role.AtLeast(auth.RoleOwner) {
+			if !identity.Role.AtLeast(auth.RoleSuperuser) {
 				adminNotFoundResponse(c)
 				return
 			}
 			target = raw
 		}
 		// The target decides which kinds a token may carry, not the caller: an
-		// owner naming a user account must not mint an admin token for it.
+		// superuser naming a user account must not mint an admin token for it.
 		targetUser, err := auth.GetUserByID(ctx, state.pool, target)
 		if err != nil {
 			adminUserLookupFailure(c, err)
@@ -218,7 +218,7 @@ func handleAdminRevokeToken(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "token_unavailable", "could not read the token")
 			return
 		}
-		if !identity.Role.AtLeast(auth.RoleOwner) && token.UserID != identity.UserID {
+		if !identity.Role.AtLeast(auth.RoleSuperuser) && token.UserID != identity.UserID {
 			adminNotFoundResponse(c)
 			return
 		}

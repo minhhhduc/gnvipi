@@ -31,7 +31,7 @@ func registerAdminPlaygroundRoutes(engine *gin.Engine, state *authState, runtime
 }
 
 // playgroundTargetUser resolves the account the console acts as. The session
-// identity is authoritative; an owner may select another account, and anyone
+// identity is authoritative; a superuser may select another account, and anyone
 // else naming a foreign id gets the same 404 as any other cross-subject access.
 func playgroundTargetUser(c *gin.Context, identity *adminIdentity) (string, bool) {
 	if identity == nil {
@@ -39,7 +39,7 @@ func playgroundTargetUser(c *gin.Context, identity *adminIdentity) (string, bool
 		return "", false
 	}
 	requested := strings.TrimSpace(c.Query("user_id"))
-	if !identity.Role.AtLeast(auth.RoleOwner) {
+	if !identity.Role.AtLeast(auth.RoleSuperuser) {
 		if requested != "" && requested != identity.UserID {
 			adminNotFoundResponse(c)
 			return "", false
@@ -59,7 +59,7 @@ func handlePlaygroundModels(runtime *providerRuntime, prefs *modelPrefs) gin.Han
 		if !ok {
 			return
 		}
-		union := identity != nil && identity.Role.AtLeast(auth.RoleOwner) && strings.TrimSpace(c.Query("user_id")) == ""
+		union := identity != nil && identity.Role.AtLeast(auth.RoleSuperuser) && strings.TrimSpace(c.Query("user_id")) == ""
 		out := make([]playgroundModel, 0, 32)
 		keyAliases := make(map[string]struct{})
 		if runtime != nil {

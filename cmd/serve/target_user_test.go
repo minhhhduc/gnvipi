@@ -26,8 +26,8 @@ func TestTargetUserSelectionByRole(t *testing.T) {
 		{auth.RoleUser, "", self, true},
 		{auth.RoleUser, other, "", false},
 		{auth.RoleAdmin, other, "", false},
-		{auth.RoleOwner, "", self, true},
-		{auth.RoleOwner, other, other, true},
+		{auth.RoleSuperuser, "", self, true},
+		{auth.RoleSuperuser, other, other, true},
 		{auth.RoleRoot, "", self, true},
 		{auth.RoleRoot, other, other, true},
 	}

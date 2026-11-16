@@ -34,7 +34,7 @@ func TestDBAdminProviders_V2AuthPersistsAsProviderKey(t *testing.T) {
 		t.Fatalf("created models = %v, want the one auth-backed mapping", view["models"])
 	}
 	ownerID, scheme, keyEnv, hasSecret := providerKeyAuth(t, h, providerID)
-	if ownerID != h.owner.ID || scheme != "bearer" || keyEnv != "" || !hasSecret {
+	if ownerID != h.superuser.ID || scheme != "bearer" || keyEnv != "" || !hasSecret {
 		t.Fatalf("stored key owner=%q scheme=%q key_env=%q has_secret=%v", ownerID, scheme, keyEnv, hasSecret)
 	}
 	var keyID string
@@ -54,7 +54,7 @@ func TestDBAdminProviders_V2AuthPersistsAsProviderKey(t *testing.T) {
 		t.Fatalf("update auth = %d, want 200 (body %s)", res.Code, res.Body.String())
 	}
 	ownerID, scheme, keyEnv, hasSecret = providerKeyAuth(t, h, providerID)
-	if ownerID != h.owner.ID || scheme != "bearer" || keyEnv != "GNVIPI_KEY_ISSUE204" || hasSecret {
+	if ownerID != h.superuser.ID || scheme != "bearer" || keyEnv != "GNVIPI_KEY_ISSUE204" || hasSecret {
 		t.Fatalf("updated key owner=%q scheme=%q key_env=%q has_secret=%v", ownerID, scheme, keyEnv, hasSecret)
 	}
 	if count := keyModelCount(t, h, keyID); count != 1 {

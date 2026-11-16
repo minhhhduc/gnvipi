@@ -101,7 +101,7 @@ func (u *userRoutingPrefs) cycleTargets(ctx context.Context, userID string) ([]s
 }
 
 // validateTarget rejects aliases this account cannot reach. The key-aware
-// router selects personal candidates for the owner and shared `none` keys only,
+// router selects personal candidates for the key owner and shared `none` keys only,
 // so an alias that exists solely in another account's key is ErrKeyRequired.
 func (u *userRoutingPrefs) validateTarget(ctx context.Context, userID, target string) error {
 	if u.router == nil {
@@ -193,7 +193,7 @@ func (u *userRoutingPrefs) setCycle(ctx context.Context, identity *adminIdentity
 }
 
 // routingTargetUser resolves the account whose settings a request addresses.
-// Only an owner may name another account; everyone else gets the shared 404
+// Only a superuser may name another account; everyone else gets the shared 404
 // for a foreign id, exactly as cross-subject admin access does.
 func routingTargetUser(c *gin.Context, identity *adminIdentity, requested string) (string, bool) {
 	if identity == nil {
@@ -201,7 +201,7 @@ func routingTargetUser(c *gin.Context, identity *adminIdentity, requested string
 		return "", false
 	}
 	requested = strings.TrimSpace(requested)
-	if !identity.Role.AtLeast(auth.RoleOwner) {
+	if !identity.Role.AtLeast(auth.RoleSuperuser) {
 		if requested != "" && requested != identity.UserID {
 			adminNotFoundResponse(c)
 			return "", false

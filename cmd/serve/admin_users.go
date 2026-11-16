@@ -95,20 +95,20 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusBadRequest, "display_name", "display_name must be at most 200 characters")
 			return
 		}
-		// The one-time bootstrap token creates the first owner through the same
+		// The one-time bootstrap token creates the first superuser through the same
 		// advisory-locked path as the CLI, so a concurrent bootstrap cannot
-		// create two owners.
+		// create two superusers.
 		if identity := adminIdentityOf(c); identity != nil && identity.Bootstrap {
 			role := auth.Role(strings.TrimSpace(req.Role))
-			if role != "" && role != auth.RoleOwner {
-				adminFieldError(c, http.StatusBadRequest, "role", "the bootstrap token may only create the first owner")
+			if role != "" && role != auth.RoleSuperuser {
+				adminFieldError(c, http.StatusBadRequest, "role", "the bootstrap token may only create the first superuser")
 				return
 			}
 			if err := auth.ValidatePassword(req.Password, req.Username, req.Email); err != nil {
 				adminFieldError(c, http.StatusBadRequest, "password", err.Error())
 				return
 			}
-			user, err := auth.CreateFirstOwner(c.Request.Context(), state.pool, auth.CreateOwnerInput{
+			user, err := auth.CreateFirstSuperuser(c.Request.Context(), state.pool, auth.CreateSuperuserInput{
 				Username:    req.Username,
 				Email:       req.Email,
 				DisplayName: req.DisplayName,
@@ -116,9 +116,9 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			}, state.password)
 			switch {
 			case errors.Is(err, auth.ErrUsersExist):
-				adminAPIError(c, http.StatusConflict, "users_exist", "an owner already exists; the bootstrap token is ignored")
+				adminAPIError(c, http.StatusConflict, "users_exist", "a superuser already exists; the bootstrap token is ignored")
 			case err != nil:
-				adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the owner")
+				adminAPIError(c, http.StatusInternalServerError, "create_unavailable", "could not create the superuser")
 			default:
 				c.JSON(http.StatusCreated, adminUserJSON(user))
 			}
@@ -129,7 +129,7 @@ func handleAdminCreateUser(state *authState) gin.HandlerFunc {
 			role = auth.Role(raw)
 		}
 		if !role.Valid() {
-			adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
+			adminFieldError(c, http.StatusBadRequest, "role", "role must be superuser, admin or user")
 			return
 		}
 		if role == auth.RoleRoot {
@@ -224,7 +224,7 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 		if req.Role != nil {
 			role := auth.Role(strings.TrimSpace(*req.Role))
 			if !role.Valid() {
-				adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
+				adminFieldError(c, http.StatusBadRequest, "role", "role must be superuser, admin or user")
 				return
 			}
 			if role == auth.RoleRoot {
@@ -256,14 +256,14 @@ func handleAdminUpdateUser(state *authState) gin.HandlerFunc {
 		case errors.Is(err, auth.ErrUserNotFound), isInvalidUUID(err):
 			adminNotFoundResponse(c)
 			return
-		case errors.Is(err, auth.ErrLastOwner):
-			adminFieldError(c, http.StatusConflict, "role", "the last active owner cannot be demoted or disabled")
+		case errors.Is(err, auth.ErrLastSuperuser):
+			adminFieldError(c, http.StatusConflict, "role", "the last active superuser cannot be demoted or disabled")
 			return
 		case errors.Is(err, auth.ErrRootProtected):
 			adminAPIError(c, http.StatusForbidden, "root_protected", "the built-in root account cannot be renamed, demoted or disabled")
 			return
 		case errors.Is(err, auth.ErrInvalidRole):
-			adminFieldError(c, http.StatusBadRequest, "role", "role must be owner, admin or user")
+			adminFieldError(c, http.StatusBadRequest, "role", "role must be superuser, admin or user")
 			return
 		case errors.Is(err, auth.ErrInvalidStatus):
 			adminFieldError(c, http.StatusBadRequest, "status", "status must be active or disabled")
@@ -315,8 +315,8 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 			switch {
 			case errors.Is(err, auth.ErrUserNotFound), isInvalidUUID(err):
 				adminNotFoundResponse(c)
-			case errors.Is(err, auth.ErrLastOwner):
-				adminFieldError(c, http.StatusConflict, "id", "the last active owner cannot be deleted")
+			case errors.Is(err, auth.ErrLastSuperuser):
+				adminFieldError(c, http.StatusConflict, "id", "the last active superuser cannot be deleted")
 			case errors.Is(err, auth.ErrRootProtected):
 				adminAPIError(c, http.StatusForbidden, "root_protected", "the built-in root account cannot be deleted")
 			default:
@@ -342,7 +342,7 @@ func handleAdminDeleteUser(state *authState) gin.HandlerFunc {
 }
 
 // handleAdminSetUserPassword serves both paths: changing your own password
-// needs the current secret, while an owner resetting somebody else's password
+// needs the current secret, while a superuser resetting somebody else's password
 // issues a temporary one that must be changed at next sign-in.
 func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -378,7 +378,7 @@ func handleAdminSetUserPassword(state *authState) gin.HandlerFunc {
 			}
 			return
 		}
-		// Owner reset: anonymous password checks are impossible, so validate the
+		// Superuser reset: anonymous password checks are impossible, so validate the
 		// new secret against the target account's identity fields first.
 		target, err := auth.GetUserByID(ctx, state.pool, targetID)
 		if err != nil {

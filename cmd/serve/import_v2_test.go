@@ -459,7 +459,7 @@ func requiredImportTestDSN(t *testing.T) string {
 
 func createImportOwner(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, password_hash) VALUES ($1::uuid, 'legacy-owner', 'owner', 'test-hash')`, importOwnerID); err != nil {
+	if _, err := pool.Exec(t.Context(), `INSERT INTO users (id, username, role, password_hash) VALUES ($1::uuid, 'legacy-owner', 'superuser', 'test-hash')`, importOwnerID); err != nil {
 		t.Fatalf("create import owner: %v", err)
 	}
 }

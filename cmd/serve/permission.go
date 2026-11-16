@@ -52,7 +52,7 @@ type authState struct {
 	// file-token policy in adminAccess.
 	loopbackBind bool
 	// bootstrapToken is GNVIPI_ADMIN_TOKEN. It authenticates only while users
-	// is empty, and only to create the first owner; afterwards it is ignored.
+	// is empty, and only to create the first superuser; afterwards it is ignored.
 	bootstrapToken string
 	// bootstrapHash is sha256(bootstrapToken), precomputed at startup.
 	bootstrapHash [32]byte
@@ -71,9 +71,9 @@ func (s *authState) setBootstrapToken(token string) {
 	s.bootstrapHash = sha256.Sum256([]byte(token))
 }
 
-// ownerExists reports whether any account exists. The answer is cached because
-// users only ever grows from zero; the first committed owner pins it true.
-func (s *authState) ownerExists(ctx context.Context) (bool, error) {
+// superuserExists reports whether any account exists. The answer is cached because
+// users only ever grows from zero; the first committed superuser pins it true.
+func (s *authState) superuserExists(ctx context.Context) (bool, error) {
 	if s.usersExist != nil && s.usersExist.Load() {
 		return true, nil
 	}
@@ -176,10 +176,10 @@ func allowed(roles ...auth.Role) permissionSet {
 	return set
 }
 
-// selfOrOwner lets a role reach itself and an owner reach everyone.
-func selfOrOwner(roles ...auth.Role) permissionSet {
+// selfOrSuperuser lets a role reach itself and a superuser reach everyone.
+func selfOrSuperuser(roles ...auth.Role) permissionSet {
 	set := make(permissionSet, len(roles)+1)
-	set[auth.RoleOwner] = ownAny
+	set[auth.RoleSuperuser] = ownAny
 	for _, role := range roles {
 		set[role] = ownSelf
 	}
@@ -215,71 +215,71 @@ var adminRoutePermissions = map[string]adminPermission{
 	// /admin/api/me/password; the admin API keeps one auth prefix instead, with
 	// the same semantics (self-only identity and password change).
 	"POST " + adminLoginPath:    {anonymous: true},
-	"POST " + adminLogoutPath:   {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET " + adminSessionPath:   {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST " + adminPasswordPath: {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+	"POST " + adminLogoutPath:   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET " + adminSessionPath:   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST " + adminPasswordPath: {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
 
 	// Users: operators manage accounts, everyone may read themselves.
-	"GET /admin/api/users":               {roles: allowed(auth.RoleOwner)},
-	"POST /admin/api/users":              {roles: allowed(auth.RoleOwner)},
-	"GET /admin/api/users/:id":           {roles: selfOrOwner(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
-	"PUT /admin/api/users/:id":           {roles: allowed(auth.RoleOwner), subjectParam: true},
-	"DELETE /admin/api/users/:id":        {roles: allowed(auth.RoleOwner), subjectParam: true},
-	"POST /admin/api/users/:id/password": {roles: selfOrOwner(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
-	"POST /admin/api/users/:id/revoke":   {roles: selfOrOwner(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
+	"GET /admin/api/users":               {roles: allowed(auth.RoleSuperuser)},
+	"POST /admin/api/users":              {roles: allowed(auth.RoleSuperuser)},
+	"GET /admin/api/users/:id":           {roles: selfOrSuperuser(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
+	"PUT /admin/api/users/:id":           {roles: allowed(auth.RoleSuperuser), subjectParam: true},
+	"DELETE /admin/api/users/:id":        {roles: allowed(auth.RoleSuperuser), subjectParam: true},
+	"POST /admin/api/users/:id/password": {roles: selfOrSuperuser(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
+	"POST /admin/api/users/:id/revoke":   {roles: selfOrSuperuser(auth.RoleAdmin, auth.RoleUser), subjectParam: true},
 
 	// Personal API tokens. Kind limits are enforced by the handlers: a user
-	// only ever holds gateway tokens, owners and admins hold both.
-	"GET /admin/api/tokens":        {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/tokens":       {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"DELETE /admin/api/tokens/:id": {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+	// only ever holds gateway tokens; superusers and admins hold both.
+	"GET /admin/api/tokens":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/tokens":       {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"DELETE /admin/api/tokens/:id": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
 
-	// Audit trail is owner-only: it discloses every subject id.
-	"GET /admin/api/audit": {roles: allowed(auth.RoleOwner)},
+	// Audit trail is superuser-only: it discloses every subject id.
+	"GET /admin/api/audit": {roles: allowed(auth.RoleSuperuser)},
 
 	// Console playground. Reads resolve the caller's own models; writes run a
-	// test completion as the session identity (an owner may select an account).
-	"GET /admin/api/playground/models": {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/playground/chat":  {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+	// test completion as the session identity (a superuser may select an account).
+	"GET /admin/api/playground/models": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/playground/chat":  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
 
 	// Legacy configuration surface. Stats attribution per user arrives with the
 	// key-aware routing work, so it stays operator-only rather than leaking
 	// every caller's usage to a user-role account.
-	"GET /admin/api/providers":       {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/providers":      {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/providers/test": {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/providers/:id":   {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/providers":       {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers":      {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/providers/test": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/providers/:id":   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
 
 	// Provider keys and their model aliases. Role admission is coarse on
 	// purpose: reach is per row (a user only ever sees its own keys, an admin
 	// may only disable a foreign one), so the handlers enforce ownership.
-	"GET /admin/api/providers/:id/keys":               {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/providers/:id/keys":              {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"DELETE /admin/api/providers/:id/keys/:keyID":     {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/providers/:id/keys/:keyID/test":  {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"DELETE /admin/api/providers/:id":                 {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/providers/:id/test":              {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/stats":                            {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/models":                           {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/models":                          {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"DELETE /admin/api/models/*id":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/models/*id":                      {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/nvidia/models/rescan":            {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/config/automode":                  {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/config/automode":                 {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/config/automode":                  {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/config/cycle":                     {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/config/cycle":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/config/cycle":                     {roles: allowed(auth.RoleOwner, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/config/search":                    {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/config/search":                   {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"GET /admin/api/chromes":                          {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
-	"POST /admin/api/chromes":                         {roles: allowed(auth.RoleOwner, auth.RoleAdmin)},
+	"GET /admin/api/providers/:id/keys":               {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"DELETE /admin/api/providers/:id/keys/:keyID":     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys/:keyID/test":  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"DELETE /admin/api/providers/:id":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/providers/:id/test":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/stats":                            {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/models":                           {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/models":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"DELETE /admin/api/models/*id":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/models/*id":                      {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/nvidia/models/rescan":            {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/config/automode":                  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/config/automode":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/config/automode":                  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/config/cycle":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/config/cycle":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/config/cycle":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/config/search":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/config/search":                   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/chromes":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/chromes":                         {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
 }
 
 const adminIdentityKey = "gnvipi.admin.identity"
@@ -296,7 +296,7 @@ type adminIdentity struct {
 	Scope              auth.Scope
 	SessionToken       string
 	// Bootstrap marks the one-time GNVIPI_ADMIN_TOKEN caller. It may only
-	// create the first owner.
+	// create the first superuser.
 	Bootstrap bool
 }
 
@@ -348,10 +348,10 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 				return
 			}
 			if identity.Bootstrap {
-				// The bootstrap token can only create the first owner; every
+				// The bootstrap token can only create the first superuser; every
 				// other route stays closed until a real account signs in.
 				if c.Request.Method != http.MethodPost || c.FullPath() != "/admin/api/users" {
-					adminAPIError(c, http.StatusForbidden, "forbidden", "bootstrap access is limited to creating the first owner")
+					adminAPIError(c, http.StatusForbidden, "forbidden", "bootstrap access is limited to creating the first superuser")
 					return
 				}
 				c.Set(adminIdentityKey, identity)
@@ -502,13 +502,13 @@ func (s *authState) identify(c *gin.Context) (*adminIdentity, *adminAuthFailure)
 }
 
 // bootstrapIdentity accepts GNVIPI_ADMIN_TOKEN only while no account exists.
-// Once the first owner is committed the token is ignored and a single warning
+// Once the first superuser is committed the token is ignored and a single warning
 // explains why, so an operator does not keep retrying it.
 func (s *authState) bootstrapIdentity(ctx context.Context, raw string) (*adminIdentity, error) {
 	if s.bootstrapToken == "" || !adminTokenMatches(raw, s.bootstrapHash) {
 		return nil, nil
 	}
-	usersExist, err := s.ownerExists(ctx)
+	usersExist, err := s.superuserExists(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +517,7 @@ func (s *authState) bootstrapIdentity(ctx context.Context, raw string) (*adminId
 	}
 	if s.bootstrapWarned != nil {
 		s.bootstrapWarned.Do(func() {
-			log.Print("warning: GNVIPI_ADMIN_TOKEN is bootstrap-only; it is ignored because an owner already exists")
+			log.Print("warning: GNVIPI_ADMIN_TOKEN is bootstrap-only; it is ignored because a superuser already exists")
 		})
 	}
 	return nil, nil

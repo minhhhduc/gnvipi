@@ -619,13 +619,13 @@ func keyAuditDetails(record *providerstore.KeyRecord) map[string]any {
 }
 
 // providerModelsWritable applies the per-key reach rules to a provider-level
-// models write: the owner may write any key, an admin only its own or a shared
+// models write: a superuser may write any key, an admin only its own or a shared
 // key, and a user only its own.
 func providerModelsWritable(identity *adminIdentity, key *providerstore.KeyRow) bool {
 	if identity == nil {
 		return false
 	}
-	if identity.Role.AtLeast(auth.RoleOwner) {
+	if identity.Role.AtLeast(auth.RoleSuperuser) {
 		return true
 	}
 	switch identity.Role {

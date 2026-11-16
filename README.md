@@ -24,7 +24,7 @@ Client API-key authentication is optional: set `-gateway-key` or
 |---|---|
 | [Operations](docs/operations.md) | Run flags, stats storage, Admin Console access, `cycle` failover, web search MCP, data locations, troubleshooting, Docker notes. |
 | [PostgreSQL Operations](docs/postgres-operations.md) | Database provisioning, roles and grants, migrations, logical backup, WAL/PITR, restore integrity checks, retention limits, monitoring, development workflow. |
-| [Auth & Roles](docs/auth.md) | Ownership model, root/owner/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `run.ps1 -Claude`. |
+| [Auth & Roles](docs/auth.md) | Ownership model, root/superuser/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `run.ps1 -Claude`. |
 | [Provider Configuration](docs/providers.md) | Schema v2 reference, model mappings, wildcard routing, fallback chains, SSRF policy, migration. |
 | [Client Setup](docs/clients.md) | Step-by-step setup for Claude Code, OpenAI SDKs, Codex, OpenCode, cURL, and the cross-protocol compatibility matrix. |
 | [Architecture Overview](docs/architecture/overview.md) | Hub-and-spoke pattern, normalized IR, execution paths, architectural invariants. |
@@ -89,7 +89,7 @@ To serve free models from the NVIDIA Playground (e.g.
    .\scripts\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
    ```
 
-For the DB-backed local flow, start PostgreSQL, migrate, create the first owner,
+For the DB-backed local flow, start PostgreSQL, migrate, create the first superuser,
 and give `run.ps1 -Claude` the one-time gateway token:
 
 ```powershell
@@ -101,12 +101,12 @@ New-Item -ItemType Directory -Force .\bin | Out-Null
 go build -o .\bin\serve.exe ./cmd/serve
 .\bin\serve.exe migrate
 # The password is read from stdin and never echoed: pipe it in.
-'<temporary-password>' | .\bin\serve.exe admin create-owner --username <owner> --with-gateway-token
+'<temporary-password>' | .\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token
 $env:GNVIPI_GATEWAY_TOKEN='gw_...'
 .\scripts\run.ps1 -Claude
 ```
 
-`serve admin create-owner` and `serve admin reset-password <user>` refuse a
+`serve admin create-superuser` and `serve admin reset-password <user>` refuse a
 terminal stdin so the password is never echoed; pipe the password in on stdin
 instead of typing it interactively. In MSYS2/Git Bash (mintty) a pty is a named
 pipe that cannot be told apart from a real pipeline, so piping is refused there

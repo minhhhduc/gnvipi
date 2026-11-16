@@ -2,7 +2,7 @@ import { toChildArray, type ComponentChildren, type VNode } from "preact";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
 import { message } from "./admin";
-import { isOwnerLevelRole } from "./auth";
+import { isSuperuserLevelRole } from "./auth";
 import { pageAllowed, pageFromUrl } from "./router";
 import {
   auditMatches,
@@ -43,24 +43,24 @@ const entryJSON = {
   target_type: "user",
   target_id: "22222222-2222-2222-2222-222222222222",
   ip: "127.0.0.1",
-  details: { username: "alice", role: "owner" },
+  details: { username: "alice", role: "superuser" },
 };
 
 const CANARY = "canary-super-secret-1f4a9";
 
 describe("audit role gate", () => {
-  it("opens only for an exact owner-level role", () => {
-    expect(isOwnerLevelRole("owner")).toBe(true);
-    expect(isOwnerLevelRole("root")).toBe(true);
-    for (const role of ["admin", "user", "Owner", "OWNER", "toString", "__proto__", ""]) {
-      expect(isOwnerLevelRole(role)).toBe(false);
+  it("opens only for an exact superuser-level role", () => {
+    expect(isSuperuserLevelRole("superuser")).toBe(true);
+    expect(isSuperuserLevelRole("root")).toBe(true);
+    for (const role of ["owner", "admin", "user", "Superuser", "SUPERUSER", "toString", "__proto__", ""]) {
+      expect(isSuperuserLevelRole(role)).toBe(false);
     }
 
-    expect(pageAllowed("audit", "owner")).toBe(true);
+    expect(pageAllowed("audit", "superuser")).toBe(true);
     expect(pageAllowed("audit", "root")).toBe(true);
     expect(pageAllowed("audit", "admin")).toBe(false);
     expect(pageAllowed("audit", "user")).toBe(false);
-    expect(pageFromUrl("?page=audit", "owner")).toBe("audit");
+    expect(pageFromUrl("?page=audit", "superuser")).toBe("audit");
     expect(pageFromUrl("?page=audit", "admin")).toBe("stats");
     expect(pageFromUrl("?page=audit", "user")).toBe("stats");
   });
@@ -92,7 +92,7 @@ describe("audit page parsing", () => {
           target_type: "user",
           target_id: "22222222-2222-2222-2222-222222222222",
           ip: "127.0.0.1",
-          details: { username: "alice", role: "owner" },
+          details: { username: "alice", role: "superuser" },
         },
       ],
       has_more: true,
@@ -128,7 +128,7 @@ describe("audit redaction", () => {
           password_hash: CANARY,
           details: {
             username: "alice",
-            role: "owner",
+            role: "superuser",
             secret: CANARY,
             password: CANARY,
             api_key: CANARY,
@@ -146,13 +146,13 @@ describe("audit redaction", () => {
     const entry = parsed.entries[0];
     expect(detailRows(entry)).toEqual([
       { key: "username", value: "alice" },
-      { key: "role", value: "owner" },
+      { key: "role", value: "superuser" },
     ]);
 
     const rendered = textContent(AuditDetails({ entry }));
     expect(rendered).not.toContain(CANARY);
     expect(rendered).toContain("alice");
-    expect(rendered).toContain("owner");
+    expect(rendered).toContain("superuser");
   });
 
   it("keeps only allowlisted scalar details", () => {

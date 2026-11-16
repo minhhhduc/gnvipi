@@ -1,5 +1,5 @@
-/** Root is the built-in account above owner: it reaches every page. */
-export type AdminRole = "root" | "owner" | "admin" | "user";
+/** Root is the built-in account above superuser: it reaches every page. */
+export type AdminRole = "root" | "superuser" | "admin" | "user";
 
 export interface AdminUser {
   id: string;
@@ -17,19 +17,19 @@ export interface AuthSession {
 }
 
 export function isAdminRole(value: unknown): value is AdminRole {
-  return value === "root" || value === "owner" || value === "admin" || value === "user";
+  return value === "root" || value === "superuser" || value === "admin" || value === "user";
 }
 
 export function isOperatorRole(value: unknown): boolean {
-  return isOwnerLevelRole(value) || value === "admin";
+  return isSuperuserLevelRole(value) || value === "admin";
 }
 
 /**
- * Owner-level gates (users, audit, shared keys, other accounts). Exact
+ * Superuser-level gates (users, audit, shared keys, other accounts). Exact
  * comparisons: a role lookup must never accept inherited object members.
  */
-export function isOwnerLevelRole(value: unknown): boolean {
-  return value === "root" || value === "owner";
+export function isSuperuserLevelRole(value: unknown): boolean {
+  return value === "root" || value === "superuser";
 }
 
 export function parseAuthSession(value: unknown): AuthSession {

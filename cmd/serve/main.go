@@ -75,9 +75,9 @@ func runCLICommand(
 		command = func(ctx context.Context) error { return runMigrateCommand(ctx, args[1:], lookup, migrate) }
 	case len(args) > 1 && args[0] == "admin" && args[1] == "import-v2":
 		command = func(ctx context.Context) error { return importV2(ctx, args[2:], lookup) }
-	case len(args) > 1 && args[0] == "admin" && args[1] == "create-owner":
+	case len(args) > 1 && args[0] == "admin" && args[1] == "create-superuser":
 		command = func(ctx context.Context) error {
-			return runCreateOwnerCommand(ctx, args[2:], lookup, os.Stdin, os.Stdout)
+			return runCreateSuperuserCommand(ctx, args[2:], lookup, os.Stdin, os.Stdout)
 		}
 	case len(args) > 1 && args[0] == "admin" && args[1] == "reset-password":
 		command = func(ctx context.Context) error { return runResetPasswordCommand(ctx, args[2:], lookup, os.Stdin) }
@@ -88,7 +88,7 @@ func runCLICommand(
 		if len(args) > 1 {
 			subcommand = args[1]
 		}
-		return true, fmt.Errorf("serve admin: unknown or missing subcommand %q (expected create-owner, reset-password or import-v2)", subcommand)
+		return true, fmt.Errorf("serve admin: unknown or missing subcommand %q (expected create-superuser, reset-password or import-v2)", subcommand)
 	default:
 		return false, nil
 	}
@@ -238,7 +238,7 @@ func runServer() (err error) {
 		adminAuth.loopbackBind = adminLoopbackBind(*addr)
 		adminAuth.clientIPs = clientIPs
 		// GNVIPI_ADMIN_TOKEN (or -admin-token) is a one-time bootstrap
-		// credential in database mode: it works only while no owner exists.
+		// credential in database mode: it works only while no superuser exists.
 		adminAuth.setBootstrapToken(*adminToken)
 		// The built-in root account is part of the schema contract: user
 		// management can neither delete nor demote it, so every install keeps a

@@ -25,32 +25,32 @@ import (
 )
 
 const (
-	permissionOwner uint8 = 1 << iota
+	permissionSuperuser uint8 = 1 << iota
 	permissionAdmin
 	permissionUser
-	permissionAll = permissionOwner | permissionAdmin | permissionUser
+	permissionAll = permissionSuperuser | permissionAdmin | permissionUser
 )
 
 func currentAdminRouteMatrix() map[string]uint8 {
-	operator := permissionOwner | permissionAdmin
+	operator := permissionSuperuser | permissionAdmin
 	return map[string]uint8{
 		"POST " + adminLoginPath:    permissionAll,
 		"POST " + adminLogoutPath:   permissionAll,
 		"GET " + adminSessionPath:   permissionAll,
 		"POST " + adminPasswordPath: permissionAll,
 
-		"GET /admin/api/users":               permissionOwner,
-		"POST /admin/api/users":              permissionOwner,
+		"GET /admin/api/users":               permissionSuperuser,
+		"POST /admin/api/users":              permissionSuperuser,
 		"GET /admin/api/users/:id":           permissionAll,
-		"PUT /admin/api/users/:id":           permissionOwner,
-		"DELETE /admin/api/users/:id":        permissionOwner,
+		"PUT /admin/api/users/:id":           permissionSuperuser,
+		"DELETE /admin/api/users/:id":        permissionSuperuser,
 		"POST /admin/api/users/:id/password": permissionAll,
 		"POST /admin/api/users/:id/revoke":   permissionAll,
 
 		"GET /admin/api/tokens":        permissionAll,
 		"POST /admin/api/tokens":       permissionAll,
 		"DELETE /admin/api/tokens/:id": permissionAll,
-		"GET /admin/api/audit":         permissionOwner,
+		"GET /admin/api/audit":         permissionSuperuser,
 
 		"GET /admin/api/providers":           permissionAll,
 		"POST /admin/api/providers":          operator,
@@ -113,7 +113,7 @@ func TestDBAdminPermission_CurrentRouteRoleMatrix(t *testing.T) {
 		headers   map[string]string
 	}
 	actors := []actor{
-		{name: "owner", bit: permissionOwner, subjectID: h.owner.ID, headers: bearer(h.token)},
+		{name: "superuser", bit: permissionSuperuser, subjectID: h.superuser.ID, headers: bearer(h.token)},
 		{name: "admin", bit: permissionAdmin, subjectID: adminID, headers: bearer(adminToken)},
 		{name: "user", bit: permissionUser, subjectID: userID, headers: cookieAuth(userSession, userCSRF)},
 		{name: "root", bit: 0, subjectID: rootID, headers: bearer(rootToken)},
@@ -294,11 +294,11 @@ func TestDBAdminPermission_CrossUserIDsAreIndistinguishable404s(t *testing.T) {
 				existingBody any
 				missingBody  any
 			}{
-				{name: "read user", method: http.MethodGet, existingPath: "/admin/api/users/" + h.owner.ID, missingPath: "/admin/api/users/" + unknownID},
-				{name: "change password", method: http.MethodPost, existingPath: "/admin/api/users/" + h.owner.ID + "/password", missingPath: "/admin/api/users/" + unknownID + "/password", existingBody: gin.H{}, missingBody: gin.H{}},
-				{name: "revoke user", method: http.MethodPost, existingPath: "/admin/api/users/" + h.owner.ID + "/revoke", missingPath: "/admin/api/users/" + unknownID + "/revoke"},
-				{name: "list tokens", method: http.MethodGet, existingPath: "/admin/api/tokens?user_id=" + h.owner.ID, missingPath: "/admin/api/tokens?user_id=" + unknownID},
-				{name: "create token", method: http.MethodPost, existingPath: "/admin/api/tokens", missingPath: "/admin/api/tokens", existingBody: gin.H{"name": "forbidden", "kind": "gateway", "user_id": h.owner.ID}, missingBody: gin.H{"name": "forbidden", "kind": "gateway", "user_id": unknownID}},
+				{name: "read user", method: http.MethodGet, existingPath: "/admin/api/users/" + h.superuser.ID, missingPath: "/admin/api/users/" + unknownID},
+				{name: "change password", method: http.MethodPost, existingPath: "/admin/api/users/" + h.superuser.ID + "/password", missingPath: "/admin/api/users/" + unknownID + "/password", existingBody: gin.H{}, missingBody: gin.H{}},
+				{name: "revoke user", method: http.MethodPost, existingPath: "/admin/api/users/" + h.superuser.ID + "/revoke", missingPath: "/admin/api/users/" + unknownID + "/revoke"},
+				{name: "list tokens", method: http.MethodGet, existingPath: "/admin/api/tokens?user_id=" + h.superuser.ID, missingPath: "/admin/api/tokens?user_id=" + unknownID},
+				{name: "create token", method: http.MethodPost, existingPath: "/admin/api/tokens", missingPath: "/admin/api/tokens", existingBody: gin.H{"name": "forbidden", "kind": "gateway", "user_id": h.superuser.ID}, missingBody: gin.H{"name": "forbidden", "kind": "gateway", "user_id": unknownID}},
 				{name: "delete token", method: http.MethodDelete, existingPath: "/admin/api/tokens/" + ownerTokenID, missingPath: "/admin/api/tokens/" + unknownID},
 			}
 			for _, check := range checks {
@@ -316,7 +316,7 @@ func TestDBAdminPermission_CrossUserIDsAreIndistinguishable404s(t *testing.T) {
 
 func TestDBAdminPermission_StrictCSRFAmbiguousHeadersFailClosed(t *testing.T) {
 	h := newDBAdminHarness(t)
-	session, csrf := h.login(t, dbOwnerUsername, dbOwnerPassword)
+	session, csrf := h.login(t, dbSuperuserUsername, dbSuperuserPassword)
 	engine := gin.New()
 	engine.Use(adminAPIAuthorization(h.state))
 	engine.POST("/admin/api/tokens", func(c *gin.Context) { c.Status(http.StatusNoContent) })
@@ -434,7 +434,7 @@ func TestDBAdminPermission_RuntimeRoleCannotTamperWithAuditRows(t *testing.T) {
 	if _, err := runtime.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)`); err != nil {
 		t.Fatalf("create migration metadata: %v", err)
 	}
-	v1, err := adminTestDDL(schema)
+	v1, err := adminTestDDLBase(schema)
 	if err != nil {
 		t.Fatalf("read initial migration: %v", err)
 	}
@@ -452,6 +452,16 @@ func TestDBAdminPermission_RuntimeRoleCannotTamperWithAuditRows(t *testing.T) {
 	hardened = strings.ReplaceAll(hardened, "SCHEMA public", "SCHEMA "+schemaSQL)
 	if _, err := runtime.Exec(ctx, hardened); err != nil {
 		t.Fatalf("apply runtime grants migration: %v", err)
+	}
+	// The rename follows the grants in a real upgrade, so execute it after them:
+	// the EXECUTE privilege granted on users_guard_last_owner() must travel with
+	// the function to its new name.
+	superuserRole, err := migrations.FS.ReadFile("0007_superuser_role.up.sql")
+	if err != nil {
+		t.Fatalf("read superuser rename migration: %v", err)
+	}
+	if _, err := runtime.Exec(ctx, string(superuserRole)); err != nil {
+		t.Fatalf("apply superuser rename migration: %v", err)
 	}
 
 	conn, err := runtime.Acquire(ctx)

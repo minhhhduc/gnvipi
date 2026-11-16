@@ -159,7 +159,7 @@ func TestPlaygroundModelsIsolatesUsers(t *testing.T) {
 		t.Fatal("u2 does not see its own alias")
 	}
 
-	owner := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("owner", auth.RoleOwner), &rows), http.MethodGet, "/admin/api/playground/models", "").Body.String())
+	owner := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("owner", auth.RoleSuperuser), &rows), http.MethodGet, "/admin/api/playground/models", "").Body.String())
 	if !owner.Union {
 		t.Fatal("owner union view is not marked as a union")
 	}
@@ -170,7 +170,7 @@ func TestPlaygroundModelsIsolatesUsers(t *testing.T) {
 		t.Fatalf("owner union missed the shared mapping's id: %+v", owner.Models)
 	}
 
-	selected := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("owner", auth.RoleOwner), &rows), http.MethodGet, "/admin/api/playground/models?user_id=u2", "").Body.String())
+	selected := playgroundModels(t, playgroundRequest(t, playgroundTestEngine(t, playgroundIdentity("owner", auth.RoleSuperuser), &rows), http.MethodGet, "/admin/api/playground/models?user_id=u2", "").Body.String())
 	if selected.Union || selected.UserID != "u2" {
 		t.Fatalf("owner selected view = %+v", selected)
 	}

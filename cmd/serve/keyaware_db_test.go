@@ -40,8 +40,8 @@ func TestKeyAwareGatewayTokenRoutingDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load password hash configuration: %v", err)
 	}
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username: "owner202", Email: "owner202@example.test", DisplayName: "Owner 202", Password: dbOwnerPassword,
+	owner, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username: "owner202", Email: "owner202@example.test", DisplayName: "Owner 202", Password: dbSuperuserPassword,
 	}, password)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -272,8 +272,8 @@ func TestGatewayAuthDBAcceptsGatewayToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load password hash configuration: %v", err)
 	}
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username: "auth202", Email: "auth202@example.test", DisplayName: "Auth 202", Password: dbOwnerPassword,
+	owner, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username: "auth202", Email: "auth202@example.test", DisplayName: "Auth 202", Password: dbSuperuserPassword,
 	}, password)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)
@@ -338,8 +338,8 @@ func TestGatewayAuthDBRejectsPasswordChangePending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load password hash configuration: %v", err)
 	}
-	owner, err := auth.CreateFirstOwner(ctx, pool, auth.CreateOwnerInput{
-		Username: "pending202", Email: "pending202@example.test", DisplayName: "Pending 202", Password: dbOwnerPassword,
+	owner, err := auth.CreateFirstSuperuser(ctx, pool, auth.CreateSuperuserInput{
+		Username: "pending202", Email: "pending202@example.test", DisplayName: "Pending 202", Password: dbSuperuserPassword,
 	}, password)
 	if err != nil {
 		t.Fatalf("create owner: %v", err)

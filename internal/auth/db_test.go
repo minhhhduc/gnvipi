@@ -17,14 +17,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// CreateFirstOwnerTx must require pgx.Tx: a *pgxpool.Pool also satisfies
+// CreateFirstSuperuserTx must require pgx.Tx: a *pgxpool.Pool also satisfies
 // Querier, but pg_advisory_xact_lock releases as soon as the statement ends,
-// so concurrent bootstraps could both create an owner. This declaration fails
+// so concurrent bootstraps could both create an superuser. This declaration fails
 // to compile if the parameter type is widened back to an interface.
-var _ func(context.Context, pgx.Tx, CreateOwnerInput, BootstrapConfig) (*User, error) = CreateFirstOwnerTx
+var _ func(context.Context, pgx.Tx, CreateSuperuserInput, BootstrapConfig) (*User, error) = CreateFirstSuperuserTx
 
 // testDB creates a throwaway schema with the identity tables and the
-// last-owner trigger, so DB-backed tests exercise real FKs, CHECKs and
+// last-superuser trigger, so DB-backed tests exercise real FKs, CHECKs and
 // trigger/advisory-lock behavior. It skips when no DSN is configured.
 func testDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -85,7 +85,7 @@ CREATE TABLE users (
   username citext NOT NULL UNIQUE CHECK (length(username) BETWEEN 3 AND 64),
   email citext UNIQUE,
   display_name text NOT NULL DEFAULT '' CHECK (length(display_name) <= 200),
-  role text NOT NULL CHECK (role IN ('root', 'owner', 'admin', 'user')),
+  role text NOT NULL CHECK (role IN ('root', 'superuser', 'admin', 'user')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   password_hash text NOT NULL CHECK (length(password_hash) > 0),
   password_updated_at timestamptz NOT NULL DEFAULT now(),
@@ -153,7 +153,7 @@ CREATE TABLE audit_log (
 
 CREATE UNIQUE INDEX users_single_root ON users ((true)) WHERE role = 'root';
 
-CREATE FUNCTION users_guard_last_owner() RETURNS trigger
+CREATE FUNCTION users_guard_last_superuser() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE remaining integer;
 BEGIN
@@ -164,35 +164,35 @@ BEGIN
     RETURN NEW;
   END IF;
   IF TG_OP = 'DELETE' THEN
-    IF OLD.role = 'owner' AND OLD.status = 'active' THEN
-      PERFORM pg_advisory_xact_lock(hashtext('gnvipi:owners'));
+    IF OLD.role = 'superuser' AND OLD.status = 'active' THEN
+      PERFORM pg_advisory_xact_lock(hashtext('gnvipi:superusers'));
       SELECT count(*) INTO remaining FROM users
-       WHERE role IN ('owner', 'root') AND status = 'active' AND id <> OLD.id;
+       WHERE role IN ('superuser', 'root') AND status = 'active' AND id <> OLD.id;
       IF remaining = 0 THEN
-        RAISE EXCEPTION 'last active owner cannot be deleted';
+        RAISE EXCEPTION 'last active superuser cannot be deleted';
       END IF;
     END IF;
     RETURN OLD;
   END IF;
-  IF OLD.role = 'owner' AND OLD.status = 'active'
-     AND (NEW.role <> 'owner' OR NEW.status <> 'active') THEN
-    PERFORM pg_advisory_xact_lock(hashtext('gnvipi:owners'));
+  IF OLD.role = 'superuser' AND OLD.status = 'active'
+     AND (NEW.role <> 'superuser' OR NEW.status <> 'active') THEN
+    PERFORM pg_advisory_xact_lock(hashtext('gnvipi:superusers'));
     SELECT count(*) INTO remaining FROM users
-     WHERE role IN ('owner', 'root') AND status = 'active' AND id <> OLD.id;
+     WHERE role IN ('superuser', 'root') AND status = 'active' AND id <> OLD.id;
     IF remaining = 0 THEN
-      RAISE EXCEPTION 'last active owner cannot be demoted or disabled';
+      RAISE EXCEPTION 'last active superuser cannot be demoted or disabled';
     END IF;
   END IF;
   RETURN NEW;
 END $$;
 
-CREATE TRIGGER users_guard_last_owner_bu
+CREATE TRIGGER users_guard_last_superuser_bu
 BEFORE UPDATE OF role, status ON users
-FOR EACH ROW EXECUTE FUNCTION users_guard_last_owner();
+FOR EACH ROW EXECUTE FUNCTION users_guard_last_superuser();
 
-CREATE TRIGGER users_guard_last_owner_bd
+CREATE TRIGGER users_guard_last_superuser_bd
 BEFORE DELETE ON users
-FOR EACH ROW EXECUTE FUNCTION users_guard_last_owner();
+FOR EACH ROW EXECUTE FUNCTION users_guard_last_superuser();
 
 CREATE FUNCTION users_protect_root() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -239,12 +239,12 @@ func createTestUser(t *testing.T, db *pgxpool.Pool, username string, role Role, 
 	return u
 }
 
-func activeOwners(t *testing.T, db *pgxpool.Pool) int {
+func activeSuperusers(t *testing.T, db *pgxpool.Pool) int {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(t.Context(),
-		`SELECT count(*) FROM users WHERE role = 'owner' AND status = 'active'`).Scan(&n); err != nil {
-		t.Fatalf("count owners: %v", err)
+		`SELECT count(*) FROM users WHERE role = 'superuser' AND status = 'active'`).Scan(&n); err != nil {
+		t.Fatalf("count superusers: %v", err)
 	}
 	return n
 }
@@ -253,8 +253,8 @@ func TestUsersDB(t *testing.T) {
 	db := testDB(t)
 	ctx := t.Context()
 
-	u := createTestUser(t, db, "alice", RoleOwner, "correct horse battery staple")
-	if u.Role != RoleOwner || u.Status != StatusActive {
+	u := createTestUser(t, db, "alice", RoleSuperuser, "correct horse battery staple")
+	if u.Role != RoleSuperuser || u.Status != StatusActive {
 		t.Fatalf("unexpected user: %+v", u)
 	}
 
@@ -290,29 +290,29 @@ func TestUsersDB(t *testing.T) {
 		t.Fatalf("invalid role: %v", err)
 	}
 
-	if err := DeleteUser(ctx, db, u.ID); !errors.Is(err, ErrLastOwner) {
-		t.Fatalf("deleting last owner: %v", err)
+	if err := DeleteUser(ctx, db, u.ID); !errors.Is(err, ErrLastSuperuser) {
+		t.Fatalf("deleting last superuser: %v", err)
 	}
-	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Role: rolePtr(RoleAdmin)}); !errors.Is(err, ErrLastOwner) {
-		t.Fatalf("demoting last owner: %v", err)
+	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Role: rolePtr(RoleAdmin)}); !errors.Is(err, ErrLastSuperuser) {
+		t.Fatalf("demoting last superuser: %v", err)
 	}
-	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Status: statusPtr(StatusDisabled)}); !errors.Is(err, ErrLastOwner) {
-		t.Fatalf("disabling last owner: %v", err)
+	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Status: statusPtr(StatusDisabled)}); !errors.Is(err, ErrLastSuperuser) {
+		t.Fatalf("disabling last superuser: %v", err)
 	}
 
-	second := createTestUser(t, db, "bob", RoleOwner, "correct horse battery staple")
+	second := createTestUser(t, db, "bob", RoleSuperuser, "correct horse battery staple")
 	if _, err := UpdateUser(ctx, db, u.ID, UpdateUserInput{Role: rolePtr(RoleAdmin)}); err != nil {
-		t.Fatalf("demoting with another owner: %v", err)
+		t.Fatalf("demoting with another superuser: %v", err)
 	}
 	carol := createTestUser(t, db, "carol", RoleUser, "correct horse battery staple")
 	if err := DeleteUser(ctx, db, carol.ID); err != nil {
-		t.Fatalf("delete non-owner: %v", err)
+		t.Fatalf("delete non-superuser: %v", err)
 	}
-	if err := DeleteUser(ctx, db, second.ID); !errors.Is(err, ErrLastOwner) {
-		t.Fatalf("delete remaining owner: %v", err)
+	if err := DeleteUser(ctx, db, second.ID); !errors.Is(err, ErrLastSuperuser) {
+		t.Fatalf("delete remaining superuser: %v", err)
 	}
-	if activeOwners(t, db) != 1 {
-		t.Fatal("expected one active owner")
+	if activeSuperusers(t, db) != 1 {
+		t.Fatal("expected one active superuser")
 	}
 	if users, err := ListUsers(ctx, db, 1, 0); err != nil || len(users) != 1 {
 		t.Fatalf("list users: %d %v", len(users), err)
@@ -372,11 +372,11 @@ func TestDisableRevokesCredentialsDB(t *testing.T) {
 	}
 }
 
-func TestConcurrentLastOwnerDemotion(t *testing.T) {
+func TestConcurrentLastSuperuserDemotion(t *testing.T) {
 	db := testDB(t)
 	ctx := t.Context()
-	a := createTestUser(t, db, "owner-a", RoleOwner, "correct horse battery staple")
-	b := createTestUser(t, db, "owner-b", RoleOwner, "correct horse battery staple")
+	a := createTestUser(t, db, "superuser-a", RoleSuperuser, "correct horse battery staple")
+	b := createTestUser(t, db, "superuser-b", RoleSuperuser, "correct horse battery staple")
 
 	start := make(chan struct{})
 	errs := make(chan error, 2)
@@ -394,26 +394,26 @@ func TestConcurrentLastOwnerDemotion(t *testing.T) {
 	wg.Wait()
 	close(errs)
 
-	succeeded, lastOwner := 0, 0
+	succeeded, lastSuperuser := 0, 0
 	for err := range errs {
 		switch {
 		case err == nil:
 			succeeded++
-		case errors.Is(err, ErrLastOwner):
-			lastOwner++
+		case errors.Is(err, ErrLastSuperuser):
+			lastSuperuser++
 		default:
 			t.Fatalf("unexpected demotion error: %v", err)
 		}
 	}
-	if succeeded != 1 || lastOwner != 1 {
-		t.Fatalf("want one success and one last-owner error, got %d/%d", succeeded, lastOwner)
+	if succeeded != 1 || lastSuperuser != 1 {
+		t.Fatalf("want one success and one last-superuser error, got %d/%d", succeeded, lastSuperuser)
 	}
-	if activeOwners(t, db) != 1 {
-		t.Fatal("concurrent demotions left no active owner")
+	if activeSuperusers(t, db) != 1 {
+		t.Fatal("concurrent demotions left no active superuser")
 	}
 }
 
-func TestConcurrentLastOwnerMixedMutations(t *testing.T) {
+func TestConcurrentLastSuperuserMixedMutations(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		left  func(context.Context, *pgxpool.Pool, string) error
@@ -454,8 +454,8 @@ func TestConcurrentLastOwnerMixedMutations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db := testDB(t)
 			ctx := t.Context()
-			a := createTestUser(t, db, "mixed-owner-a", RoleOwner, "correct horse battery staple")
-			b := createTestUser(t, db, "mixed-owner-b", RoleOwner, "correct horse battery staple")
+			a := createTestUser(t, db, "mixed-superuser-a", RoleSuperuser, "correct horse battery staple")
+			b := createTestUser(t, db, "mixed-superuser-b", RoleSuperuser, "correct horse battery staple")
 
 			start := make(chan struct{})
 			errs := make(chan error, 2)
@@ -480,14 +480,14 @@ func TestConcurrentLastOwnerMixedMutations(t *testing.T) {
 				switch {
 				case err == nil:
 					succeeded++
-				case errors.Is(err, ErrLastOwner):
+				case errors.Is(err, ErrLastSuperuser):
 					blocked++
 				default:
 					t.Fatalf("unexpected mutation error: %v", err)
 				}
 			}
-			if succeeded != 1 || blocked != 1 || activeOwners(t, db) != 1 {
-				t.Fatalf("successes=%d blocked=%d active owners=%d, want 1/1/1", succeeded, blocked, activeOwners(t, db))
+			if succeeded != 1 || blocked != 1 || activeSuperusers(t, db) != 1 {
+				t.Fatalf("successes=%d blocked=%d active superusers=%d, want 1/1/1", succeeded, blocked, activeSuperusers(t, db))
 			}
 		})
 	}
@@ -801,16 +801,16 @@ func TestBootstrapAndRecoveryDB(t *testing.T) {
 	cfg := BootstrapConfig{Params: fastParams()}
 	const password = "correct horse battery staple"
 
-	owner, err := CreateFirstOwner(ctx, db, CreateOwnerInput{
-		Username: "owner", Email: "owner@example.com", Password: password,
+	superuser, err := CreateFirstSuperuser(ctx, db, CreateSuperuserInput{
+		Username: "superuser", Email: "superuser@example.com", Password: password,
 	}, cfg)
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
-	if owner.Role != RoleOwner {
-		t.Fatalf("bootstrap role: %s", owner.Role)
+	if superuser.Role != RoleSuperuser {
+		t.Fatalf("bootstrap role: %s", superuser.Role)
 	}
-	if _, err := CreateFirstOwner(ctx, db, CreateOwnerInput{
+	if _, err := CreateFirstSuperuser(ctx, db, CreateSuperuserInput{
 		Username: "second", Password: password,
 	}, cfg); !errors.Is(err, ErrUsersExist) {
 		t.Fatalf("second bootstrap: %v", err)
@@ -819,21 +819,21 @@ func TestBootstrapAndRecoveryDB(t *testing.T) {
 		t.Fatalf("bootstrap audit rows: %d", n)
 	}
 
-	raw, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: owner.ID}, DefaultSessionConfig())
+	raw, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: superuser.ID}, DefaultSessionConfig())
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	gwRaw, _, err := CreateAPIToken(ctx, db, CreateAPITokenInput{
-		UserID: owner.ID, Kind: TokenKindGateway, Name: "laptop", Expiry: TokenExpiry{NoExpiry: true},
+		UserID: superuser.ID, Kind: TokenKindGateway, Name: "laptop", Expiry: TokenExpiry{NoExpiry: true},
 	})
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 	const resetPassword = "marble-orchard-77"
-	if err := ResetPassword(ctx, db, owner.ID, resetPassword, cfg); err != nil {
+	if err := ResetPassword(ctx, db, superuser.ID, resetPassword, cfg); err != nil {
 		t.Fatalf("reset password: %v", err)
 	}
-	after, err := GetUserByID(ctx, db, owner.ID)
+	after, err := GetUserByID(ctx, db, superuser.ID)
 	if err != nil || !after.MustChangePassword {
 		t.Fatalf("reset did not force change: %+v %v", after, err)
 	}
@@ -847,19 +847,19 @@ func TestBootstrapAndRecoveryDB(t *testing.T) {
 		t.Fatalf("reset audit rows: %d", n)
 	}
 
-	current, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: owner.ID}, DefaultSessionConfig())
+	current, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: superuser.ID}, DefaultSessionConfig())
 	if err != nil {
 		t.Fatalf("current session: %v", err)
 	}
-	other, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: owner.ID}, DefaultSessionConfig())
+	other, _, err := CreateSession(ctx, db, CreateSessionInput{UserID: superuser.ID}, DefaultSessionConfig())
 	if err != nil {
 		t.Fatalf("other session: %v", err)
 	}
 	const newPassword = "velvet-cascade-42"
-	if err := ChangePassword(ctx, db, owner.ID, current, resetPassword, newPassword, cfg, AuditEntry{ActorType: "user", ActorID: owner.ID}); err != nil {
+	if err := ChangePassword(ctx, db, superuser.ID, current, resetPassword, newPassword, cfg, AuditEntry{ActorType: "user", ActorID: superuser.ID}); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
-	after, err = GetUserByID(ctx, db, owner.ID)
+	after, err = GetUserByID(ctx, db, superuser.ID)
 	if err != nil || after.MustChangePassword {
 		t.Fatalf("change did not clear flag: %+v %v", after, err)
 	}
@@ -884,12 +884,12 @@ func TestConcurrentBootstrap(t *testing.T) {
 	start := make(chan struct{})
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
-	for _, name := range []string{"owner-one", "owner-two"} {
+	for _, name := range []string{"superuser-one", "superuser-two"} {
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
 			<-start
-			_, err := CreateFirstOwner(ctx, db, CreateOwnerInput{
+			_, err := CreateFirstSuperuser(ctx, db, CreateSuperuserInput{
 				Username: name, Password: "correct horse battery staple",
 			}, cfg)
 			errs <- err
@@ -910,7 +910,7 @@ func TestConcurrentBootstrap(t *testing.T) {
 		}
 	}
 	if success != 1 || exists != 1 {
-		t.Fatalf("want one owner and one ErrUsersExist, got %d/%d", success, exists)
+		t.Fatalf("want one superuser and one ErrUsersExist, got %d/%d", success, exists)
 	}
 	if n, err := CountUsers(ctx, db); err != nil || n != 1 {
 		t.Fatalf("user count after concurrent bootstrap: %d %v", n, err)
@@ -973,7 +973,7 @@ func TestRootAccountIsProtectedDB(t *testing.T) {
 	if err := DeleteUser(ctx, db, root.ID); !errors.Is(err, ErrRootProtected) {
 		t.Fatalf("deleting root: %v", err)
 	}
-	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{Role: rolePtr(RoleOwner)}); !errors.Is(err, ErrRootProtected) {
+	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{Role: rolePtr(RoleSuperuser)}); !errors.Is(err, ErrRootProtected) {
 		t.Fatalf("demoting root: %v", err)
 	}
 	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{Status: statusPtr(StatusDisabled)}); !errors.Is(err, ErrRootProtected) {
@@ -990,10 +990,10 @@ func TestRootAccountIsProtectedDB(t *testing.T) {
 	if _, err := UpdateUser(ctx, db, root.ID, UpdateUserInput{DisplayName: strPtr("Root")}); err != nil {
 		t.Fatalf("renaming the display name of root: %v", err)
 	}
-	// Root is an owner-level account, so it keeps the last-owner guard satisfied.
-	owner := createTestUser(t, db, "second-owner", RoleOwner, "correct horse battery staple")
-	if err := DeleteUser(ctx, db, owner.ID); err != nil {
-		t.Fatalf("deleting an owner beside root: %v", err)
+	// Root is an superuser-level account, so it keeps the last-superuser guard satisfied.
+	superuser := createTestUser(t, db, "second-superuser", RoleSuperuser, "correct horse battery staple")
+	if err := DeleteUser(ctx, db, superuser.ID); err != nil {
+		t.Fatalf("deleting an superuser beside root: %v", err)
 	}
 }
 

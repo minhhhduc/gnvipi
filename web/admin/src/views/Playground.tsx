@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "../lib/api";
-import { isOwnerLevelRole, type AdminUser } from "../lib/auth";
+import { isSuperuserLevelRole, type AdminUser } from "../lib/auth";
 import type { AdminUserRecord } from "../lib/types";
 import { message } from "../lib/admin";
 import { useGateway } from "../lib/context";
@@ -34,7 +34,7 @@ const MAX_IMAGE_BYTES = 700 * 1024;
 const DEFAULT_TEMPERATURE = 1;
 
 export function PlaygroundView({ user }: { user: AdminUser }) {
-  const owner = isOwnerLevelRole(user.role);
+  const superuser = isSuperuserLevelRole(user.role);
   const { navigate } = useGateway();
   const [accounts, setAccounts] = useState<AdminUserRecord[]>([]);
   const [accountID, setAccountID] = useState("");
@@ -65,18 +65,18 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   const transcript = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!superuser) return;
     api<unknown>(`/admin/api/users?limit=${USER_LIST_MAX}`)
       .then((body) => setAccounts(parseUserList(body).users))
       // The playground still works for the caller's own account; the selector
       // just stays on "My account".
       .catch(() => setAccounts([]));
-  }, [owner]);
+  }, [superuser]);
 
   useEffect(() => {
     let cancelled = false;
     setModelsLoading(true);
-    const query = owner && accountID ? `?user_id=${encodeURIComponent(accountID)}` : "";
+    const query = superuser && accountID ? `?user_id=${encodeURIComponent(accountID)}` : "";
     api<unknown>(`/admin/api/playground/models${query}`)
       .then((body) => {
         if (cancelled) return;
@@ -96,7 +96,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
     return () => {
       cancelled = true;
     };
-  }, [owner, accountID]);
+  }, [superuser, accountID]);
 
   // Switching the account being tested changes whose keys resolve, so every
   // saved conversation no longer describes anything real.
@@ -147,7 +147,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
                 : { role: "assistant" as const, content: turn.content },
             ),
         ],
-        userId: owner && accountID ? accountID : undefined,
+        userId: superuser && accountID ? accountID : undefined,
         temperature,
         maxTokens: Number.isFinite(maxTokensValue) && maxTokensValue > 0 ? maxTokensValue : undefined,
         signal: controller.signal,
@@ -237,7 +237,7 @@ export function PlaygroundView({ user }: { user: AdminUser }) {
   return (
     <>
       <PageHeader title="Playground" sub="Send a test message through this gateway as the signed-in account">
-        {owner && (
+        {superuser && (
           <label class="flex items-center gap-2 text-xs text-dim">
             Test as
             <select class="input" value={accountID} onChange={(e) => setAccountID((e.target as HTMLSelectElement).value)}>

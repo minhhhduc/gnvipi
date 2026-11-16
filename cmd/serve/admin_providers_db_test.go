@@ -474,8 +474,8 @@ func TestDBAdminProviders_AliasConcurrency(t *testing.T) {
 // advisory lock the last-owner trigger takes; exactly one demotion can win.
 func TestDBAdminUsers_LastOwnerConcurrentDemotions(t *testing.T) {
 	h := newDBAdminHarness(t)
-	secondOwnerID := createContractUser(t, h, "owner-two", auth.RoleOwner)
-	clearMustChangePassword(t, h, secondOwnerID)
+	secondSuperuserID := createContractUser(t, h, "owner-two", auth.RoleSuperuser)
+	clearMustChangePassword(t, h, secondSuperuserID)
 	ctx := t.Context()
 
 	tx, err := h.pool.Begin(ctx)
@@ -489,11 +489,11 @@ func TestDBAdminUsers_LastOwnerConcurrentDemotions(t *testing.T) {
 
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- doJSONRequest(h.engine, http.MethodPut, "/admin/api/users/"+h.owner.ID, gin.H{"role": "admin"}, bearer(h.token))
+		done <- doJSONRequest(h.engine, http.MethodPut, "/admin/api/users/"+h.superuser.ID, gin.H{"role": "admin"}, bearer(h.token))
 	}()
 
 	// Demote the second owner while holding the serialization lock.
-	if _, err := tx.Exec(ctx, `UPDATE users SET role = 'admin' WHERE id = $1::uuid`, secondOwnerID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE users SET role = 'admin' WHERE id = $1::uuid`, secondSuperuserID); err != nil {
 		t.Fatalf("demote second owner under the lock: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -506,11 +506,11 @@ func TestDBAdminUsers_LastOwnerConcurrentDemotions(t *testing.T) {
 	}
 	assertFieldError(t, decodeBody(t, res), "role")
 	var role string
-	if err := h.pool.QueryRow(ctx, `SELECT role FROM users WHERE id = $1::uuid`, h.owner.ID).Scan(&role); err != nil {
-		t.Fatalf("read remaining owner role: %v", err)
+	if err := h.pool.QueryRow(ctx, `SELECT role FROM users WHERE id = $1::uuid`, h.superuser.ID).Scan(&role); err != nil {
+		t.Fatalf("read remaining superuser role: %v", err)
 	}
-	if role != string(auth.RoleOwner) {
-		t.Fatalf("last owner role = %q, want owner", role)
+	if role != string(auth.RoleSuperuser) {
+		t.Fatalf("last superuser role = %q, want superuser", role)
 	}
 }
 

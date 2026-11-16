@@ -3,7 +3,7 @@ package auth
 import "testing"
 
 func TestRoleAtLeast(t *testing.T) {
-	order := []Role{RoleUser, RoleAdmin, RoleOwner, RoleRoot}
+	order := []Role{RoleUser, RoleAdmin, RoleSuperuser, RoleRoot}
 	for i, have := range order {
 		for j, min := range order {
 			if got := have.AtLeast(min); got != (i >= j) {

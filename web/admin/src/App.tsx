@@ -35,7 +35,7 @@ const LEGACY_ADMIN_USER: AdminUser = {
   username: "legacy-admin",
   email: "",
   display_name: "Legacy admin",
-  role: "owner",
+  role: "superuser",
   status: "active",
   must_change_password: false,
 };
@@ -244,7 +244,7 @@ export function App() {
   }
 
   const operator = isOperatorRole(user.role);
-  // Every role holds gateway tokens; account administration is owner-only. The
+  // Every role holds gateway tokens; account administration is superuser-only. The
   // router already rejects an unauthorised ?page=, so these branches are the
   // render half of the same gate.
   const body =

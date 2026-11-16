@@ -195,7 +195,7 @@ export interface ApiErrorBody {
   field_errors?: { field: string; message: string }[];
 }
 
-/** One account row on the owner-only Users screen. */
+/** One account row on the superuser-only Users screen. */
 export interface AdminUserRecord {
   id: string;
   username: string;

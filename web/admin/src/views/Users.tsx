@@ -84,7 +84,7 @@ export function UsersView({ user }: { user: AdminUser }) {
       <>
         <PageHeader title="Users" sub="Account administration" />
         <Card>
-          <Empty title="Owner access only" body="Only an owner can create, disable, delete or reset gateway accounts." />
+          <Empty title="Superuser access only" body="Only a superuser can create, disable, delete or reset gateway accounts." />
         </Card>
       </>
     );
@@ -94,7 +94,7 @@ export function UsersView({ user }: { user: AdminUser }) {
 
   return (
     <>
-      <PageHeader title="Users" sub="Owner-only account administration">
+      <PageHeader title="Users" sub="Superuser-only account administration">
         <HealthPill />
         <button class="btn btn-primary" onClick={() => setDialog({ kind: "create" })}>New user</button>
       </PageHeader>

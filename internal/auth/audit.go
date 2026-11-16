@@ -70,7 +70,7 @@ func (e AuditEntry) validate() error {
 }
 
 // allowedAuditKeys is an allowlist of metadata keys. Audit details are
-// long-lived and owner-readable, so anything not explicitly safe is dropped
+// long-lived and superuser-readable, so anything not explicitly safe is dropped
 // instead of being persisted.
 var allowedAuditKeys = map[string]struct{}{
 	"id": {}, "user_id": {}, "key_id": {}, "provider_id": {}, "request_id": {},

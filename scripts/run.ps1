@@ -52,7 +52,7 @@ $gatewayToken = $env:GNVIPI_GATEWAY_TOKEN
 if ($gatewayToken) { $gatewayToken = $gatewayToken.Trim() }
 if ($Claude -and (-not $gatewayToken -or $gatewayToken -eq 'local-gateway')) {
   Write-Host "GNVIPI_GATEWAY_TOKEN is required for -Claude; 'local-gateway' is rejected." -ForegroundColor Red
-  Write-Host "Create one with: .\bin\serve.exe admin create-owner --username <owner> --with-gateway-token"
+  Write-Host "Create one with: .\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token"
   Write-Host "then set: `$env:GNVIPI_GATEWAY_TOKEN='gw_...'"
   throw "GNVIPI_GATEWAY_TOKEN is not set"
 }

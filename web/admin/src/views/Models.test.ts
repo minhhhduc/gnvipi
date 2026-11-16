@@ -18,7 +18,7 @@ function renderButton(role: string, busy = false): string {
 }
 
 describe("NVIDIA rescan button role rendering", () => {
-  it.each(["owner", "admin"])("shows the rescan action to %s", (role) => {
+  it.each(["superuser", "admin"])("shows the rescan action to %s", (role) => {
     expect(renderButton(role)).toContain("Rescan NVIDIA models");
   });
 
@@ -28,7 +28,7 @@ describe("NVIDIA rescan button role rendering", () => {
   });
 
   it("reports progress while the scan runs", () => {
-    expect(renderButton("owner", true)).toContain("Rescanning");
+    expect(renderButton("superuser", true)).toContain("Rescanning");
   });
 
   it("summarizes reconcile counts", () => {

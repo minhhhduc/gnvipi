@@ -25,7 +25,7 @@ func TestPlaygroundAdminContractDB(t *testing.T) {
 		t.Fatalf("anonymous chat = %d %s, want 401 authentication_required", res.Code, res.Body.String())
 	}
 
-	ownerSession, ownerCSRF := h.login(t, dbOwnerUsername, dbOwnerPassword)
+	ownerSession, ownerCSRF := h.login(t, dbSuperuserUsername, dbSuperuserPassword)
 	// The cookie pair without the double-submit header is rejected.
 	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/playground/chat", gin.H{"model": "m", "messages": []any{}}, map[string]string{
 		"Cookie": auth.SessionCookieName + "=" + ownerSession + "; " + auth.CSRFCookieName + "=" + ownerCSRF,
@@ -44,11 +44,11 @@ func TestPlaygroundAdminContractDB(t *testing.T) {
 	memberID := createContractUser(t, h, "playground-member", auth.RoleUser)
 	clearMustChangePassword(t, h, memberID)
 	session, csrf := h.login(t, "playground-member", dbUserPassword)
-	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/playground/models?user_id="+h.owner.ID, nil, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodGet, "/admin/api/playground/models?user_id="+h.superuser.ID, nil, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("foreign user_id models = %d %s, want 404", res.Code, res.Body.String())
 	}
-	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/playground/chat?user_id="+h.owner.ID, gin.H{"model": "m", "messages": []any{}}, cookieAuth(session, csrf))
+	res = makeRequest(t, h.engine, http.MethodPost, "/admin/api/playground/chat?user_id="+h.superuser.ID, gin.H{"model": "m", "messages": []any{}}, cookieAuth(session, csrf))
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("foreign user_id chat = %d %s, want 404", res.Code, res.Body.String())
 	}

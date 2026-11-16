@@ -93,9 +93,9 @@ func ImportV2(ctx context.Context, pool *pgxpool.Pool, source []byte, owner stri
 	}
 
 	var ownerID string
-	if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE username = $1 AND role = 'owner' AND status = 'active'`, owner).Scan(&ownerID); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE username = $1 AND role = 'superuser' AND status = 'active'`, owner).Scan(&ownerID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("providerstore: active owner %q not found", owner)
+			return false, fmt.Errorf("providerstore: active superuser %q not found", owner)
 		}
 		return false, fmt.Errorf("providerstore: find import owner: %w", err)
 	}

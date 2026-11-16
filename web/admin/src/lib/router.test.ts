@@ -27,10 +27,10 @@ describe("pageFromUrl", () => {
   it("filters direct routes through the signed-in role", () => {
     const forRole = pageFromUrl as (
       search: string,
-      role: "owner" | "admin" | "user",
+      role: "superuser" | "admin" | "user",
     ) => Page;
 
-    expect(forRole("?page=config", "owner")).toBe("config");
+    expect(forRole("?page=config", "superuser")).toBe("config");
     expect(forRole("?page=chromes", "admin")).toBe("chromes");
     expect(forRole("?page=models", "user")).toBe("models");
     expect(forRole("?page=config", "user")).toBe("stats");
@@ -40,24 +40,24 @@ describe("pageFromUrl", () => {
   it("opens the usage log to every role", () => {
     const forRole = pageFromUrl as (
       search: string,
-      role: "owner" | "admin" | "user",
+      role: "superuser" | "admin" | "user",
     ) => Page;
 
-    expect(forRole("?page=usage", "owner")).toBe("usage");
+    expect(forRole("?page=usage", "superuser")).toBe("usage");
     expect(forRole("?page=usage", "admin")).toBe("usage");
     expect(forRole("?page=usage", "user")).toBe("usage");
   });
 
-  it("keeps the users screen owner-only and the tokens screen open to every role", () => {
+  it("keeps the users screen superuser-only and the tokens screen open to every role", () => {
     const forRole = pageFromUrl as (
       search: string,
-      role: "owner" | "admin" | "user",
+      role: "superuser" | "admin" | "user",
     ) => Page;
 
-    expect(forRole("?page=users", "owner")).toBe("users");
+    expect(forRole("?page=users", "superuser")).toBe("users");
     expect(forRole("?page=users", "admin")).toBe("stats");
     expect(forRole("?page=users", "user")).toBe("stats");
-    expect(forRole("?page=tokens", "owner")).toBe("tokens");
+    expect(forRole("?page=tokens", "superuser")).toBe("tokens");
     expect(forRole("?page=tokens", "admin")).toBe("tokens");
     expect(forRole("?page=tokens", "user")).toBe("tokens");
   });
@@ -104,31 +104,31 @@ describe("rawPageFromUrl", () => {
 });
 
 describe("pageAllowed", () => {
-  it("gates the owner-only users screen and the shared tokens screen", () => {
-    expect(pageAllowed("users", "owner")).toBe(true);
+  it("gates the superuser-only users screen and the shared tokens screen", () => {
+    expect(pageAllowed("users", "superuser")).toBe(true);
     expect(pageAllowed("users", "root")).toBe(true);
     expect(pageAllowed("users", "admin")).toBe(false);
     expect(pageAllowed("users", "user")).toBe(false);
-    expect(pageAllowed("tokens", "owner")).toBe(true);
+    expect(pageAllowed("tokens", "superuser")).toBe(true);
     expect(pageAllowed("tokens", "admin")).toBe(true);
     expect(pageAllowed("tokens", "user")).toBe(true);
   });
 
   it("keeps the usage log and dashboard straight", () => {
-    expect(pageAllowed("usage", "owner")).toBe(true);
+    expect(pageAllowed("usage", "superuser")).toBe(true);
     expect(pageAllowed("usage", "admin")).toBe(true);
     expect(pageAllowed("usage", "user")).toBe(true);
     expect(pageAllowed("stats", "user")).toBe(true);
   });
 
   it("opens the playground to every role", () => {
-    expect(pageAllowed("playground", "owner")).toBe(true);
+    expect(pageAllowed("playground", "superuser")).toBe(true);
     expect(pageAllowed("playground", "admin")).toBe(true);
     expect(pageAllowed("playground", "user")).toBe(true);
   });
 
   it("opens the API guide to every role", () => {
-    expect(pageAllowed("api", "owner")).toBe(true);
+    expect(pageAllowed("api", "superuser")).toBe(true);
     expect(pageAllowed("api", "admin")).toBe(true);
     expect(pageAllowed("api", "user")).toBe(true);
   });
