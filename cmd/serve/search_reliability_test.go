@@ -248,3 +248,47 @@ func TestDedupCanonicalizesURLs(t *testing.T) {
 		t.Fatalf("url = %q", results[0].URL)
 	}
 }
+
+func TestCircuitBreakerRecoveryProbe(t *testing.T) {
+	var hits atomic.Int32
+	rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
+		hits.Add(1)
+		body := `<html><li class=b_algo><h2><a href="https://example.com/recovered">Recovered</a></h2><cite>https://example.com/recovered</cite></li></html>`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	})
+	gw := testGateway(rt)
+	health := gw.clients[bingName].health
+	for i := 0; i < 5; i++ {
+		health.Record(ErrBlocked)
+	}
+	if health.Healthy() {
+		t.Fatal("circuit should be open after 5 failures")
+	}
+
+	// Simulate cooldown elapsed.
+	health.mu.Lock()
+	health.openedAt = time.Now().Add(-health.cooldown - time.Second)
+	health.mu.Unlock()
+
+	if !health.Healthy() {
+		t.Fatal("Healthy() should report true once cooldown has elapsed")
+	}
+
+	// Routed search must dispatch the probe to HTTP and close the circuit on success.
+	results, _ := gw.search(context.Background(), "recovery probe test")
+	if hits.Load() == 0 {
+		t.Fatal("expected recovery probe to reach HTTP transport")
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results from recovery probe")
+	}
+	if !health.Healthy() {
+		t.Fatal("circuit should remain closed after successful probe")
+	}
+	health.mu.Lock()
+	openedAt := health.openedAt
+	health.mu.Unlock()
+	if !openedAt.IsZero() {
+		t.Fatalf("openedAt should be zero after recovery, got %v", openedAt)
+	}
+}
