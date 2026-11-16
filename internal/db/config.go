@@ -193,7 +193,7 @@ func ValidateDSN(raw string) error {
 	if isLocalHost(host) {
 		return nil
 	}
-	if len(sslmodes) != 1 || strings.ToLower(sslmodes[0]) != "verify-full" {
+	if len(sslmodes) != 1 || !strings.EqualFold(sslmodes[0], "verify-full") {
 		return fmt.Errorf("database host %q is not local; sslmode=verify-full is required", host)
 	}
 	return nil
