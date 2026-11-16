@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ func newSearchGateway() *searchGateway {
 	clients := map[string]*sharedSearchClient{
 		bingName:     newSharedClient(gatewayUA, 1.5, 2*time.Second, 3, 5),
 		ddgName:      newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
+		customName:   newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
 		arxivName:    newSharedClient(scholarlyUA, 0.5, 3*time.Second, 2, 4),
 		crossrefName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
 		openalexName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
@@ -40,6 +42,7 @@ func newSearchGateway() *searchGateway {
 		backends: map[string]SearchBackend{
 			bingName:     &bingBackend{client: clients[bingName]},
 			ddgName:      &ddgBackend{client: clients[ddgName]},
+			customName:   &customBackend{client: clients[customName]},
 			arxivName:    &arxivBackend{client: clients[arxivName]},
 			crossrefName: &crossrefBackend{client: clients[crossrefName]},
 			openalexName: &openalexBackend{client: clients[openalexName]},
@@ -53,14 +56,41 @@ func newSearchGateway() *searchGateway {
 	return gw
 }
 
-// setHTMLEngine switches the general-search primary between Bing and DDG.
+// setHTMLEngine switches the general-search primary between Bing, DDG, and custom.
 func (g *searchGateway) setHTMLEngine(name string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if name != bingName && name != ddgName {
+	if name != bingName && name != ddgName && name != customName {
 		return
 	}
 	g.htmlPrimary = name
+}
+
+// setSearchTemplate configures the active HTML search backend from a validated
+// search URL template (Bing, DuckDuckGo, Google, Scholar, or custom URL).
+func (g *searchGateway) setSearchTemplate(tmpl string) {
+	u, err := url.Parse(strings.ReplaceAll(tmpl, "{query}", "test"))
+	if err != nil {
+		return
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case host == "bing.com" || strings.HasSuffix(host, ".bing.com"):
+		if b, ok := g.backends[bingName].(*bingBackend); ok {
+			b.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(bingName)
+	case host == "duckduckgo.com" || strings.HasSuffix(host, ".duckduckgo.com"):
+		if d, ok := g.backends[ddgName].(*ddgBackend); ok {
+			d.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(ddgName)
+	default:
+		if c, ok := g.backends[customName].(*customBackend); ok {
+			c.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(customName)
+	}
 }
 
 func (g *searchGateway) htmlEngine() string {
@@ -125,6 +155,11 @@ func (g *searchGateway) search(ctx context.Context, query string) ([]SearchResul
 		}
 		plan := backend.Adapt(intent)
 		key := name + "|" + strings.Join(plan.Queries, "||")
+		if tb, ok := backend.(interface{ template() string }); ok {
+			if tmpl := tb.template(); tmpl != "" {
+				key = name + "|" + tmpl + "|" + strings.Join(plan.Queries, "||")
+			}
+		}
 		if cached, hit := g.cache.Get(key); hit {
 			traces = append(traces, SearchTrace{
 				Backend: name, Queries: plan.Queries, Status: "cache_hit",
