@@ -101,6 +101,24 @@ func (s *Snapshot) Settings() Settings {
 	return s.settings
 }
 
+// ModelState returns the sorted hidden and deleted model IDs from this snapshot.
+func (s *Snapshot) ModelState() (hidden, deleted []string) {
+	if s == nil {
+		return nil, nil
+	}
+	for id, state := range s.modelState {
+		if state.Hidden {
+			hidden = append(hidden, id)
+		}
+		if state.Deleted {
+			deleted = append(deleted, id)
+		}
+	}
+	slices.Sort(hidden)
+	slices.Sort(deleted)
+	return hidden, deleted
+}
+
 // Provider returns a defensive copy of a provider definition.
 func (s *Snapshot) Provider(id string) (provider.Provider, bool) {
 	if s == nil {

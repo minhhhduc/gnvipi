@@ -3,6 +3,7 @@ package providerstore
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -315,5 +316,23 @@ func TestStoreReloadSkipsPublishWhenVersionUnchanged(t *testing.T) {
 	}
 	if audits != 1 {
 		t.Fatalf("audit events = %d, want 1 for an unchanged config version", audits)
+	}
+}
+
+func TestBuildSnapshotModelState(t *testing.T) {
+	rows := baseRows()
+	rows.ModelState = []ModelStateRow{
+		{ModelID: "z-hidden", Hidden: true},
+		{ModelID: "a-hidden", Hidden: true},
+		{ModelID: "b-deleted", Deleted: true},
+	}
+
+	snap := mustBuildSnapshot(t, rows, 2, BuildOptions{Now: fixedNow})
+	hidden, deleted := snap.ModelState()
+	if !reflect.DeepEqual(hidden, []string{"a-hidden", "z-hidden"}) {
+		t.Fatalf("hidden = %v, want [a-hidden z-hidden]", hidden)
+	}
+	if !reflect.DeepEqual(deleted, []string{"b-deleted"}) {
+		t.Fatalf("deleted = %v, want [b-deleted]", deleted)
 	}
 }
