@@ -19,13 +19,19 @@ var legacyConsolePaths = map[string]string{
 	"usage": "/usage", "audit": "/audit",
 }
 
+// adminShellGetPath reports whether path is an Admin UI shell page or redirect
+// served by registerAdminUI or adminConsoleRoot.
+func adminShellGetPath(path string) bool {
+	return path == "/" || path == "/admin" || path == "/admin/" || slices.Contains(consolePages, strings.TrimPrefix(path, "/"))
+}
+
 // adminSurfacePath reports every URL that belongs to the console: the /admin
 // API and legacy endpoints, the assets, and the clean page paths.
 func adminSurfacePath(path string) bool {
 	if path == "/admin" || strings.HasPrefix(path, "/admin/") {
 		return true
 	}
-	return path == "/" || slices.Contains(consolePages, strings.TrimPrefix(path, "/"))
+	return adminShellGetPath(path)
 }
 
 // consolePathFor maps a legacy ?page= value to its clean path.

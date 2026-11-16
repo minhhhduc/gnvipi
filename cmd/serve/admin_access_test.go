@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -345,5 +346,72 @@ func TestPortOnly(t *testing.T) {
 		if got := portOnly(tc.addr); got != tc.want {
 			t.Fatalf("portOnly(%q) = %q, want %q", tc.addr, got, tc.want)
 		}
+	}
+}
+
+// In active database mode (superuserExists == true), static Admin UI shell and
+// bundle paths must load on non-loopback binds and reverse-proxied hosts so the
+// SPA login screen can render, while non-shell paths and mutations remain gated.
+func TestAdminAccessDatabaseModeNonLoopbackShell(t *testing.T) {
+	var usersExist atomic.Bool
+	usersExist.Store(true)
+	dbAuth := &authState{usersExist: &usersExist}
+
+	newEngine := func(addr, token string) *gin.Engine {
+		gin.SetMode(gin.TestMode)
+		engine := gin.New()
+		engine.Use(adminAccess(addr, token, dbAuth))
+		ok := func(c *gin.Context) { c.String(http.StatusOK, "ok") }
+		engine.Any("/", ok)
+		engine.Any("/admin", ok)
+		engine.Any("/admin/", ok)
+		engine.Any("/admin/app.js", ok)
+		engine.Any("/admin/app.css", ok)
+		engine.Any("/playground", ok)
+		engine.Any("/admin/providers", ok)
+		engine.Any("/admin/login", ok)
+		return engine
+	}
+
+	for _, tc := range []struct {
+		name   string
+		addr   string
+		token  string
+		origin string
+	}{
+		{"non-loopback bind without token", ":8080", "", "http://gateway.example:8080"},
+		{"non-loopback bind with bootstrap token", "0.0.0.0:8080", "bootstrap-secret", "http://gateway.example:8080"},
+		{"loopback bind with non-loopback host", "127.0.0.1:8080", "", "http://gateway.example:8080"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := newEngine(tc.addr, tc.token)
+			for _, req := range []struct {
+				method string
+				path   string
+				want   int
+			}{
+				{http.MethodGet, "/", http.StatusOK},
+				{http.MethodHead, "/", http.StatusOK},
+				{http.MethodGet, "/admin", http.StatusOK},
+				{http.MethodGet, "/admin/", http.StatusOK},
+				{http.MethodGet, "/playground", http.StatusOK},
+				{http.MethodGet, "/admin/app.js", http.StatusOK},
+				{http.MethodHead, "/admin/app.js", http.StatusOK},
+				{http.MethodGet, "/admin/app.css", http.StatusOK},
+				{http.MethodHead, "/admin/app.css", http.StatusOK},
+				{http.MethodGet, "/admin/providers", http.StatusForbidden},
+				{http.MethodGet, "/admin/login", http.StatusForbidden},
+				{http.MethodPost, "/", http.StatusForbidden},
+				{http.MethodPost, "/admin", http.StatusForbidden},
+				{http.MethodPost, "/admin/app.js", http.StatusForbidden},
+				{http.MethodPost, "/admin/providers", http.StatusForbidden},
+				{http.MethodDelete, "/playground", http.StatusForbidden},
+			} {
+				res := adminAccessRequest(t, engine, req.method, tc.origin+req.path, nil, nil)
+				if res.Code != req.want {
+					t.Fatalf("%s %s = %d, want %d (body: %s)", req.method, req.path, res.Code, req.want, res.Body.String())
+				}
+			}
+		})
 	}
 }

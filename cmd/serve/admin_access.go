@@ -60,6 +60,7 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 		// ignored everywhere, including the legacy surface guarded here, so the
 		// legacy shared-token login and header access both stop working.
 		activeToken := token
+		dbAuthActive := false
 		if dbAuth != nil {
 			superuserExists, err := dbAuth.superuserExists(r.Context())
 			if err != nil {
@@ -68,9 +69,14 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 			}
 			if superuserExists {
 				activeToken = ""
+				dbAuthActive = true
 			}
 		}
 		if activeToken == "" {
+			if dbAuthActive && (r.Method == http.MethodGet || r.Method == http.MethodHead) && (adminShellGetPath(path) || path == "/admin/app.js" || path == "/admin/app.css") {
+				c.Next()
+				return
+			}
 			if !loopback {
 				adminAccessError(c, http.StatusForbidden, "Set -admin-token or GNVIPI_ADMIN_TOKEN to enable admin access on a non-loopback bind, or bind to localhost, 127.0.0.1, or [::1].")
 				return
