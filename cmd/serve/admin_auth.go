@@ -171,6 +171,9 @@ func handleAdminChangePassword(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusBadRequest, "invalid_body", "expected a JSON object with current_password and new_password")
 			return
 		}
+		// Normalize pasted credentials once, before any validation or query.
+		req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
+		req.NewPassword = strings.TrimSpace(req.NewPassword)
 		if req.CurrentPassword == "" {
 			adminFieldError(c, http.StatusBadRequest, "current_password", "current password is required")
 			return
