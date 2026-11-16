@@ -37,7 +37,22 @@ func newBackendHealth(cooldown time.Duration, failuresToOpen int) *backendHealth
 	return &backendHealth{cooldown: cooldown, failuresToOpen: failuresToOpen}
 }
 
+// Healthy reports whether the backend can accept a request (closed circuit or
+// cooldown elapsed and ready for a probe). It is read-only; probe admission is
+// claimed atomically by Admit at the actual request boundary.
 func (h *backendHealth) Healthy() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.openedAt.IsZero() {
+		return true
+	}
+	return time.Since(h.openedAt) >= h.cooldown
+}
+
+// Admit checks whether a request may proceed and, if the circuit is open after
+// cooldown, atomically claims the single half-open probe slot by refreshing
+// openedAt until Record(nil) closes the circuit or Record(err) keeps it open.
+func (h *backendHealth) Admit() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.openedAt.IsZero() {
@@ -206,7 +221,7 @@ func (s *sharedSearchClient) do(ctx context.Context, target string, extraHeaders
 	if err := s.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
-	if !s.health.Healthy() {
+	if !s.health.Admit() {
 		return nil, ErrBlocked
 	}
 	var lastErr error
