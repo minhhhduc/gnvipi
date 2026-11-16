@@ -38,6 +38,9 @@ export function AutomodeNote() {
         The client only holds the <span class="font-semibold text-fg">gateway token</span> (<span class="mono">$GNVIPI_GATEWAY_TOKEN</span>, from API Keys);
         provider Auth key / API key stay on the server in the provider's keys. Leave <span class="mono">ANTHROPIC_API_KEY</span> empty.
       </div>
+      <div>
+        3. Built-in models: you can set <span class="mono">$your_model</span> to <span class="mono">automode</span> (routes to your configured Auto model) or <span class="mono">cycle</span> (rotates across enabled models).
+      </div>
     </div>
   );
 }
