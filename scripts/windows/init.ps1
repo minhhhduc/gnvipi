@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot; Set-Location -Path $root
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot); Set-Location -Path $root
 
 $target = Join-Path $root 'internal\models\playground_models.json'
 if ((Test-Path $target) -and -not $Force) {
