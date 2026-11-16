@@ -54,6 +54,20 @@ type QueryPlan struct {
 	Identifier string // non-empty => direct lookup, skip query adaptation
 }
 
+type searchTemplateContextKey struct{}
+
+func withSearchTemplate(ctx context.Context, tmpl string) context.Context {
+	return context.WithValue(ctx, searchTemplateContextKey{}, tmpl)
+}
+
+func searchTemplateFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	tmpl, _ := ctx.Value(searchTemplateContextKey{}).(string)
+	return tmpl
+}
+
 // SearchBackend is the per-engine abstraction: each backend owns its query
 // adaptation, request construction, response parsing, and failure policy.
 type SearchBackend interface {

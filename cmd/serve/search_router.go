@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ func newSearchGateway() *searchGateway {
 	clients := map[string]*sharedSearchClient{
 		bingName:     newSharedClient(gatewayUA, 1.5, 2*time.Second, 3, 5),
 		ddgName:      newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
+		customName:   newSharedClient(gatewayUA, 1.2, 2*time.Second, 3, 5),
 		arxivName:    newSharedClient(scholarlyUA, 0.5, 3*time.Second, 2, 4),
 		crossrefName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
 		openalexName: newSharedClient(scholarlyUA, 0.9, 1500*time.Millisecond, 3, 5),
@@ -40,6 +42,7 @@ func newSearchGateway() *searchGateway {
 		backends: map[string]SearchBackend{
 			bingName:     &bingBackend{client: clients[bingName]},
 			ddgName:      &ddgBackend{client: clients[ddgName]},
+			customName:   &customBackend{client: clients[customName]},
 			arxivName:    &arxivBackend{client: clients[arxivName]},
 			crossrefName: &crossrefBackend{client: clients[crossrefName]},
 			openalexName: &openalexBackend{client: clients[openalexName]},
@@ -53,14 +56,54 @@ func newSearchGateway() *searchGateway {
 	return gw
 }
 
-// setHTMLEngine switches the general-search primary between Bing and DDG.
+// setHTMLEngine switches the general-search primary between Bing, DDG, and custom.
 func (g *searchGateway) setHTMLEngine(name string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if name != bingName && name != ddgName {
+	if name != bingName && name != ddgName && name != customName {
 		return
 	}
 	g.htmlPrimary = name
+}
+
+// templateBackendName maps a search URL template to its HTML backend name.
+func templateBackendName(tmpl string) string {
+	u, err := url.Parse(strings.ReplaceAll(tmpl, "{query}", "test"))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case host == "bing.com" || strings.HasSuffix(host, ".bing.com"):
+		return bingName
+	case host == "duckduckgo.com" || strings.HasSuffix(host, ".duckduckgo.com"):
+		return ddgName
+	default:
+		return customName
+	}
+}
+
+// setSearchTemplate configures the active HTML search backend from a validated
+// search URL template (Bing, DuckDuckGo, Google, Scholar, or custom URL).
+func (g *searchGateway) setSearchTemplate(tmpl string) {
+	name := templateBackendName(tmpl)
+	switch name {
+	case bingName:
+		if b, ok := g.backends[bingName].(*bingBackend); ok {
+			b.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(bingName)
+	case ddgName:
+		if d, ok := g.backends[ddgName].(*ddgBackend); ok {
+			d.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(ddgName)
+	case customName:
+		if c, ok := g.backends[customName].(*customBackend); ok {
+			c.setTemplate(tmpl)
+		}
+		g.setHTMLEngine(customName)
+	}
 }
 
 func (g *searchGateway) htmlEngine() string {
@@ -77,7 +120,11 @@ func (g *searchGateway) htmlEngine() string {
 // engine first (it surfaces primary sources well) with scholarly providers as
 // a second source. General queries use the HTML engine and its mirror.
 func (g *searchGateway) routeBackends(ctx *SearchContext) []string {
-	html, fallback := g.htmlEngine(), ddgName
+	return g.routeBackendsFor(ctx, g.htmlEngine())
+}
+
+func (g *searchGateway) routeBackendsFor(ctx *SearchContext, html string) []string {
+	fallback := ddgName
 	if html == ddgName {
 		fallback = bingName
 	}
@@ -111,8 +158,15 @@ type SearchTrace struct {
 // search executes the full pipeline: intent, routing, per-backend adaptation,
 // caching, execution, normalization, dedup, and ranking.
 func (g *searchGateway) search(ctx context.Context, query string) ([]SearchResult, []SearchTrace) {
+	tmpl := searchTemplateFromContext(ctx)
 	intent := deriveSearchContext(query)
-	chain := g.routeBackends(intent)
+	primary := g.htmlEngine()
+	if tmpl != "" {
+		if p := templateBackendName(tmpl); p != "" {
+			primary = p
+		}
+	}
+	chain := g.routeBackendsFor(intent, primary)
 	var traces []SearchTrace
 
 	var merged []SearchResult
@@ -124,7 +178,16 @@ func (g *searchGateway) search(ctx context.Context, query string) ([]SearchResul
 			continue
 		}
 		plan := backend.Adapt(intent)
+		var planTmpl string
+		if tmpl != "" && name == primary {
+			planTmpl = tmpl
+		} else if tb, ok := backend.(interface{ template() string }); ok {
+			planTmpl = tb.template()
+		}
 		key := name + "|" + strings.Join(plan.Queries, "||")
+		if planTmpl != "" {
+			key = name + "|" + planTmpl + "|" + strings.Join(plan.Queries, "||")
+		}
 		if cached, hit := g.cache.Get(key); hit {
 			traces = append(traces, SearchTrace{
 				Backend: name, Queries: plan.Queries, Status: "cache_hit",
@@ -134,6 +197,9 @@ func (g *searchGateway) search(ctx context.Context, query string) ([]SearchResul
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, g.timeout)
+		if planTmpl != "" {
+			cctx = withSearchTemplate(cctx, planTmpl)
+		}
 		results, err := backend.Search(cctx, plan)
 		cancel()
 		if err != nil {
