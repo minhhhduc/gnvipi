@@ -285,20 +285,13 @@ func (s *anthropicStream) handleSSEEvent(event sse.Event) error {
 
 	case "message_delta":
 		if frame.Delta != nil && frame.Delta.StopReason != "" {
-			switch frame.Delta.StopReason {
-			case "end_turn":
-				s.savedStopReason = ir.StopEndTurn
-			case "max_tokens":
-				s.savedStopReason = ir.StopMaxTokens
-			case "stop_sequence":
-				s.savedStopReason = ir.StopSequence
-			case "tool_use":
-				if s.toolEmulation {
+			if mapped, ok := normalizeStopReason(frame.Delta.StopReason); ok {
+				if mapped == ir.StopToolUse && s.toolEmulation {
 					s.savedStopReason = ir.StopEndTurn
 				} else {
-					s.savedStopReason = ir.StopToolUse
+					s.savedStopReason = mapped
 				}
-			default:
+			} else {
 				s.savedStopReason = ir.StopReason(frame.Delta.StopReason)
 			}
 		}

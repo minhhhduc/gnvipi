@@ -48,6 +48,7 @@ type Relay struct {
 	model    string
 	path     string
 	target   string
+	extra    map[string]json.RawMessage
 	policy   provider.URLPolicy
 	client   *http.Client
 	recorder core.Recorder
@@ -74,6 +75,10 @@ func New(p *provider.Provider, upstreamModel string, options *Options) (*Relay, 
 	if strings.TrimSpace(upstreamModel) == "" {
 		return nil, errors.New("relay: resolved upstream model is required")
 	}
+	extra, err := provider.DecodeExtraBody(snapshot.ExtraBody)
+	if err != nil {
+		return nil, err
+	}
 	var suffix string
 	switch snapshot.Protocol {
 	case ir.ProtocolAnthropicMessages:
@@ -99,7 +104,6 @@ func New(p *provider.Provider, upstreamModel string, options *Options) (*Relay, 
 		proxy = snapshot.ProxyURL
 	}
 	var proxyURL *url.URL
-	var err error
 	if proxy != "" {
 		proxyURL, err = url.Parse(proxy)
 	} else {
@@ -132,7 +136,7 @@ func New(p *provider.Provider, upstreamModel string, options *Options) (*Relay, 
 	client = &relayClient
 	redact.Default.Update(snapshot.Auth.Key)
 	return &Relay{provider: snapshot, model: upstreamModel, path: "/v1" + suffix,
-		target: target, policy: policy, client: client, recorder: options.Recorder}, nil
+		target: target, extra: extra, policy: policy, client: client, recorder: options.Recorder}, nil
 }
 
 // providerEndpoint keeps the existing passthrough convention: a bare base gets
@@ -223,19 +227,25 @@ func (h *Relay) serveHTTP(w http.ResponseWriter, r *http.Request, body []byte, b
 		terminal = errors.Join(requestErr, gwerr.Write(w, gwerr.Protocol(h.provider.Protocol), requestErr))
 		return
 	}
-	if model != h.model {
-		// Identical to rewriteJSONModel's RawMessage convention: nested fields,
-		// unknown extensions, nulls and large numeric values are never decoded
-		// through float64, and only the top-level model value changes.
-		modelJSON, err := json.Marshal(h.model)
-		if err != nil {
-			terminal = h.writeError(w, err)
-			return
+	if model != h.model || len(h.extra) > 0 {
+		if model != h.model {
+			// Identical to rewriteJSONModel's RawMessage convention: nested fields,
+			// unknown extensions, nulls and large numeric values are never decoded
+			// through float64, and only the top-level model value changes.
+			modelJSON, err := json.Marshal(h.model)
+			if err != nil {
+				terminal = h.writeError(w, err)
+				return
+			}
+			payload["model"] = modelJSON
 		}
-		payload["model"] = modelJSON
-		body, err = json.Marshal(payload)
-		if err != nil {
-			terminal = h.writeError(w, err)
+		for name, value := range h.extra {
+			payload[name] = value
+		}
+		var marshalErr error
+		body, marshalErr = json.Marshal(payload)
+		if marshalErr != nil {
+			terminal = h.writeError(w, marshalErr)
 			return
 		}
 	}

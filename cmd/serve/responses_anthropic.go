@@ -333,7 +333,7 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 			flusher.Flush()
 		}
 	}
-	started, stopped, usedTool := false, false, false
+	started, stopped, usedTool, failed := false, false, false, false
 	blocks := map[int]bool{}
 	startMessage := func(id string, usage any) {
 		if !started {
@@ -347,7 +347,7 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 	for s.Scan() {
 		line := s.Text()
 		if line == "" {
-			streamResponseEvent(event, data, startMessage, emit, blocks, &stopped, &usedTool)
+			streamResponseEvent(event, data, startMessage, emit, blocks, &stopped, &usedTool, &failed)
 			event, data = "", ""
 			continue
 		}
@@ -358,8 +358,15 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 			data += strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		}
 	}
-	if event != "" {
-		streamResponseEvent(event, data, startMessage, emit, blocks, &stopped, &usedTool)
+	if event != "" || data != "" {
+		streamResponseEvent(event, data, startMessage, emit, blocks, &stopped, &usedTool, &failed)
+	}
+	if s.Err() != nil {
+		failed = true
+		if !stopped {
+			emit("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": "upstream stream read failed"}})
+			stopped = true
+		}
 	}
 	if !stopped {
 		startMessage("", nil)
@@ -370,16 +377,22 @@ func streamResponsesAsAnthropic(c *gin.Context, body io.Reader, model string, st
 		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": 0}})
 		emit("message_stop", map[string]any{"type": "message_stop"})
 	}
-	nvidiaRecord(model, nil, start, true, s.Err() != nil)
+	nvidiaRecord(model, nil, start, true, failed)
 }
 
-func streamResponseEvent(event, data string, startMessage, emit func(string, any), blocks map[int]bool, stopped, usedTool *bool) {
+func streamResponseEvent(event, data string, startMessage, emit func(string, any), blocks map[int]bool, stopped, usedTool, failed *bool) {
+	if *stopped {
+		return
+	}
 	var d map[string]any
 	if data == "[DONE]" || json.Unmarshal([]byte(data), &d) != nil {
 		return
 	}
+	if event == "" {
+		event, _ = d["type"].(string)
+	}
 	response, _ := d["response"].(map[string]any)
-	if response != nil {
+	if response != nil && event != "response.failed" && event != "error" {
 		startMessage(firstString(response["id"], ""), response["usage"])
 	}
 	idx := 0
@@ -417,17 +430,54 @@ func streamResponseEvent(event, data string, startMessage, emit func(string, any
 			emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": idx})
 			delete(blocks, idx)
 		}
-	case "response.completed":
+	case "response.completed", "response.incomplete":
 		stop := "end_turn"
 		if *usedTool {
 			stop = "tool_use"
 		}
-		if response != nil && response["status"] == "incomplete" {
+		if event == "response.incomplete" || (response != nil && response["status"] == "incomplete") {
 			stop = "max_tokens"
+			if response != nil {
+				if details, ok := response["incomplete_details"].(map[string]any); ok {
+					if details["reason"] == "content_filter" {
+						stop = "refusal"
+					}
+				}
+			}
 		}
-		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": number(response["usage"], "output_tokens")}})
+		var usage any
+		if response != nil {
+			usage = response["usage"]
+		}
+		emit("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": number(usage, "output_tokens")}})
 		emit("message_stop", map[string]any{"type": "message_stop"})
 		*stopped = true
+	case "response.failed", "error":
+		errObj, _ := d["error"].(map[string]any)
+		if errObj == nil && response != nil {
+			errObj, _ = response["error"].(map[string]any)
+		}
+		if errObj == nil {
+			errObj = d
+		}
+		errType := responsesErrorToAnthropicType(firstString(errObj["code"], firstString(errObj["type"], "")))
+		msg := firstString(errObj["message"], "upstream generation failed")
+		emit("error", map[string]any{"type": "error", "error": map[string]any{"type": errType, "message": msg}})
+		*stopped = true
+		*failed = true
+	}
+}
+
+func responsesErrorToAnthropicType(code string) string {
+	switch code {
+	case "rate_limit_exceeded", "rate_limit_error":
+		return "rate_limit_error"
+	case "invalid_prompt", "invalid_request_error":
+		return "invalid_request_error"
+	case "overloaded_error":
+		return "overloaded_error"
+	default:
+		return "api_error"
 	}
 }
 

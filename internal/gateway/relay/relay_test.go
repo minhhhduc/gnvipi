@@ -809,3 +809,85 @@ func TestRelayRetryPipeline(t *testing.T) {
 		}
 	})
 }
+
+func TestRelayMergesExtraBodyForNonStreamAndStream(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		step   gatewaytest.Step
+	}{
+		{
+			name:   "nonstream",
+			stream: false,
+			step:   gatewaytest.Step{Body: `{"id":"chatcmpl-1","usage":{"prompt_tokens":3,"completion_tokens":2}}`},
+		},
+		{
+			name:   "stream",
+			stream: true,
+			step: gatewaytest.Step{
+				Headers: map[string]string{"Content-Type": "text/event-stream"},
+				Body:    "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := gatewaytest.New(t)
+			// Script a transient 503 first to verify GetBody replayability on retry too.
+			u.Script(gatewaytest.RouteChat,
+				gatewaytest.Step{Status: http.StatusServiceUnavailable, Body: `{"error":{"message":"retry me"}}`},
+				tc.step,
+			)
+			factory := upstream.NewFactory()
+			t.Cleanup(factory.CloseIdleConnections)
+			p := &provider.Provider{
+				ID:        "relay-extra",
+				Name:      "Relay Extra",
+				BaseURL:   u.URL(),
+				Protocol:  ir.ProtocolOpenAIChat,
+				Auth:      provider.Auth{Scheme: provider.AuthBearer, Key: "sk-relay-test"},
+				ExtraBody: json.RawMessage(`{"tenant":"required","temperature":0.7,"big":9007199254740993}`),
+			}
+			recorder := &recording{}
+			h, err := New(p, "upstream-model", &Options{Factory: factory, Recorder: recorder})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			clientBody := fmt.Sprintf(`{"model":"client-alias","temperature":0.2,"stream":%v,"messages":[{"role":"user","content":"hi"}]}`, tc.stream)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteChat, strings.NewReader(clientBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			requests := u.RequestsFor(gatewaytest.RouteChat)
+			if len(requests) != 2 {
+				t.Fatalf("expected 2 upstream attempts (with retry), got %d", len(requests))
+			}
+			for i, upReq := range requests {
+				var got map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(upReq.Body), &got); err != nil {
+					t.Fatalf("attempt %d invalid JSON: %v", i, err)
+				}
+				if string(got["model"]) != `"upstream-model"` {
+					t.Fatalf("attempt %d model = %s, want %q", i, got["model"], "upstream-model")
+				}
+				if string(got["tenant"]) != `"required"` {
+					t.Fatalf("attempt %d tenant = %s, want %q", i, got["tenant"], "required")
+				}
+				if string(got["temperature"]) != `0.7` {
+					t.Fatalf("attempt %d temperature = %s, want 0.7", i, got["temperature"])
+				}
+				if string(got["big"]) != `9007199254740993` {
+					t.Fatalf("attempt %d big = %s, want 9007199254740993", i, got["big"])
+				}
+				wantStream := fmt.Sprintf("%v", tc.stream)
+				if string(got["stream"]) != wantStream {
+					t.Fatalf("attempt %d stream = %s, want %s", i, got["stream"], wantStream)
+				}
+			}
+		})
+	}
+}

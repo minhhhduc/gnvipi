@@ -123,21 +123,28 @@ func (a *Adapter) parseContentBlock(response *http.Response, raw json.RawMessage
 	}
 }
 
-func parseStopReason(response *http.Response, reason string) (ir.StopReason, error) {
+func normalizeStopReason(reason string) (ir.StopReason, bool) {
 	switch reason {
 	case "end_turn":
-		return ir.StopEndTurn, nil
+		return ir.StopEndTurn, true
 	case "max_tokens", "model_context_window_exceeded":
-		return ir.StopMaxTokens, nil
+		return ir.StopMaxTokens, true
 	case "stop_sequence":
-		return ir.StopSequence, nil
+		return ir.StopSequence, true
 	case "tool_use":
-		return ir.StopToolUse, nil
+		return ir.StopToolUse, true
 	case "refusal":
-		return ir.StopContentFilter, nil
+		return ir.StopContentFilter, true
 	default:
-		return "", malformedResponse(response, fmt.Sprintf("Anthropic stop reason %q is not supported", reason))
+		return "", false
 	}
+}
+
+func parseStopReason(response *http.Response, reason string) (ir.StopReason, error) {
+	if mapped, ok := normalizeStopReason(reason); ok {
+		return mapped, nil
+	}
+	return "", malformedResponse(response, fmt.Sprintf("Anthropic stop reason %q is not supported", reason))
 }
 
 func responseReadError(response *http.Response, err error) *gwerr.Error {
