@@ -10,11 +10,8 @@ import (
 	"testing/fstest"
 	"time"
 
-<<<<<<< HEAD
 	"github.com/jackc/pgx/v5/pgxpool"
-=======
 	"github.com/minhhhduc/gnvipi/migrations"
->>>>>>> origin/main
 )
 
 func TestRedactDSN(t *testing.T) {
