@@ -148,6 +148,36 @@ func TestSecretLast4BasicUsesPassword(t *testing.T) {
 	}
 }
 
+func TestSecretLast4UnicodeRuneBoundary(t *testing.T) {
+	plaintext := []byte(`{"username":"fixture","password":"valid-中中"}`)
+	got := SecretLast4(plaintext, SchemeBasic)
+	if got != "d-中中" {
+		t.Fatalf("last4 = %q, want %q", got, "d-中中")
+	}
+
+	cjk := []byte(`{"username":"fixture","password":"αβ中文字节"}`)
+	gotCJK := SecretLast4(cjk, SchemeBasic)
+	if gotCJK != "中文字节" {
+		t.Fatalf("last4 = %q, want %q", gotCJK, "中文字节")
+	}
+
+	key := KeyRow{
+		ID:          "k1",
+		ProviderID:  "p1",
+		OwnerID:     "u1",
+		Name:        "unicode-basic",
+		AuthScheme:  SchemeBasic,
+		Enabled:     true,
+		SecretEnc:   []byte{1, 2, 3},
+		SecretNonce: make([]byte, SecretNonceSize),
+		SecretKVer:  1,
+		SecretLast4: gotCJK,
+	}
+	if err := ValidateKeyRow(key); err != nil {
+		t.Fatalf("ValidateKeyRow() rejected valid 4-rune UTF-8 secret_last4 (%d bytes): %v", len(gotCJK), err)
+	}
+}
+
 func TestDecryptErrorDoesNotLeakCiphertextOrPlaintext(t *testing.T) {
 	ring := testKeyring(t)
 	ciphertext, nonce, version, err := ring.Encrypt([]byte("super-secret-value"), "key-1", "", SchemeBearer)

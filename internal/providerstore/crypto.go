@@ -270,10 +270,11 @@ func SecretLast4(plaintext []byte, scheme string) string {
 }
 
 func tail4(s string) string {
-	if len(s) <= 4 {
-		return s
+	runes := []rune(s)
+	if len(runes) <= 4 {
+		return string(runes)
 	}
-	return s[len(s)-4:]
+	return string(runes[len(runes)-4:])
 }
 
 // BasicSecret is the plaintext form of a basic-auth provider key.
