@@ -30,8 +30,10 @@ __pycache__/
 *.pyo
 
 # Local tooling and smoke-test artifacts
+.agents/
 .pi/
 .tmp-smoke/
+.tmpq/
 scripts/Microsoft/
 
 # superpowers brainstorm artifacts
