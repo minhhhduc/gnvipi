@@ -427,3 +427,36 @@ func TestStreamChatParsesNoSpaceSSEDataAndDone(t *testing.T) {
 		t.Fatal("expected Done callback")
 	}
 }
+
+func TestStreamChatSkipsEmptyDataKeepalives(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{DefaultModel: fixture(DefaultModel, NVFunctionID)})
+	hc := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return sseHTTPResponse("data:\n\n" +
+				"data: \n\n" +
+				"data:{\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
+				"data:[DONE]\n"), nil
+		}),
+	}
+	client := New(WithCaptchaToken("tok"), WithModel(DefaultModel), WithHTTPClient(hc))
+	var content strings.Builder
+	var done bool
+	err := client.StreamChat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, func(sc StreamChunk) {
+		if sc.Error != nil {
+			t.Fatalf("unexpected chunk error: %v", sc.Error)
+		}
+		content.WriteString(sc.Content)
+		if sc.Done {
+			done = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+	if content.String() != "ok" {
+		t.Fatalf("content = %q, want %q", content.String(), "ok")
+	}
+	if !done {
+		t.Fatal("expected Done callback")
+	}
+}

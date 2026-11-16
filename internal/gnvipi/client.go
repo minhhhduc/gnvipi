@@ -440,20 +440,21 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 				cb(StreamChunk{Done: true})
 				return nil
 			}
-
-			var chunk ChatChunk
-			if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
-				cb(StreamChunk{Error: fmt.Errorf("gnvipi: decode chunk: %w", jsonErr)})
-			} else {
-				sc := StreamChunk{}
-				if len(chunk.Choices) > 0 {
-					sc.Content = chunk.Choices[0].Delta.Content
-					sc.Reasoning = chunk.Choices[0].Delta.ReasoningContent
+			if data != "" {
+				var chunk ChatChunk
+				if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
+					cb(StreamChunk{Error: fmt.Errorf("gnvipi: decode chunk: %w", jsonErr)})
+				} else {
+					sc := StreamChunk{}
+					if len(chunk.Choices) > 0 {
+						sc.Content = chunk.Choices[0].Delta.Content
+						sc.Reasoning = chunk.Choices[0].Delta.ReasoningContent
+					}
+					if chunk.Usage != nil {
+						sc.Usage = chunk.Usage
+					}
+					cb(sc)
 				}
-				if chunk.Usage != nil {
-					sc.Usage = chunk.Usage
-				}
-				cb(sc)
 			}
 		}
 
