@@ -231,6 +231,7 @@ export interface TokenRecord {
   last_used_at: string | null;
   revoked_at: string | null;
   created_at: string | null;
+  can_reveal?: boolean;
 }
 
 export interface TokenList {

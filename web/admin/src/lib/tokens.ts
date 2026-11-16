@@ -83,6 +83,7 @@ function tokenRecord(value: unknown): TokenRecord {
     last_used_at: optionalString(raw.last_used_at),
     revoked_at: optionalString(raw.revoked_at),
     created_at: optionalString(raw.created_at),
+    ...(typeof raw.can_reveal === "boolean" ? { can_reveal: raw.can_reveal } : {}),
   };
 }
 

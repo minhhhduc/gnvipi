@@ -122,6 +122,9 @@ CREATE TABLE api_tokens (
   last_used_at timestamptz,
   revoked_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
+  token_enc bytea,
+  token_nonce bytea,
+  token_kver integer,
   CHECK ((kind = 'admin' AND scope IS NOT NULL) OR (kind = 'gateway' AND scope IS NULL)),
   CHECK (expires_at IS NULL OR expires_at > created_at)
 );

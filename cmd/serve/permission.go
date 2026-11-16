@@ -235,9 +235,11 @@ var adminRoutePermissions = map[string]adminPermission{
 
 	// Personal API tokens. Kind limits are enforced by the handlers: a user
 	// only ever holds gateway tokens; superusers and admins hold both.
-	"GET /admin/api/tokens":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/tokens":       {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"DELETE /admin/api/tokens/:id": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/tokens":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/tokens":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"DELETE /admin/api/tokens/:id":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/tokens/:id/reveal/request": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/tokens/:id/reveal":         {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
 
 	// Audit trail is superuser-only: it discloses every subject id.
 	"GET /admin/api/audit": {roles: allowed(auth.RoleSuperuser)},
