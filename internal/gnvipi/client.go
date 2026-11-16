@@ -426,65 +426,74 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 	reader := bufio.NewReader(resp.Body)
 	for {
 		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				cb(StreamChunk{Done: true})
-				return nil
-			}
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("gnvipi: read sse: %w", err)
 		}
 
 		line = strings.TrimSpace(line)
 
 		// Skip empty lines / comments
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
+		if line != "" && !strings.HasPrefix(line, ":") && strings.HasPrefix(line, "data:") {
+			data := strings.TrimPrefix(line, "data:")
+			data = strings.TrimPrefix(data, " ")
+			if data == "[DONE]" {
+				cb(StreamChunk{Done: true})
+				return nil
+			}
+			if streamErr, ok := parseErrorEnvelope([]byte(data)); ok {
+				cb(StreamChunk{Error: streamErr})
+				return streamErr
+			}
+
+			var chunk ChatChunk
+			if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
+				cb(StreamChunk{Error: fmt.Errorf("gnvipi: decode chunk: %w", jsonErr)})
+			} else {
+				sc := StreamChunk{}
+				if len(chunk.Choices) > 0 {
+					sc.Content = chunk.Choices[0].Delta.Content
+					sc.Reasoning = chunk.Choices[0].Delta.ReasoningContent
+				}
+				if chunk.Usage != nil {
+					sc.Usage = chunk.Usage
+				}
+				cb(sc)
+			}
 		}
 
-		// data: [DONE]
-		if line == "data: [DONE]" {
+		if err == io.EOF {
 			cb(StreamChunk{Done: true})
 			return nil
-		}
-
-		// data: {...}
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			var chunk ChatChunk
-			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				cb(StreamChunk{Error: fmt.Errorf("gnvipi: decode chunk: %w", err)})
-				continue
-			}
-
-			sc := StreamChunk{}
-			if len(chunk.Choices) > 0 {
-				sc.Content = chunk.Choices[0].Delta.Content
-				sc.Reasoning = chunk.Choices[0].Delta.ReasoningContent
-			}
-			if chunk.Usage != nil {
-				sc.Usage = chunk.Usage
-			}
-			cb(sc)
 		}
 	}
 }
 
 // --- helpers ---
 
-func parseError(raw []byte) error {
+func parseErrorEnvelope(raw []byte) (error, bool) {
 	var apiErr ErrorResponse
 	if err := json.Unmarshal(raw, &apiErr); err == nil && apiErr.RequestStatus.StatusCode != "" {
-		return &apiErr
+		return &apiErr, true
 	}
 	// Try OpenAI error format
 	var oaiErr struct {
-		Error struct {
+		Error *struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &oaiErr); err == nil && oaiErr.Error.Message != "" {
-		return fmt.Errorf("gnvipi: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message)
+	if err := json.Unmarshal(raw, &oaiErr); err == nil && oaiErr.Error != nil && (oaiErr.Error.Message != "" || oaiErr.Error.Type != "") {
+		if oaiErr.Error.Type != "" {
+			return fmt.Errorf("gnvipi: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message), true
+		}
+		return fmt.Errorf("gnvipi: %s", oaiErr.Error.Message), true
+	}
+	return nil, false
+}
+
+func parseError(raw []byte) error {
+	if err, ok := parseErrorEnvelope(raw); ok {
+		return err
 	}
 	return fmt.Errorf("gnvipi: http error: %s", string(raw[:min(len(raw), 300)]))
 }
