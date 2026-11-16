@@ -441,6 +441,10 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 				return nil
 			}
 			if data != "" {
+				if streamErr, ok := parseErrorEnvelope([]byte(data)); ok {
+					cb(StreamChunk{Error: streamErr})
+					return streamErr
+				}
 				var chunk ChatChunk
 				if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
 					cb(StreamChunk{Error: fmt.Errorf("gnvipi: decode chunk: %w", jsonErr)})
@@ -467,20 +471,30 @@ func (c *Client) doStream(ctx context.Context, req *ChatRequest, cb func(StreamC
 
 // --- helpers ---
 
-func parseError(raw []byte) error {
+func parseErrorEnvelope(raw []byte) (error, bool) {
 	var apiErr ErrorResponse
 	if err := json.Unmarshal(raw, &apiErr); err == nil && apiErr.RequestStatus.StatusCode != "" {
-		return &apiErr
+		return &apiErr, true
 	}
 	// Try OpenAI error format
 	var oaiErr struct {
-		Error struct {
+		Error *struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &oaiErr); err == nil && oaiErr.Error.Message != "" {
-		return fmt.Errorf("gnvipi: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message)
+	if err := json.Unmarshal(raw, &oaiErr); err == nil && oaiErr.Error != nil && (oaiErr.Error.Message != "" || oaiErr.Error.Type != "") {
+		if oaiErr.Error.Type != "" {
+			return fmt.Errorf("gnvipi: %s: %s", oaiErr.Error.Type, oaiErr.Error.Message), true
+		}
+		return fmt.Errorf("gnvipi: %s", oaiErr.Error.Message), true
+	}
+	return nil, false
+}
+
+func parseError(raw []byte) error {
+	if err, ok := parseErrorEnvelope(raw); ok {
+		return err
 	}
 	return fmt.Errorf("gnvipi: http error: %s", string(raw[:min(len(raw), 300)]))
 }
