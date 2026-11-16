@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
+	"github.com/minhhhduc/gnvipi/internal/mailer"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
@@ -47,6 +48,9 @@ type authState struct {
 	// keyring encrypts and decrypts provider key secrets. It is nil only in
 	// file-backed mode, where the key routes are never registered.
 	keyring *providerstore.Keyring
+	// mailer sends OTP verification emails when revealing encrypted provider keys.
+	mailer    mailer.Sender
+	revealOTP *keyRevealOTPStore
 	// loopbackBind records whether the admin listener is bound to a loopback
 	// address. Plaintext cookies are only accepted on such a bind, matching the
 	// file-token policy in adminAccess.
@@ -154,6 +158,7 @@ func newAuthState(pool *pgxpool.Pool, password *auth.BootstrapConfig) *authState
 		// A pointer keeps authState copyable for per-request policy variants.
 		bootstrapWarned: &sync.Once{},
 		usersExist:      &atomic.Bool{},
+		revealOTP:       newKeyRevealOTPStore(),
 	}
 }
 
@@ -253,33 +258,35 @@ var adminRoutePermissions = map[string]adminPermission{
 	// Provider keys and their model aliases. Role admission is coarse on
 	// purpose: reach is per row (a user only ever sees its own keys, an admin
 	// may only disable a foreign one), so the handlers enforce ownership.
-	"GET /admin/api/providers/:id/keys":               {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/providers/:id/keys":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id/keys/:keyID":        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"DELETE /admin/api/providers/:id/keys/:keyID":     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/providers/:id/keys/:keyID/test":  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id/keys/:keyID/models": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/providers/:id":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"DELETE /admin/api/providers/:id":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/providers/:id/test":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"GET /admin/api/stats":                            {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/models":                           {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/models":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"DELETE /admin/api/models/*id":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/models/*id":                      {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/nvidia/models/rescan":            {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"GET /admin/api/config/automode":                  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/config/automode":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/config/automode":                  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/config/cycle":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"POST /admin/api/config/cycle":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"PUT /admin/api/config/cycle":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
-	"GET /admin/api/config/search":                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/config/search":                   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"GET /admin/api/chromes":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
-	"POST /admin/api/chromes":                         {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/providers/:id/keys":                        {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys":                       {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/providers/:id/keys/:keyID":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id/keys/:keyID":                 {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"DELETE /admin/api/providers/:id/keys/:keyID":              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys/:keyID/test":           {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys/:keyID/reveal/request": {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/providers/:id/keys/:keyID/reveal":         {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/providers/:id/keys/:keyID/models":          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id/keys/:keyID/models":          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/providers/:id":                             {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"DELETE /admin/api/providers/:id":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/providers/:id/test":                       {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/stats":                                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/models":                                    {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/models":                                   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"DELETE /admin/api/models/*id":                             {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/models/*id":                               {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/nvidia/models/rescan":                     {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/config/automode":                           {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/config/automode":                          {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/config/automode":                           {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/config/cycle":                              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"POST /admin/api/config/cycle":                             {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"PUT /admin/api/config/cycle":                              {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin, auth.RoleUser)},
+	"GET /admin/api/config/search":                             {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/config/search":                            {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"GET /admin/api/chromes":                                   {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
+	"POST /admin/api/chromes":                                  {roles: allowed(auth.RoleSuperuser, auth.RoleAdmin)},
 }
 
 const adminIdentityKey = "gnvipi.admin.identity"

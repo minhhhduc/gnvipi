@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,6 +31,8 @@ func registerAdminKeyRoutes(engine *gin.Engine, state *authState) {
 	engine.PUT("/admin/api/providers/:id/keys/:keyID", handleAdminKeyUpdate(state))
 	engine.DELETE("/admin/api/providers/:id/keys/:keyID", handleAdminKeyDelete(state))
 	engine.POST("/admin/api/providers/:id/keys/:keyID/test", handleAdminKeyTest(state))
+	engine.POST("/admin/api/providers/:id/keys/:keyID/reveal/request", handleAdminKeyRevealRequest(state))
+	engine.POST("/admin/api/providers/:id/keys/:keyID/reveal", handleAdminKeyReveal(state))
 	engine.GET("/admin/api/providers/:id/keys/:keyID/models", handleAdminKeyModelList(state))
 	engine.PUT("/admin/api/providers/:id/keys/:keyID/models", handleAdminKeyModelReplace(state))
 }
@@ -607,6 +611,110 @@ func handleAdminKeyTest(state *authState) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, probeKeyCredential(ctx, &definition, &record.KeyRow, credential))
+	}
+}
+
+func handleAdminKeyRevealRequest(state *authState) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+		identity := adminIdentityOf(c)
+		record, reach, ok := loadKey(c, state.pool, identity, false)
+		if !ok {
+			return
+		}
+		if reach != keyReachFull {
+			adminAPIError(c, http.StatusForbidden, "forbidden", "this key belongs to another user")
+			return
+		}
+		if !record.HasSecret() {
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "only encrypted secrets can be revealed")
+			return
+		}
+		if state.mailer == nil || !state.mailer.Enabled() {
+			adminAPIError(c, http.StatusServiceUnavailable, "smtp_unavailable", "SMTP is not configured on this server")
+			return
+		}
+		if state.revealOTP == nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "OTP store unavailable")
+			return
+		}
+		recipientID := record.OwnerID
+		if recipientID == "" {
+			recipientID = identity.UserID
+		}
+		recipient, err := auth.GetUserByID(ctx, state.pool, recipientID)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "lookup key owner failed")
+			return
+		}
+		if strings.TrimSpace(recipient.Email) == "" {
+			adminFieldError(c, http.StatusBadRequest, "email", "key owner has no email configured")
+			return
+		}
+		code, err := state.revealOTP.Issue(identity.UserID, record.ID, time.Now())
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "generate OTP failed")
+			return
+		}
+		subject := fmt.Sprintf("Verification code to reveal key %q", record.Name)
+		body := fmt.Sprintf("Your one-time verification code to reveal provider key %q is: %s\n\nThis code expires in 5 minutes.", record.Name, code)
+		if err := state.mailer.Send(ctx, recipient.Email, subject, body); err != nil {
+			adminAPIError(c, http.StatusBadGateway, "email_failed", "could not send verification email")
+			return
+		}
+		if auditErr := writeKeyAudit(ctx, state.pool, identity, "key.reveal_otp_sent", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), map[string]any{
+			"name": record.Name,
+		}); auditErr != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"sent":               true,
+			"to":                 maskEmail(recipient.Email),
+			"expires_in_seconds": int(revealOTPTTL.Seconds()),
+		})
+	}
+}
+
+func handleAdminKeyReveal(state *authState) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+		identity := adminIdentityOf(c)
+		record, reach, ok := loadKey(c, state.pool, identity, false)
+		if !ok {
+			return
+		}
+		if reach != keyReachFull {
+			adminAPIError(c, http.StatusForbidden, "forbidden", "this key belongs to another user")
+			return
+		}
+		if !record.HasSecret() {
+			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "only encrypted secrets can be revealed")
+			return
+		}
+		var req struct {
+			OTP string `json:"otp"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			adminAPIError(c, http.StatusBadRequest, "invalid_body", "expected a JSON object with otp")
+			return
+		}
+		if state.revealOTP == nil || !state.revealOTP.Verify(identity.UserID, record.ID, req.OTP, time.Now()) {
+			adminAPIError(c, http.StatusForbidden, "invalid_otp", "invalid or expired verification code")
+			return
+		}
+		plaintext, err := state.keyring.Decrypt(record.SecretEnc, record.SecretNonce, record.ID, record.OwnerID, record.AuthScheme, record.SecretKVer)
+		if err != nil {
+			adminAPIError(c, http.StatusInternalServerError, "credential_unavailable", "stored key material cannot be decrypted")
+			return
+		}
+		if auditErr := writeKeyAudit(ctx, state.pool, identity, "key.reveal", record.ID, record.OwnerID, record.ID, record.ProviderID, c.ClientIP(), map[string]any{
+			"name": record.Name,
+		}); auditErr != nil {
+			adminAPIError(c, http.StatusInternalServerError, "internal_error", "write key audit failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"secret": string(plaintext)})
 	}
 }
 
