@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -144,7 +145,13 @@ func normalizeResultURL(raw string) string {
 	u.RawFragment = ""
 	host := strings.ToLower(u.Hostname())
 	host = strings.TrimPrefix(host, "www.")
-	u.Host = host
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		u.Host = "[" + host + "]"
+	} else {
+		u.Host = host
+	}
 	if u.Path == "/" {
 		u.Path = ""
 	} else if len(u.Path) > 1 {

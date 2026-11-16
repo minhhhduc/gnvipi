@@ -248,3 +248,26 @@ func TestDedupCanonicalizesURLs(t *testing.T) {
 		t.Fatalf("url = %q", results[0].URL)
 	}
 }
+
+func TestDedupPreservesPortsAndIPv6(t *testing.T) {
+	results := dedupeURLs([]SearchResult{
+		{Title: "port 8443", URL: "https://example.com:8443/path?q=one&utm_source=x"},
+		{Title: "port 9443", URL: "https://example.com:9443/path?q=one"},
+		{Title: "ipv6 bare", URL: "http://[2001:DB8::1]/path/"},
+		{Title: "ipv6 port", URL: "https://[2001:DB8::1]:8443/path"},
+	})
+	want := []string{
+		"https://example.com:8443/path?q=one",
+		"https://example.com:9443/path?q=one",
+		"http://[2001:db8::1]/path",
+		"https://[2001:db8::1]:8443/path",
+	}
+	if len(results) != len(want) {
+		t.Fatalf("got %d results (%+v), want %d", len(results), results, len(want))
+	}
+	for i, w := range want {
+		if results[i].URL != w {
+			t.Fatalf("results[%d].URL = %q, want %q", i, results[i].URL, w)
+		}
+	}
+}
