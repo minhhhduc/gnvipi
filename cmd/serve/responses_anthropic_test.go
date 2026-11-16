@@ -199,12 +199,19 @@ func runAnthropicAdapter(t *testing.T, baseURL, body string) *httptest.ResponseR
 	return w
 }
 
+func mustWriteSSE(t *testing.T, w http.ResponseWriter, s string) {
+	t.Helper()
+	if _, err := io.WriteString(w, s); err != nil {
+		t.Errorf("write SSE: %v", err)
+	}
+}
+
 func TestAnthropicResponsesPassthroughStreamingFailuresAndIncomplete(t *testing.T) {
 	t.Run("response.failed", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-fixture\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"dummy upstream failure\"}}}\n\n")
-			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			mustWriteSSE(t, w, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-fixture\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"dummy upstream failure\"}}}\n\n")
+			mustWriteSSE(t, w, "data: [DONE]\n\n")
 		}))
 		defer up.Close()
 
@@ -221,8 +228,8 @@ func TestAnthropicResponsesPassthroughStreamingFailuresAndIncomplete(t *testing.
 	t.Run("error event", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"too many requests\"}\n\n")
-			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			mustWriteSSE(t, w, "event: error\ndata: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"too many requests\"}\n\n")
+			mustWriteSSE(t, w, "data: [DONE]\n\n")
 		}))
 		defer up.Close()
 
@@ -239,11 +246,11 @@ func TestAnthropicResponsesPassthroughStreamingFailuresAndIncomplete(t *testing.
 	t.Run("response.incomplete", func(t *testing.T) {
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "event: response.created\ndata: {\"response\":{\"id\":\"resp_inc\",\"usage\":{\"input_tokens\":5}}}\n\n")
-			_, _ = io.WriteString(w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n")
-			_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"partial\"}\n\n")
-			_, _ = io.WriteString(w, "event: response.output_item.done\ndata: {\"output_index\":0}\n\n")
-			_, _ = io.WriteString(w, "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_inc\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":42}}}\n\n")
+			mustWriteSSE(t, w, "event: response.created\ndata: {\"response\":{\"id\":\"resp_inc\",\"usage\":{\"input_tokens\":5}}}\n\n")
+			mustWriteSSE(t, w, "event: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\n")
+			mustWriteSSE(t, w, "event: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"partial\"}\n\n")
+			mustWriteSSE(t, w, "event: response.output_item.done\ndata: {\"output_index\":0}\n\n")
+			mustWriteSSE(t, w, "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_inc\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":42}}}\n\n")
 		}))
 		defer up.Close()
 
