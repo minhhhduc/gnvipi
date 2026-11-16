@@ -24,8 +24,8 @@ function AuthFrame({
     <main class="grid min-h-screen place-items-center px-5 py-10">
       <div class="w-full max-w-[400px]">
         <div class="mb-5 flex items-center justify-center gap-2">
-          <span class="grid size-9 place-items-center rounded-[10px] bg-accent text-sm font-extrabold text-white">GW</span>
-          <b class="text-lg tracking-[-0.02em]">Gateway</b>
+          <span class="grid size-9 place-items-center rounded-[10px] bg-accent text-sm font-extrabold text-white">GN</span>
+          <b class="text-lg tracking-[-0.02em]">gnvipi</b>
         </div>
         <section class="card p-6" aria-labelledby="auth-title">
           <h1 id="auth-title" class="text-xl font-bold tracking-[-0.025em]">{title}</h1>
