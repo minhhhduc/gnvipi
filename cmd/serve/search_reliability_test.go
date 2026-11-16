@@ -277,7 +277,7 @@ func TestCircuitBreakerRecoveryProbe(t *testing.T) {
 	rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
 		hits.Add(1)
 		body := `<html><li class=b_algo><h2><a href="https://example.com/recovered">Recovered</a></h2><cite>https://example.com/recovered</cite></li></html>`
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
 	})
 	gw := testGateway(rt)
 	health := gw.clients[bingName].health
@@ -333,7 +333,7 @@ func TestScholarlyBackendsAcquireRateLimitToken(t *testing.T) {
 			rt := searchRoundTrip(func(r *http.Request) (*http.Response, error) {
 				hits.Add(1)
 				return &http.Response{
-					StatusCode: 200,
+					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(sc.body)),
 					Header:     make(http.Header),
 					Request:    r,
