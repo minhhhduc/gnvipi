@@ -376,3 +376,87 @@ func TestUsageFormatNoCache(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func sseHTTPResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestStreamChatParsesNoSpaceSSEDataAndDone(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{DefaultModel: fixture(DefaultModel, NVFunctionID)})
+	hc := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return sseHTTPResponse("data:{\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n" +
+				"data:{\"id\":\"c\",\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n" +
+				"data:[DONE]\n"), nil
+		}),
+	}
+	client := New(WithCaptchaToken("tok"), WithModel(DefaultModel), WithHTTPClient(hc))
+	var content strings.Builder
+	var usage *Usage
+	var done bool
+	err := client.StreamChat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, func(sc StreamChunk) {
+		if sc.Error != nil {
+			t.Fatalf("unexpected chunk error: %v", sc.Error)
+		}
+		content.WriteString(sc.Content)
+		if sc.Usage != nil {
+			usage = sc.Usage
+		}
+		if sc.Done {
+			done = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+	if content.String() != "hello" {
+		t.Fatalf("content = %q, want %q", content.String(), "hello")
+	}
+	if usage == nil || usage.PromptTokens != 2 || usage.CompletionTokens != 1 || usage.TotalTokens != 3 {
+		t.Fatalf("usage = %#v, want 2/1/3", usage)
+	}
+	if !done {
+		t.Fatal("expected Done callback")
+	}
+}
+
+func TestStreamChatSkipsEmptyDataKeepalives(t *testing.T) {
+	seedModels(t, map[string]models.ModelInfo{DefaultModel: fixture(DefaultModel, NVFunctionID)})
+	hc := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return sseHTTPResponse("data:\n\n" +
+				"data: \n\n" +
+				"data:{\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
+				"data:[DONE]\n"), nil
+		}),
+	}
+	client := New(WithCaptchaToken("tok"), WithModel(DefaultModel), WithHTTPClient(hc))
+	var content strings.Builder
+	var done bool
+	err := client.StreamChat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, func(sc StreamChunk) {
+		if sc.Error != nil {
+			t.Fatalf("unexpected chunk error: %v", sc.Error)
+		}
+		content.WriteString(sc.Content)
+		if sc.Done {
+			done = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("StreamChat() error = %v", err)
+	}
+	if content.String() != "ok" {
+		t.Fatalf("content = %q, want %q", content.String(), "ok")
+	}
+	if !done {
+		t.Fatal("expected Done callback")
+	}
+}
