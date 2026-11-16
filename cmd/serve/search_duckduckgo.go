@@ -67,12 +67,22 @@ func (d *ddgBackend) Adapt(ctx *SearchContext) QueryPlan {
 }
 
 func (d *ddgBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {
-	tmpl := d.template()
+	tmpl := searchTemplateFromContext(ctx)
+	if tmpl == "" {
+		tmpl = d.template()
+	}
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(q)
 		if tmpl != "" && tmpl != "https://www.duckduckgo.com/html/?q={query}" && tmpl != "https://html.duckduckgo.com/html/?q={query}" {
-			target = expandSearchTemplate(tmpl, q)
+			var err error
+			target, err = expandSearchTemplate(tmpl, q)
+			if err != nil {
+				if len(results) > 0 {
+					return results, nil
+				}
+				return nil, err
+			}
 		}
 		body, err := d.client.do(ctx, target, nil)
 		if err != nil {

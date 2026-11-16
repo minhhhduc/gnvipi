@@ -65,13 +65,22 @@ func (c *customBackend) Adapt(ctx *SearchContext) QueryPlan {
 }
 
 func (c *customBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {
-	tmpl := c.template()
+	tmpl := searchTemplateFromContext(ctx)
+	if tmpl == "" {
+		tmpl = c.template()
+	}
 	if !validSearchURL(tmpl) {
 		return nil, fmt.Errorf("configure an HTTPS search URL on the config page first")
 	}
 	var results []SearchResult
 	for _, q := range plan.Queries {
-		target := expandSearchTemplate(tmpl, q)
+		target, err := expandSearchTemplate(tmpl, q)
+		if err != nil {
+			if len(results) > 0 {
+				return results, nil
+			}
+			return nil, err
+		}
 		body, err := c.client.do(ctx, target, nil)
 		if err != nil {
 			if len(results) > 0 {
@@ -104,6 +113,11 @@ func (c *customBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchRes
 	return dedupeURLs(results), nil
 }
 
-func expandSearchTemplate(tmpl, query string) string {
-	return strings.ReplaceAll(tmpl, "{query}", url.QueryEscape(query))
+func expandSearchTemplate(tmpl, query string) (string, error) {
+	target := strings.ReplaceAll(tmpl, "{query}", url.QueryEscape(query))
+	u, err := url.Parse(target)
+	if err != nil || !publicSearchHost(u) || u.Fragment != "" {
+		return "", fmt.Errorf("search URL must use a public HTTPS host")
+	}
+	return target, nil
 }

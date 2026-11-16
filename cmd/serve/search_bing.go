@@ -123,12 +123,22 @@ func legalAuthorityDomains(instrument string) []string {
 }
 
 func (b *bingBackend) Search(ctx context.Context, plan QueryPlan) ([]SearchResult, error) {
-	tmpl := b.template()
+	tmpl := searchTemplateFromContext(ctx)
+	if tmpl == "" {
+		tmpl = b.template()
+	}
 	var results []SearchResult
 	for _, q := range plan.Queries {
 		target := "https://www.bing.com/search?q=" + url.QueryEscape(q) + "&setlang=en-US&cc=US"
 		if tmpl != "" && tmpl != "https://www.bing.com/search?q={query}" {
-			target = expandSearchTemplate(tmpl, q)
+			var err error
+			target, err = expandSearchTemplate(tmpl, q)
+			if err != nil {
+				if len(results) > 0 {
+					return results, nil
+				}
+				return nil, err
+			}
 		}
 		body, err := b.client.do(ctx, target, nil)
 		if err != nil {

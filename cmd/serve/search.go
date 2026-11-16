@@ -58,8 +58,7 @@ func searchWebRanked(query string) ([]SearchResult, error) {
 		return nil, fmt.Errorf("configure an HTTPS search URL on the config page first")
 	}
 	gw := searchGatewayInstance
-	gw.setSearchTemplate(template)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(withSearchTemplate(context.Background(), template), 30*time.Second)
 	defer cancel()
 	results, traces := gw.rankedSearch(ctx, query)
 	if len(results) == 0 {

@@ -373,8 +373,16 @@ func validSearchURL(raw string) bool {
 	if !strings.Contains(raw, "{query}") {
 		return false
 	}
-	u, err := url.Parse(strings.ReplaceAll(raw, "{query}", "test"))
-	return err == nil && publicSearchHost(u) && u.Fragment == ""
+	u1, err1 := url.Parse(strings.ReplaceAll(raw, "{query}", "test"))
+	u2, err2 := url.Parse(strings.ReplaceAll(raw, "{query}", "other"))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	// Reject {query} placeholders in the URL authority (scheme, userinfo, host, port).
+	if u1.Scheme != u2.Scheme || u1.Host != u2.Host || (u1.User == nil) != (u2.User == nil) {
+		return false
+	}
+	return publicSearchHost(u1) && u1.Fragment == ""
 }
 
 func normalizeSearchURL(raw string) string {
