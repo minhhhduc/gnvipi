@@ -8,6 +8,7 @@ import (
 
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/models"
+	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
 func restoreModels(t *testing.T) {
@@ -95,5 +96,49 @@ func TestDBAdminNvidiaRescanAuditCountsOnly(t *testing.T) {
 	}
 	if details["added"] != float64(1) || details["updated"] != float64(0) || details["removed"] != float64(0) {
 		t.Fatalf("audit details = %v", details)
+	}
+}
+
+func TestDBNvidiaRescan_CrossInstanceRefresh(t *testing.T) {
+	restoreModels(t)
+	h := newDBAdminHarness(t)
+	ctx := t.Context()
+
+	stubNvidiaDiscovery(t, rescanFixture(
+		models.PlaygroundRow{Model: "acme/role-test", Slug: "role-test", Namespace: "qc69jvmznzxy", FunctionID: "77777777-7777-7777-7777-777777777777"},
+	))
+
+	// Instance B starts with an empty catalog.
+	models.Replace(map[string]models.ModelInfo{})
+	prefsB := &modelPrefs{catalogRead: h.pool}
+	runtimeB, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(h.pool), providerRuntimeOptions{
+		OnPublish: prefsB.applySnapshotDB,
+	})
+	if err != nil {
+		t.Fatalf("open runtimeB: %v", err)
+	}
+	t.Cleanup(runtimeB.Close)
+	vBefore := runtimeB.store.Version()
+
+	// Instance A rescans and commits to nvidia_models.
+	prefsA := &modelPrefs{catalogRead: h.pool, catalogWrite: h.pool}
+	res, err := prefsA.rescanNvidiaCatalog(ctx)
+	if err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	if res.Added != 1 {
+		t.Fatalf("res.Added = %d, want 1", res.Added)
+	}
+
+	// Reset local registry to verify Instance B's snapshot reload publishes it.
+	models.Replace(map[string]models.ModelInfo{})
+	if err := runtimeB.store.Reload(ctx); err != nil {
+		t.Fatalf("runtimeB reload: %v", err)
+	}
+	if runtimeB.store.Version() <= vBefore {
+		t.Fatalf("runtimeB version = %d, want > %d", runtimeB.store.Version(), vBefore)
+	}
+	if _, err := models.Lookup("acme/role-test"); err != nil {
+		t.Fatalf("Instance B did not publish new catalog model: %v", err)
 	}
 }

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/minhhhduc/gnvipi/internal/captcha"
+	"github.com/minhhhduc/gnvipi/internal/providerstore"
 	"github.com/minhhhduc/gnvipi/internal/db"
 	gwprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
@@ -265,7 +266,9 @@ func runServer() (err error) {
 	// process, replaced after every committed write. A configured database that
 	// cannot produce a valid first snapshot is a startup error, so the process
 	// never serves an empty or partially validated configuration.
-	snapshotRuntime, err := openConfiguredProviderRuntime(ctx, appState, *modelsFile)
+	snapshotRuntime, err := openConfiguredProviderRuntime(ctx, appState, *modelsFile, func(snapshot *providerstore.Snapshot) {
+		prefs.applySnapshotDB(snapshot)
+	})
 	if err != nil {
 		return err
 	}

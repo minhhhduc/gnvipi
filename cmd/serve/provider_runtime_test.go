@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/provider/nvidia"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
@@ -871,5 +872,47 @@ func TestProviderRuntimeCanceledWaiterReportsDegraded(t *testing.T) {
 	}
 	if health.ConfigVersion != 5 {
 		t.Fatalf("canceled waiter config_version = %d, want the last observed 5", health.ConfigVersion)
+	}
+}
+
+func TestProviderRuntimeOnPublishRefreshesCatalog(t *testing.T) {
+	saved := models.Snapshot()
+	t.Cleanup(func() { models.Replace(saved) })
+	models.Replace(map[string]models.ModelInfo{})
+
+	source := &stubSnapshotSource{version: 1, rows: stubSnapshotRows()}
+	prefsB := &modelPrefs{
+		catalogRead: &pgxpool.Pool{},
+	}
+
+	runtimeB, err := openProviderRuntime(t.Context(), source, providerRuntimeOptions{
+		OnPublish: prefsB.applySnapshotDB,
+	})
+	if err != nil {
+		t.Fatalf("open provider runtime: %v", err)
+	}
+	t.Cleanup(runtimeB.Close)
+
+	var unknown *models.ErrUnknownModel
+	if _, err := models.Lookup("acme/new"); !errors.As(err, &unknown) {
+		t.Fatalf("initial lookup = %v, want *ErrUnknownModel", err)
+	}
+
+	nextRows := stubSnapshotRows()
+	nextRows.NvidiaModels = []models.PlaygroundRow{
+		{Model: "acme/new", Slug: "new", Namespace: "ns1", FunctionID: "11111111-1111-1111-1111-111111111111"},
+	}
+	source.mu.Lock()
+	source.rows = nextRows
+	source.version = 2
+	source.mu.Unlock()
+
+	if err := runtimeB.store.Reload(t.Context()); err != nil {
+		t.Fatalf("reload snapshot: %v", err)
+	}
+
+	info, err := models.Lookup("acme/new")
+	if err != nil || info.Slug != "new" {
+		t.Fatalf("refreshed catalog lookup = %+v, %v", info, err)
 	}
 }

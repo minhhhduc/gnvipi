@@ -55,6 +55,7 @@ type providerRuntimeOptions struct {
 	PollInterval time.Duration
 	Logf         func(format string, args ...any)
 	Audit        providerstore.AuditFunc
+	OnPublish    func(*providerstore.Snapshot)
 }
 
 // providerRuntime owns the process-wide configuration snapshot: one immutable
@@ -101,6 +102,9 @@ func openProviderRuntime(ctx context.Context, source providerstore.RowSource, op
 		Audit:       opts.Audit,
 		OnPublish: func(snapshot *providerstore.Snapshot) {
 			logSnapshotDiagnostics(logf, snapshot)
+			if opts.OnPublish != nil {
+				opts.OnPublish(snapshot)
+			}
 		},
 	})
 	reloadCtx, cancelReload := context.WithTimeout(ctx, providerstore.ReloadTimeout)
@@ -206,7 +210,7 @@ func logSnapshotDiagnostics(logf func(string, ...any), snapshot *providerstore.S
 // used once, to materialize legacy key_ref rows into encrypted stored secrets;
 // request-time routing never resolves a credential from a file. File mode
 // returns nil and keeps the legacy file-backed routing.
-func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile string) (*providerRuntime, error) {
+func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile string, onPublish func(*providerstore.Snapshot)) (*providerRuntime, error) {
 	if state == nil {
 		return nil, nil
 	}
@@ -228,6 +232,7 @@ func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile
 		ListenPool:  state.pool,
 		Logf:        log.Printf,
 		Audit:       providerAuditWriter(state.pool),
+		OnPublish:   onPublish,
 	})
 	if err != nil {
 		return nil, err

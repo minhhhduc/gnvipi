@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/minhhhduc/gnvipi/internal/models"
 	"github.com/minhhhduc/gnvipi/internal/providerstore"
 )
 
@@ -162,4 +163,15 @@ func (p *modelPrefs) applySettingsLocked(file *prefsFile) {
 		p.deleted[id] = struct{}{}
 	}
 	p.searchURL = file.SearchURL
+}
+
+// applySnapshotDB publishes the NVIDIA catalog from a committed configuration
+// snapshot so every running instance stays in sync with remote rescans.
+func (p *modelPrefs) applySnapshotDB(snapshot *providerstore.Snapshot) {
+	if p == nil || snapshot == nil {
+		return
+	}
+	if p.catalogRead != nil {
+		models.Replace(snapshot.NvidiaCatalog())
+	}
 }
