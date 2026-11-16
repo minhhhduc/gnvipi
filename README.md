@@ -24,7 +24,7 @@ Client API-key authentication is optional: set `-gateway-key` or
 |---|---|
 | [Operations](docs/operations.md) | Run flags, stats storage, Admin Console access, `cycle` failover, web search MCP, data locations, troubleshooting, Docker notes. |
 | [PostgreSQL Operations](docs/postgres-operations.md) | Database provisioning, roles and grants, migrations, logical backup, WAL/PITR, restore integrity checks, retention limits, monitoring, development workflow. |
-| [Auth & Roles](docs/auth.md) | Ownership model, root/superuser/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `run.ps1 -Claude`. |
+| [Auth & Roles](docs/auth.md) | Ownership model, root/superuser/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `scripts/windows/run.ps1 -Claude`. |
 | [Provider Configuration](docs/providers.md) | Schema v2 reference, model mappings, wildcard routing, fallback chains, SSRF policy, migration. |
 | [Client Setup](docs/clients.md) | Step-by-step setup for Claude Code, OpenAI SDKs, Codex, OpenCode, cURL, and the cross-protocol compatibility matrix. |
 | [Architecture Overview](docs/architecture/overview.md) | Hub-and-spoke pattern, normalized IR, execution paths, architectural invariants. |
@@ -63,11 +63,11 @@ processes:
 go run ./cmd/serve -addr 127.0.0.1:8080
 ```
 
-On Windows:
+Or use the OS launcher script:
 
-```powershell
-.\scripts\run.ps1 -NoCaptcha
-```
+- **Windows (PowerShell):** `.\scripts\windows\run.ps1 -NoCaptcha`
+- **Linux (Bash):** `./scripts/linux/run.sh --no-captcha`
+- **macOS (Bash):** `./scripts/macos/run.sh --no-captcha`
 
 Add your providers via the Admin Console at `http://localhost:8080/models`: create the provider (name, base URL, protocol), then open it and add keys — Auth key (bearer) and/or API key (`x-api-key`)
 or directly in `-models-file` (default: `internal/models/playground_models.json`, file mode only — with `GNVIPI_DATABASE_URL` set, providers, masks, deletions and the search template live in PostgreSQL).
@@ -77,20 +77,34 @@ or directly in `-models-file` (default: `internal/models/playground_models.json`
 To serve free models from the NVIDIA Playground (e.g.
 `deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`):
 
-1. Start the gateway:
-   ```bash
-   go run ./cmd/serve -addr 127.0.0.1:8080
-   ```
+1. Start the gateway with the OS launcher:
+   - **Windows:**
+     ```powershell
+     .\scripts\windows\run.ps1          # Starts gateway with Chrome pool ready for activation
+     .\scripts\windows\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
+     ```
+   - **Linux:**
+     ```bash
+     ./scripts/linux/run.sh             # Starts gateway with Chrome pool ready for activation
+     ./scripts/linux/run.sh --claude    # Starts gateway and launches Claude Code pointed at it
+     ```
+   - **macOS:**
+     ```bash
+     ./scripts/macos/run.sh             # Starts gateway with Chrome pool ready for activation
+     ./scripts/macos/run.sh --claude    # Starts gateway and launches Claude Code pointed at it
+     ```
+   *(Or run directly: `go run ./cmd/serve -addr 127.0.0.1:8080`.)*
 2. Open `http://localhost:8080/chromes` and click **Turn On / Start All**.
    *Startup is always idle and never launches Chrome automatically until activated.*
-3. On Windows, you can also use:
-   ```powershell
-   .\scripts\run.ps1          # Starts gateway with Chrome pool ready for activation
-   .\scripts\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
-   ```
 
-For the DB-backed local flow, start PostgreSQL, migrate, create the first superuser,
-and give `run.ps1 -Claude` the one-time gateway token:
+### 3. Database-Backed Local Setup (PostgreSQL)
+
+With PostgreSQL configured (`GNVIPI_DATABASE_URL` + `GNVIPI_MASTER_KEY`), `serve`
+automatically seeds the built-in `gnvipi` (`root`) account on first startup with
+temporary password `gnvipi` (override with `GNVIPI_ROOT_PASSWORD`), and prompts
+you to set a real password on first login at `http://localhost:8080/admin`.
+
+**Windows (PowerShell):**
 
 ```powershell
 # Local-development credentials only; do not reuse them in production.
@@ -100,20 +114,38 @@ $env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
 New-Item -ItemType Directory -Force .\bin | Out-Null
 go build -o .\bin\serve.exe ./cmd/serve
 .\bin\serve.exe migrate
-# The password is read from stdin and never echoed: pipe it in.
+# Optional: create a superuser + one-time gateway token for scripts/windows/run.ps1 -Claude
 '<temporary-password>' | .\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token
 $env:GNVIPI_GATEWAY_TOKEN='gw_...'
-.\scripts\run.ps1 -Claude
+.\scripts\windows\run.ps1 -Claude
+```
+
+**Linux / macOS (Bash):**
+
+```bash
+# Local-development credentials only; do not reuse them in production.
+docker compose up -d --wait db
+export GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+export GNVIPI_MASTER_KEY='<base64-32-byte-key>'
+mkdir -p ./bin
+go build -o ./bin/serve ./cmd/serve
+./bin/serve migrate
+# Optional: create a superuser + one-time gateway token for --claude
+printf '%s\n' '<temporary-password>' | ./bin/serve admin create-superuser --username <superuser> --with-gateway-token
+export GNVIPI_GATEWAY_TOKEN='gw_...'
+./scripts/linux/run.sh --claude   # or ./scripts/macos/run.sh --claude
 ```
 
 `serve admin create-superuser` and `serve admin reset-password <user>` refuse a
 terminal stdin so the password is never echoed; pipe the password in on stdin
 instead of typing it interactively. In MSYS2/Git Bash (mintty) a pty is a named
 pipe that cannot be told apart from a real pipeline, so piping is refused there
-as well; run the command from cmd.exe or PowerShell, where piping works.
+as well; run the command from cmd.exe or PowerShell on Windows, or a standard
+terminal on Linux/macOS.
 
-The bootstrap command prints the gateway token once. `run.ps1` forwards it to
-Claude Code as `ANTHROPIC_AUTH_TOKEN` without printing the token.
+The bootstrap command prints the gateway token once. `run.ps1 -Claude` /
+`run.sh --claude` forwards it to Claude Code as `ANTHROPIC_AUTH_TOKEN` without
+printing the token.
 
 ---
 
@@ -137,18 +169,25 @@ Point your client at the gateway root or `/v1`, depending on the SDK:
 ### Claude Code
 
 For the DB-backed flow, set the generated token in the environment or in
-`.claude/settings.json`:
+`~/.claude/settings.json` (replace `$your_model` with a configured alias, or use
+the built-in `automode` or `cycle` aliases):
 
 ```json
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:8080",
-    "ANTHROPIC_AUTH_TOKEN": "gw_...",
+    "ANTHROPIC_AUTH_TOKEN": "$GNVIPI_GATEWAY_TOKEN",
     "ANTHROPIC_API_KEY": "",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
+    "ANTHROPIC_MODEL": "$your_model",
+    "ANTHROPIC_SMALL_FAST_MODEL": "$your_model",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_AUTO_MODE_MODEL": "$your_model"
   }
 }
 ```
+
+- **`automode`**: routes to the **Auto model** selected on the **Config** page (per account).
+- **`cycle`**: rotates across enabled models on each request.
 
 ### OpenAI Python SDK
 
