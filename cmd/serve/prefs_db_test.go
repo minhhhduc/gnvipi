@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/minhhhduc/gnvipi/internal/captcha"
 )
 
 // dbSettingsHarness wires the admin API with database-mode settings on top of
@@ -149,5 +151,56 @@ func TestDBSettings_EmptyMaskClearsRows(t *testing.T) {
 	}
 	if h.prefs.isHidden("nvidia/a") {
 		t.Fatal("cleared mask still hides a model in memory")
+	}
+}
+
+// The captcha champion is runtime state, so database mode stores it in
+// system_state instead of the user-cache JSON file: a database deployment must
+// survive a restart without writing state files, and two instances share one
+// selection.
+func TestDBChampionStateRoundTrip(t *testing.T) {
+	h := newDBAdminHarness(t)
+	ctx := t.Context()
+	db := &appDB{pool: h.pool}
+
+	if got := loadChampionState(ctx, db); got.ChampionURL != "" {
+		t.Fatalf("champion before any benchmark = %q, want empty", got.ChampionURL)
+	}
+
+	saved := &captcha.ChampionState{
+		ChampionURL:  "https://playground.example.com/chat",
+		ScoreMS:      812,
+		SuccessRate:  0.75,
+		LastOK:       time.Unix(1_700_000_000, 0).UTC(),
+		FailStreak:   1,
+		FallbackURLs: []string{"https://backup-a.example.com/chat", "https://backup-b.example.com/chat"},
+	}
+	saveChampionState(ctx, db, saved)
+
+	var stored int
+	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM system_state WHERE key = $1`, championStateKey).Scan(&stored); err != nil {
+		t.Fatalf("count champion documents: %v", err)
+	}
+	if stored != 1 {
+		t.Fatalf("champion documents = %d, want 1", stored)
+	}
+
+	loaded := loadChampionState(ctx, db)
+	if loaded.ChampionURL != saved.ChampionURL || loaded.ScoreMS != saved.ScoreMS ||
+		loaded.SuccessRate != saved.SuccessRate || loaded.FailStreak != saved.FailStreak {
+		t.Fatalf("loaded champion = %+v, want %+v", loaded, saved)
+	}
+	if len(loaded.FallbackURLs) != len(saved.FallbackURLs) || loaded.FallbackURLs[1] != saved.FallbackURLs[1] {
+		t.Fatalf("loaded fallbacks = %v, want %v", loaded.FallbackURLs, saved.FallbackURLs)
+	}
+	if loaded.Updated.IsZero() {
+		t.Fatal("loaded champion has no updated timestamp")
+	}
+
+	// A second benchmark overwrites the single document rather than appending.
+	second := &captcha.ChampionState{ChampionURL: "https://next.example.com/chat", ScoreMS: 640}
+	saveChampionState(ctx, db, second)
+	if got := loadChampionState(ctx, db); got.ChampionURL != second.ChampionURL || len(got.FallbackURLs) != 0 {
+		t.Fatalf("champion after rebenchmark = %+v, want %+v", got, second)
 	}
 }

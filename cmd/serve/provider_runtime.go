@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -150,6 +151,46 @@ func openProviderRuntime(ctx context.Context, source providerstore.RowSource, op
 	return runtime, nil
 }
 
+// keyRefsToSecrets converts key_ref rows into encrypted stored secrets so the
+// database is self-contained. The conversion needs both the master key and the
+// legacy secrets file, so without either the rows stay as references and are
+// reported as unroutable rather than silently skipped. The file is read only
+// here: a deployment whose rows are already converted never opens it, and
+// request-time routing never touches it. Unresolved references are logged by
+// key id only, never by provider id or reference name.
+func keyRefsToSecrets(ctx context.Context, state *appDB, keyring *providerstore.Keyring, modelsFile string) {
+	var remaining int
+	if err := state.pool.QueryRow(ctx,
+		`SELECT count(*) FROM provider_keys WHERE key_ref IS NOT NULL AND key_ref <> ''`).Scan(&remaining); err != nil {
+		log.Printf("warning: provider key references: %v", err)
+		return
+	}
+	if remaining == 0 {
+		return
+	}
+	if keyring == nil {
+		log.Printf("warning: %d provider key reference(s) cannot be materialized without GNVIPI_MASTER_KEY and stay unroutable", remaining)
+		return
+	}
+	secrets, err := gatewayprovider.LoadSecrets(gatewayprovider.DefaultSecretsPath(modelsFile))
+	if err != nil {
+		log.Printf("warning: %d provider key reference(s) need an unreadable secrets file and stay unroutable: %v", remaining, err)
+		return
+	}
+	migrated, unresolved, err := providerstore.MaterializeKeyRefs(ctx, state.pool, keyring, providerstore.MapRefResolver(secrets))
+	if err != nil {
+		log.Printf("warning: provider key references: %v", err)
+		return
+	}
+	if migrated > 0 {
+		log.Printf("provider keys: %d reference(s) materialized into stored secrets", migrated)
+	}
+	if len(unresolved) > 0 {
+		log.Printf("warning: %d provider key reference(s) have no imported secret and stay unroutable: %s",
+			len(unresolved), strings.Join(unresolved, ", "))
+	}
+}
+
 // logSnapshotDiagnostics reports keys excluded from routing once per published
 // snapshot. Key IDs, provider IDs and the fixed reason only: never credential
 // material.
@@ -161,19 +202,13 @@ func logSnapshotDiagnostics(logf func(string, ...any), snapshot *providerstore.S
 }
 
 // openConfiguredProviderRuntime builds the snapshot runtime for a process whose
-// admin state is database-backed. modelsFile locates the adjacent imported
-// secrets map used to resolve key_ref credentials at request time. File mode
+// admin state is database-backed. modelsFile locates the imported secrets map
+// used once, to materialize legacy key_ref rows into encrypted stored secrets;
+// request-time routing never resolves a credential from a file. File mode
 // returns nil and keeps the legacy file-backed routing.
 func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile string) (*providerRuntime, error) {
 	if state == nil {
 		return nil, nil
-	}
-	// key_ref rows resolve against the same imported secrets map as the v2
-	// import; a missing file is an empty map, so those keys degrade to the
-	// documented credential-unavailable error instead of failing startup.
-	secrets, err := gatewayprovider.LoadSecrets(gatewayprovider.DefaultSecretsPath(modelsFile))
-	if err != nil {
-		return nil, fmt.Errorf("provider key references: %w", err)
 	}
 	keyring, err := providerstore.LoadKeyringFromEnv()
 	if err != nil {
@@ -185,9 +220,9 @@ func openConfiguredProviderRuntime(ctx context.Context, state *appDB, modelsFile
 		// failing the whole snapshot.
 		log.Printf("warning: GNVIPI_MASTER_KEY is not set; keys with stored secrets are excluded from routing")
 	}
+	keyRefsToSecrets(ctx, state, keyring, modelsFile)
 	runtime, err := openProviderRuntime(ctx, providerstore.NewDBRowSource(state.pool), providerRuntimeOptions{
 		Keyring:     keyring,
-		Refs:        providerstore.MapRefResolver(secrets),
 		IsProtected: protectedModel,
 		Ping:        state.pool.Ping,
 		ListenPool:  state.pool,

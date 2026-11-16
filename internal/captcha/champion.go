@@ -146,7 +146,9 @@ func (s *ChampionState) MarkOK(url string) {
 }
 
 // SelectChampion benchmarks extractMs + success over (per candidate) trial
-// count, then persists the winner. budget is the total wall-clock budget;
+// count and returns the winner. Persisting it is the caller's decision: the
+// gateway writes PostgreSQL in database mode and the state file in file mode.
+// budget is the total wall-clock budget;
 // candidates is the list of playground URLs to test. trial count is fixed
 // at 3 (median of 3 is robust to one bot-wall blip without burning budget).
 //
@@ -216,9 +218,7 @@ func SelectChampion(ctx context.Context, candidates []string, budget time.Durati
 		SuccessRate:  1.0,
 		LastOK:       time.Now(),
 		FallbackURLs: fallbacks,
-	}
-	if err := state.Save(ChampionStateFile()); err != nil {
-		log.Printf("champion: save failed (non-fatal): %v", err)
+		Updated:      time.Now(),
 	}
 	log.Printf("champion: winner=%s median=%s fallbacks=%d",
 		winner.url, winner.median, len(fallbacks))

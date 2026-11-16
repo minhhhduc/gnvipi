@@ -636,18 +636,24 @@ func TestDBAdminKeys_ValidationAndCredentialSources(t *testing.T) {
 	}
 	assertFieldError(t, decodeBody(t, res), "credential")
 
-	// key_ref never reaches a regular user, but the owner may store one.
-	user := prepareKeyActor(t, h, "key-ref-user", auth.RoleUser)
-	res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
-		"name": "user ref", "key_ref": "env:ISSUE203",
-	}, user.headers)
-	if res.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("user key_ref create = %d, want 422 (body %s)", res.Code, res.Body.String())
-	}
-	assertFieldError(t, decodeBody(t, res), "credential")
-	refKey := createTestKey(t, h, bearer(h.token), gin.H{"name": "owner ref", "key_ref": "env:ISSUE203"})
-	if refKey["has_key_ref"] != true || refKey["key_ref"] != "env:ISSUE203" || refKey["has_secret"] != false {
-		t.Fatalf("key_ref key = %v, want the reference only", refKey)
+	// A key_ref names an entry in the imported secrets file, which this gateway
+	// materializes into stored ciphertext at startup and never reads again. A
+	// fresh reference is therefore refused for every role, the owner included:
+	// accepting one would create a key no request can route.
+	for _, caller := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"user", prepareKeyActor(t, h, "key-ref-user", auth.RoleUser).headers},
+		{"owner", bearer(h.token)},
+	} {
+		res = makeRequest(t, h.engine, http.MethodPost, keysPath(""), gin.H{
+			"name": caller.name + " ref", "key_ref": "env:ISSUE203",
+		}, caller.headers)
+		if res.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s key_ref create = %d, want 422 (body %s)", caller.name, res.Code, res.Body.String())
+		}
+		assertFieldError(t, decodeBody(t, res), "key_ref")
 	}
 
 	// A shared key must stay credential-free.

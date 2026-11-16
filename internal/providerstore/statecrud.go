@@ -130,6 +130,40 @@ func LoadSettingObject(ctx context.Context, q Querier, key string, target any) (
 	return true, nil
 }
 
+// System state is the free-form document store for runtime state no table
+// column owns, such as the captcha champion selection.
+
+// SaveSystemState upserts one system_state document.
+func SaveSystemState(ctx context.Context, q Querier, key string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("providerstore: system state %q: %w", key, err)
+	}
+	if _, err := q.Exec(ctx, `INSERT INTO system_state (key, value)
+		VALUES ($1, $2::jsonb)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		key, string(raw)); err != nil {
+		return fmt.Errorf("providerstore: save system state %q: %w", key, err)
+	}
+	return nil
+}
+
+// LoadSystemState decodes the system_state document under key into target. A
+// missing key leaves target untouched and reports false.
+func LoadSystemState(ctx context.Context, q Querier, key string, target any) (bool, error) {
+	var raw []byte
+	if err := q.QueryRow(ctx, `SELECT value FROM system_state WHERE key = $1`, key).Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("providerstore: load system state %q: %w", key, err)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return false, fmt.Errorf("providerstore: decode system state %q: %w", key, err)
+	}
+	return true, nil
+}
+
 func nonEmptySorted(ids []string) []string {
 	out := make([]string, 0, len(ids))
 	seen := make(map[string]struct{}, len(ids))

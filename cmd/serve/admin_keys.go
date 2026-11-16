@@ -121,6 +121,19 @@ func noneSchemeRejectsCredential(scheme string, r *keyWriteRequest) bool {
 	return r.carriesCredential() || (r.AuthHeaderName != nil && strings.TrimSpace(*r.AuthHeaderName) != "")
 }
 
+// keyRefUnsupported rejects a new key_ref value. A reference names an entry in
+// the imported secrets.json, which a database-backed gateway materializes into
+// stored ciphertext at startup and never reads again; accepting a fresh
+// reference would create a key no request can route. An echo of the stored
+// reference is not a write and stays legal.
+func keyRefUnsupported(body *keyWriteRequest, current string) bool {
+	if body.KeyRef == nil {
+		return false
+	}
+	ref := strings.TrimSpace(*body.KeyRef)
+	return ref != "" && ref != current
+}
+
 // patchScheme is the scheme the row will carry after the patch: an explicit
 // auth_scheme wins, otherwise the stored one applies.
 func patchScheme(current string, patch providerstore.KeyPatch) string {
@@ -130,9 +143,11 @@ func patchScheme(current string, patch providerstore.KeyPatch) string {
 	return current
 }
 
-// keyPatch builds the providerstore patch. AllowKeyRef is only ever set for
-// owner and admin callers, which is what keeps key_ref out of user writes.
-func (r *keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPatch {
+// keyPatch builds the providerstore patch. key_ref never appears in one: the
+// handlers reject a reference before reaching this point, because a
+// database-backed gateway resolves references only while materializing the
+// imported secrets file at startup.
+func (r *keyWriteRequest) keyPatch() providerstore.KeyPatch {
 	scheme := r.AuthScheme
 	if scheme != nil {
 		trimmed := strings.TrimSpace(*scheme)
@@ -146,7 +161,6 @@ func (r *keyWriteRequest) keyPatch(identity *adminIdentity) providerstore.KeyPat
 		KeyEnv:         r.KeyEnv,
 		KeyRef:         r.KeyRef,
 		ClearSecret:    r.ClearSecret,
-		AllowKeyRef:    identity.Role == auth.RoleOwner || identity.Role == auth.RoleAdmin,
 	}
 }
 
@@ -158,6 +172,13 @@ func (r *keyWriteRequest) adminDisableOnly() bool {
 	}
 	return r.Name == nil && r.AuthScheme == nil && r.AuthHeaderName == nil &&
 		r.Secret == nil && r.KeyEnv == nil && r.KeyRef == nil && !r.ClearSecret
+}
+
+// adminKeyRefUnsupported reports the one unsupported credential source in
+// database mode: a reference into the imported secrets file.
+func adminKeyRefUnsupported(c *gin.Context) {
+	adminFieldError(c, http.StatusUnprocessableEntity, "key_ref",
+		"key_ref is not supported with a database-backed gateway; store the secret value instead")
 }
 
 func adminKeyCredentialError(c *gin.Context, err error) {
@@ -336,6 +357,10 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
 			return
 		}
+		if keyRefUnsupported(&body, "") {
+			adminKeyRefUnsupported(c)
+			return
+		}
 		enabled := true
 		if body.Enabled != nil {
 			enabled = *body.Enabled
@@ -345,7 +370,7 @@ func handleAdminKeyCreate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "internal_error", "allocate provider key id failed")
 			return
 		}
-		patch := body.keyPatch(identity)
+		patch := body.keyPatch()
 		patch.Enabled, patch.AuthScheme = &enabled, &scheme
 		row, err := providerstore.ApplyKeyPatch(providerstore.KeyRow{
 			ID:         keyID,
@@ -453,9 +478,13 @@ func handleAdminKeyUpdate(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusForbidden, "forbidden", "this key belongs to another user")
 			return
 		}
-		patch := body.keyPatch(identity)
+		patch := body.keyPatch()
 		if noneSchemeRejectsCredential(patchScheme(record.AuthScheme, patch), &body) {
 			adminFieldError(c, http.StatusUnprocessableEntity, "credential", "auth_scheme none does not accept a credential")
+			return
+		}
+		if keyRefUnsupported(&body, record.KeyRef) {
+			adminKeyRefUnsupported(c)
 			return
 		}
 		next, err := providerstore.ApplyKeyPatch(record.KeyRow, patch, state.keyring)
