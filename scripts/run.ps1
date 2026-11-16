@@ -330,12 +330,14 @@ try {
   $deadline = (Get-Date).AddSeconds(30)
   $ready = $false
   while ((Get-Date) -lt $deadline) {
-    if ($proc.HasExited) { break }
     try {
       Invoke-RestMethod "http://localhost:$Port/healthz" -TimeoutSec 2 | Out-Null
       $ready = $true
       break
-    } catch { Start-Sleep -Milliseconds 500 }
+    } catch {
+      if ($proc.HasExited) { break }
+      Start-Sleep -Milliseconds 500
+    }
   }
   if (-not $ready) {
     if ($proc.HasExited) {
