@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	gatewayprovider "github.com/minhhhduc/gnvipi/internal/gateway/provider"
 	"golang.org/x/net/html"
 )
 
@@ -19,32 +19,39 @@ import (
 // so a body larger than the cap is reported as an error rather than truncated.
 func maxBytesReader(r io.Reader, n int64) io.Reader { return io.LimitReader(r, n) }
 
-var searchClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-	if !publicSearchHost(req.URL) {
-		return fmt.Errorf("search redirect must use a public HTTPS host")
-	}
-	if len(via) >= 5 {
-		return fmt.Errorf("too many search redirects")
-	}
-	return nil
-}}
+func searchURLPolicy() gatewayprovider.URLPolicy {
+	policy := gatewayprovider.DefaultURLPolicy()
+	policy.DenyPrivate = true
+	return policy
+}
+
+var searchClient = &http.Client{
+	Timeout:   15 * time.Second,
+	Transport: searchURLPolicy().GuardTransport(nil, nil),
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if !publicSearchHost(req.URL) {
+			return fmt.Errorf("search redirect must use a public HTTPS host")
+		}
+		if len(via) >= 5 {
+			return fmt.Errorf("too many search redirects")
+		}
+		return nil
+	},
+}
 
 // searchGatewayInstance serves the MCP tool. It is created at startup; tests
 // swap it to point at httptest servers.
 var searchGatewayInstance = newSearchGateway()
 
 func publicSearchHost(u *url.URL) bool {
-	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+	if u == nil || u.Scheme != "https" {
 		return false
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+	host := strings.TrimRight(strings.ToLower(u.Hostname()), ".")
+	if host == "local" || strings.HasSuffix(host, ".local") || strings.Contains(u.Hostname(), "%") {
 		return false
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		return !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
-	}
-	return true
+	return searchURLPolicy().ValidateRequest(&http.Request{URL: u}) == nil
 }
 
 type searchResult struct{ Title, URL string }
