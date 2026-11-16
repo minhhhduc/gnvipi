@@ -14,6 +14,7 @@ export interface AdminUser {
 export interface AuthSession {
   user: AdminUser;
   csrf_token: string;
+  public_url?: string;
 }
 
 export function isAdminRole(value: unknown): value is AdminRole {
@@ -50,7 +51,11 @@ export function parseAuthSession(value: unknown): AuthSession {
   ) {
     throw new Error("Invalid admin session response");
   }
-  return { user: fields as unknown as AdminUser, csrf_token: session.csrf_token };
+  return {
+    user: fields as unknown as AdminUser,
+    csrf_token: session.csrf_token,
+    ...(typeof session.public_url === "string" && session.public_url ? { public_url: session.public_url } : {}),
+  };
 }
 
 export type AuthScreen = "login" | "password-change" | "console";

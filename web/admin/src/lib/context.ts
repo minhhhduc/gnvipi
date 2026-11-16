@@ -11,6 +11,7 @@ export interface GatewayContextValue {
   navigate: (page: Page) => void;
   /** Increments on every nav click so a page can reset its own drill-down. */
   navSeq: number;
+  publicUrl?: string;
 }
 
 export const GatewayContext = createContext<GatewayContextValue>({
@@ -19,10 +20,17 @@ export const GatewayContext = createContext<GatewayContextValue>({
   refreshStats: () => {},
   navigate: () => {},
   navSeq: 0,
+  publicUrl: "",
 });
 
 export function useGateway(): GatewayContextValue {
   return useContext(GatewayContext);
+}
+
+export function useGatewayOrigin(): string {
+  const { publicUrl } = useGateway();
+  if (publicUrl) return publicUrl;
+  return typeof window === "undefined" ? "http://localhost:8080" : window.location.origin;
 }
 
 export function totals(stats: Stats | null) {

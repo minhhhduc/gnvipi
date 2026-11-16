@@ -1,11 +1,12 @@
 import { useState } from "preact/hooks";
 import { Card, CardHead, PageHeader } from "../components/ui";
 import { ModelApiGuide, Snippet } from "../components/ApiGuide";
-import { useGateway } from "../lib/context";
-import { PROTOCOLS, guideOrigin } from "../lib/apiGuide";
+import { useGateway, useGatewayOrigin } from "../lib/context";
+import { PROTOCOLS } from "../lib/apiGuide";
 
 export function ApiView() {
   const { navigate } = useGateway();
+  const origin = useGatewayOrigin();
   const [model, setModel] = useState("automode");
 
   return (
@@ -15,7 +16,7 @@ export function ApiView() {
       <Card>
         <CardHead title="Base URL" sub="Every protocol below is served from this address." />
         <div class="px-[15px] py-3.5">
-          <Snippet label="Base URL" code={guideOrigin} />
+          <Snippet label="Base URL" code={origin} />
           <table class="table">
             <tbody>
               {PROTOCOLS.map(([key, label, endpoint]) => (
