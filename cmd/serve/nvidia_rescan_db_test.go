@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minhhhduc/gnvipi/internal/auth"
 	"github.com/minhhhduc/gnvipi/internal/models"
 )
@@ -95,5 +96,75 @@ func TestDBAdminNvidiaRescanAuditCountsOnly(t *testing.T) {
 	}
 	if details["added"] != float64(1) || details["updated"] != float64(0) || details["removed"] != float64(0) {
 		t.Fatalf("audit details = %v", details)
+	}
+}
+
+func TestDBNvidiaRescan_LeastPrivilege(t *testing.T) {
+	restoreModels(t)
+	h := newDBAdminHarness(t)
+	ctx := t.Context()
+
+	// Verify runtime role (gnvipi_app) cannot write nvidia_models while
+	// maintenance role (gnvipi_maintenance) can.
+	if _, err := h.pool.Exec(ctx, `DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gnvipi_app') THEN
+			CREATE ROLE gnvipi_app LOGIN;
+		END IF;
+		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gnvipi_maintenance') THEN
+			CREATE ROLE gnvipi_maintenance LOGIN;
+		END IF;
+	END $$`); err != nil {
+		t.Skipf("test database user cannot create roles: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `
+		GRANT USAGE ON SCHEMA public TO gnvipi_app, gnvipi_maintenance;
+		GRANT SELECT ON nvidia_models, config_state, providers, provider_keys, key_models, model_state, settings TO gnvipi_app;
+		REVOKE INSERT, UPDATE, DELETE ON nvidia_models FROM gnvipi_app;
+		GRANT SELECT, INSERT, DELETE ON nvidia_models TO gnvipi_maintenance;
+	`); err != nil {
+		t.Fatalf("configure role grants: %v", err)
+	}
+
+	appCfg, err := pgxpool.ParseConfig(h.pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	appCfg.ConnConfig.User = "gnvipi_app"
+	appPool, err := pgxpool.NewWithConfig(ctx, appCfg)
+	if err != nil {
+		t.Fatalf("open appPool: %v", err)
+	}
+	t.Cleanup(appPool.Close)
+
+	maintCfg, err := pgxpool.ParseConfig(h.pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("parse maint config: %v", err)
+	}
+	maintCfg.ConnConfig.User = "gnvipi_maintenance"
+	maintPool, err := pgxpool.NewWithConfig(ctx, maintCfg)
+	if err != nil {
+		t.Fatalf("open maintPool: %v", err)
+	}
+	t.Cleanup(maintPool.Close)
+
+	stubNvidiaDiscovery(t, rescanFixture(
+		models.PlaygroundRow{Model: "acme/role-test", Slug: "role-test", Namespace: "qc69jvmznzxy", FunctionID: "77777777-7777-7777-7777-777777777777"},
+	))
+
+	// Runtime role must fail to write nvidia_models.
+	deniedPrefs := &modelPrefs{catalogRead: appPool, catalogWrite: appPool}
+	if _, err := deniedPrefs.rescanNvidiaCatalog(ctx); err == nil {
+		t.Fatal("expected rescan with gnvipi_app to fail, but it succeeded")
+	}
+
+	// Maintenance role must succeed in writing nvidia_models.
+	prefsA := &modelPrefs{catalogRead: appPool, catalogWrite: maintPool}
+	res, err := prefsA.rescanNvidiaCatalog(ctx)
+	if err != nil {
+		t.Fatalf("rescan with gnvipi_maintenance: %v", err)
+	}
+	if res.Added != 1 {
+		t.Fatalf("res.Added = %d, want 1", res.Added)
 	}
 }

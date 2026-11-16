@@ -22,7 +22,7 @@ grant privileges only to that name.
 |---|---|---|---|
 | `gnvipi_migrate` | `GNVIPI_MIGRATION_DATABASE_URL` | DDL and migrations | Owns the database and schema objects, or has `CREATE` on `public`. Required in production. |
 | `gnvipi_app` | `GNVIPI_DATABASE_URL` | Runtime application | `SELECT, INSERT, UPDATE, DELETE` on identity and configuration tables; `SELECT` on `config_state`, `schema_migrations` and `nvidia_models`; `INSERT` only on `audit_log`. No DDL, no `audit_log` update or delete. |
-| `gnvipi_maintenance` | `GNVIPI_MAINTENANCE_DATABASE_URL` | Retention only | `SELECT, DELETE` on `audit_log`. Optional; without it audit pruning is skipped. |
+| `gnvipi_maintenance` | `GNVIPI_MAINTENANCE_DATABASE_URL` | Retention and catalog writes | `SELECT, DELETE` on `audit_log`; `SELECT, INSERT, DELETE` on `nvidia_models`. Optional; without it audit pruning is skipped and production catalog rescans fail. |
 
 `gnvipi_migrate` and `gnvipi_maintenance` are example names; only `gnvipi_app`
 is fixed by the migrations.
@@ -40,12 +40,13 @@ CREATE DATABASE gnvipi OWNER gnvipi_migrate;
 ```
 
 Then run the migrations (below), which create the tables and grant the runtime
-role. Finally grant the maintenance role its single table:
+role. Finally grant the maintenance role its retention and catalog tables:
 
 ```sql
 \c gnvipi
 GRANT USAGE ON SCHEMA public TO gnvipi_maintenance;
 GRANT SELECT, DELETE ON audit_log TO gnvipi_maintenance;
+GRANT SELECT, INSERT, DELETE ON nvidia_models TO gnvipi_maintenance;
 ```
 
 Migration 0002 rejects a runtime role that is a superuser, can create roles or

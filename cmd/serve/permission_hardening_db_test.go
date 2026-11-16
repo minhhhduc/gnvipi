@@ -463,6 +463,13 @@ func TestDBAdminPermission_RuntimeRoleCannotTamperWithAuditRows(t *testing.T) {
 	if _, err := runtime.Exec(ctx, string(superuserRole)); err != nil {
 		t.Fatalf("apply superuser rename migration: %v", err)
 	}
+	maintGrants, err := migrations.FS.ReadFile("0008_maintenance_catalog_grants.up.sql")
+	if err != nil {
+		t.Fatalf("read maintenance catalog grants migration: %v", err)
+	}
+	if _, err := runtime.Exec(ctx, string(maintGrants)); err != nil {
+		t.Fatalf("apply maintenance catalog grants migration: %v", err)
+	}
 
 	conn, err := runtime.Acquire(ctx)
 	if err != nil {

@@ -985,6 +985,21 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 	if _, err := conn.Exec(ctx, string(v3)); err != nil {
 		t.Fatalf("apply v3 migration: %v", err)
 	}
+	if _, err := conn.Exec(ctx, `DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gnvipi_maintenance') THEN
+			CREATE ROLE gnvipi_maintenance LOGIN;
+		END IF;
+	END $$`); err != nil {
+		t.Fatalf("ensure gnvipi_maintenance role: %v", err)
+	}
+	v8, err := migrations.FS.ReadFile("0008_maintenance_catalog_grants.up.sql")
+	if err != nil {
+		t.Fatalf("read v8 migration: %v", err)
+	}
+	if _, err := conn.Exec(ctx, string(v8)); err != nil {
+		t.Fatalf("apply v8 migration: %v", err)
+	}
 
 	checks := []struct {
 		name  string
@@ -1005,6 +1020,10 @@ func TestRuntimeRoleHasLeastPrivilegeGrants(t *testing.T) {
 		{"nvidia catalog read", `SELECT has_table_privilege('gnvipi_app', 'nvidia_models', 'SELECT')`, true},
 		{"nvidia catalog write denied", `SELECT NOT has_table_privilege('gnvipi_app', 'nvidia_models', 'INSERT')
 			AND NOT has_table_privilege('gnvipi_app', 'nvidia_models', 'DELETE')`, true},
+		{"maintenance catalog write", `SELECT has_table_privilege('gnvipi_maintenance', 'nvidia_models', 'SELECT')
+			AND has_table_privilege('gnvipi_maintenance', 'nvidia_models', 'INSERT')
+			AND has_table_privilege('gnvipi_maintenance', 'nvidia_models', 'DELETE')`, true},
+		{"maintenance users denied", `SELECT NOT has_table_privilege('gnvipi_maintenance', 'users', 'SELECT')`, true},
 		{"runtime role does not own tables", `SELECT NOT EXISTS (
 			SELECT 1 FROM pg_class WHERE relkind = 'r' AND pg_get_userbyid(relowner) = 'gnvipi_app')`, true},
 	}
