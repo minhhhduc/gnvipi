@@ -84,6 +84,16 @@ services:
       # Uncomment to enable /admin when publishing on non-loopback addresses.
       # GNVIPI_ADMIN_TOKEN: ${GNVIPI_ADMIN_TOKEN:-}
 
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    network_mode: "service:serve"
+    depends_on:
+      serve:
+        condition: service_started
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL:-}
+
 volumes:
   gnvipi_db:
   gnvipi_pgsock:
