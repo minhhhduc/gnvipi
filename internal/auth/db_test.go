@@ -1031,6 +1031,22 @@ func TestEnsureRootSeedsOnceDB(t *testing.T) {
 	if auditCount(t, db, "user.root.create") != 1 {
 		t.Fatal("the second start seeded a duplicate root audit entry")
 	}
+
+	// An empty root email is backfilled once, then preserved across restarts.
+	third, created, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Email: "root@example.test", Password: "another-password"}, cfg)
+	if err != nil {
+		t.Fatalf("backfill root email: %v", err)
+	}
+	if created || third.Email != "root@example.test" {
+		t.Fatalf("expected root email backfill, got %+v created=%v", third, created)
+	}
+	fourth, _, err := EnsureRoot(ctx, db, RootInput{Username: RootUsername, Email: "other@example.test", Password: "another-password"}, cfg)
+	if err != nil {
+		t.Fatalf("preserve root email: %v", err)
+	}
+	if fourth.Email != "root@example.test" {
+		t.Fatalf("expected existing root email preserved, got %q", fourth.Email)
+	}
 }
 
 func TestEnsureRootPromotesExistingAccountDB(t *testing.T) {

@@ -244,6 +244,7 @@ const RootUsername = "gnvipi"
 // RootInput is the built-in root account request.
 type RootInput struct {
 	Username           string
+	Email              string
 	Password           string
 	MustChangePassword bool
 }
@@ -280,11 +281,13 @@ func EnsureRoot(ctx context.Context, db DB, in RootInput, cfg BootstrapConfig) (
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('gnvipi:root'))`); err != nil {
 		return nil, false, err
 	}
+	email := strings.TrimSpace(in.Email)
 	u, err := GetUserByUsername(ctx, tx, username)
 	switch {
 	case errors.Is(err, ErrUserNotFound):
 		u, err = CreateUser(ctx, tx, CreateUserInput{
 			Username:           username,
+			Email:              email,
 			DisplayName:        "Root",
 			Role:               RoleRoot,
 			PasswordHash:       hash,
@@ -303,6 +306,15 @@ func EnsureRoot(ctx context.Context, db DB, in RootInput, cfg BootstrapConfig) (
 	case err != nil:
 		return nil, false, err
 	case u.Role == RoleRoot:
+		if u.Email == "" && email != "" {
+			u, err = UpdateUser(ctx, tx, u.ID, UpdateUserInput{Email: &email})
+			if err != nil {
+				return nil, false, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, false, err
+			}
+		}
 		return u, false, nil
 	}
 

@@ -14,6 +14,9 @@ const (
 	// rootPasswordEnv overrides the seeded root password. A password set here is
 	// taken as final: the account is not forced to change it.
 	rootPasswordEnv = "GNVIPI_ROOT_PASSWORD"
+	// rootEmailEnv optionally sets the built-in root account email on first seed
+	// (or backfills it when the root account has no email yet).
+	rootEmailEnv = "GNVIPI_ROOT_EMAIL"
 	// defaultRootPassword is the documented first-sign-in credential for the
 	// built-in root account. Seeding it sets must_change_password, so the
 	// console answers nothing else until a real password is chosen.
@@ -32,6 +35,7 @@ func ensureRootAccount(ctx context.Context, state *authState) error {
 	}
 	user, created, err := auth.EnsureRoot(ctx, state.pool, auth.RootInput{
 		Username:           auth.RootUsername,
+		Email:              os.Getenv(rootEmailEnv),
 		Password:           password,
 		MustChangePassword: mustChange,
 	}, state.password)
