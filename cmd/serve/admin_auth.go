@@ -29,7 +29,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 		// still plant a session in the victim's browser. Requests that carry an
 		// Origin/Sec-Fetch-Site must be same-origin; headerless clients are
 		// non-browser callers.
-		if !adminSameOrigin(c.Request) {
+		if !adminSameOriginWithProxies(c.Request, state.clientIPs) {
 			adminAPIError(c, http.StatusForbidden, "cross_origin", "cross-origin sign-in rejected")
 			return
 		}
@@ -118,7 +118,7 @@ func handleAdminLogin(state *authState) gin.HandlerFunc {
 			return
 		}
 
-		secure := adminTLSRequest(c.Request)
+		secure := state.requestIsHTTPS(c.Request)
 		expireLegacyAdminCookies(c, secure)
 		http.SetCookie(c.Writer, auth.SessionCookie(raw, secure, state.sessions))
 		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, secure, state.sessions.AbsoluteTimeout))
@@ -159,8 +159,9 @@ func handleAdminSession(state *authState) gin.HandlerFunc {
 			adminAPIError(c, http.StatusInternalServerError, "session_unavailable", "could not refresh the admin session")
 			return
 		}
-		expireLegacyAdminCookies(c, adminTLSRequest(c.Request))
-		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, adminTLSRequest(c.Request), state.sessions.AbsoluteTimeout))
+		secure := state.requestIsHTTPS(c.Request)
+		expireLegacyAdminCookies(c, secure)
+		http.SetCookie(c.Writer, auth.CSRFCookie(csrf, secure, state.sessions.AbsoluteTimeout))
 		c.JSON(http.StatusOK, gin.H{
 			"user":       adminUserJSON(user),
 			"csrf_token": csrf,

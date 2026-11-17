@@ -372,7 +372,7 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 				return
 			}
 			if !identity.ViaToken {
-				if failure := verifyAdminCookieWrite(c); failure != nil {
+				if failure := verifyAdminCookieWriteWithProxies(c, state.clientIPs); failure != nil {
 					adminFailureResponse(c, failure)
 					return
 				}
@@ -406,11 +406,16 @@ func adminAPIAuthorization(state *authState) gin.HandlerFunc {
 	}
 }
 
+func (s *authState) requestIsHTTPS(r *http.Request) bool {
+	return adminTLSRequestWithProxies(r, s.clientIPs)
+}
+
 // cookieTransportAllowed mirrors the file-token policy: a browser session is
-// issued and accepted over TLS, or over plaintext only on a loopback bind whose
-// request authority is also loopback. Bearer tokens are unaffected.
+// issued and accepted over TLS (including behind a trusted HTTPS proxy), or
+// over plaintext only on a loopback bind whose request authority is also
+// loopback. Bearer tokens are unaffected.
 func (s *authState) cookieTransportAllowed(r *http.Request) bool {
-	return adminTLSRequest(r) || (s.loopbackBind && adminLoopbackRequest(r))
+	return s.requestIsHTTPS(r) || (s.loopbackBind && adminLoopbackRequest(r))
 }
 
 // identify resolves the caller from the session cookie, then from an admin API
@@ -535,6 +540,10 @@ func (s *authState) bootstrapIdentity(ctx context.Context, raw string) (*adminId
 // verifyAdminCookieWrite enforces the double-submit token and the same-origin
 // rule for state-changing requests authenticated by the session cookie.
 func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
+	return verifyAdminCookieWriteWithProxies(c, clientIPResolver{})
+}
+
+func verifyAdminCookieWriteWithProxies(c *gin.Context, trusted clientIPResolver) *adminAuthFailure {
 	switch c.Request.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return nil
@@ -558,7 +567,7 @@ func verifyAdminCookieWrite(c *gin.Context) *adminAuthFailure {
 			message: "invalid or missing CSRF token",
 		}
 	}
-	origin, ok := adminRequestOrigin(c.Request)
+	origin, ok := adminRequestOriginWithProxies(c.Request, trusted)
 	if !ok || !auth.CheckOrigin(c.Request, origin) {
 		return &adminAuthFailure{
 			status:  http.StatusForbidden,
@@ -600,8 +609,12 @@ func bearerCredential(r *http.Request) (raw string, present, wellFormed bool) {
 // adminRequestOrigin rebuilds this listener's own origin so the CSRF origin
 // check compares the request against the same scheme and host it arrived on.
 func adminRequestOrigin(r *http.Request) (string, bool) {
+	return adminRequestOriginWithProxies(r, clientIPResolver{})
+}
+
+func adminRequestOriginWithProxies(r *http.Request, trusted clientIPResolver) (string, bool) {
 	scheme := "http"
-	if adminTLSRequest(r) {
+	if adminTLSRequestWithProxies(r, trusted) {
 		scheme = "https"
 	}
 	return adminOrigin(scheme + "://" + r.Host)

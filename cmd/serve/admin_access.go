@@ -211,6 +211,20 @@ func adminTLSRequest(r *http.Request) bool {
 	return r.TLS != nil && r.TLS.HandshakeComplete
 }
 
+func adminTLSRequestWithProxies(r *http.Request, trusted clientIPResolver) bool {
+	if adminTLSRequest(r) {
+		return true
+	}
+	if r == nil {
+		return false
+	}
+	peer, ok := parseRequestIP(r.RemoteAddr)
+	if !ok || !trusted.isTrusted(peer) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
 // Compare full origins, including scheme and effective port. Origin is a
 // serialized origin, not a URL with credentials, paths, queries, or fragments.
 func adminOrigin(raw string) (string, bool) {
@@ -246,11 +260,15 @@ func adminOrigin(raw string) (string, bool) {
 }
 
 func adminSameOrigin(r *http.Request) bool {
+	return adminSameOriginWithProxies(r, clientIPResolver{})
+}
+
+func adminSameOriginWithProxies(r *http.Request, trusted clientIPResolver) bool {
 	if sites, present := r.Header["Sec-Fetch-Site"]; present && (len(sites) != 1 || sites[0] != "same-origin") {
 		return false
 	}
 	scheme := "http"
-	if adminTLSRequest(r) {
+	if adminTLSRequestWithProxies(r, trusted) {
 		scheme = "https"
 	}
 	target, validTarget := adminOrigin(scheme + "://" + r.Host)
