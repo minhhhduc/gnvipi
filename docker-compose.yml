@@ -78,6 +78,8 @@ services:
       GNVIPI_MASTER_KEY: "${GNVIPI_MASTER_KEY:-}"
       GNVIPI_MASTER_KEY_VERSION: ${GNVIPI_MASTER_KEY_VERSION:-1}
       GNVIPI_DB_MAX_CONNS: ${GNVIPI_DB_MAX_CONNS:-10}
+      # Trust loopback proxies (e.g. cloudflared sidecar) for X-Forwarded-Proto.
+      GNVIPI_TRUSTED_PROXIES: ${GNVIPI_TRUSTED_PROXIES:-127.0.0.1/32,::1/128}
       # Development may reuse the runtime DSN; production requires a separate
       # DDL role through GNVIPI_MIGRATION_DATABASE_URL.
       # GNVIPI_MIGRATION_DATABASE_URL: ${GNVIPI_MIGRATION_DATABASE_URL:-}
