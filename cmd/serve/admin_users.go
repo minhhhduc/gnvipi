@@ -447,7 +447,7 @@ func handleAdminRevokeUser(state *authState) gin.HandlerFunc {
 		}
 		gatewayTokenCache.PurgeAll()
 		if sameUserID(target.ID, identity.UserID) {
-			adminClearCredentials(c)
+			adminClearCredentials(c, state.requestIsHTTPS(c.Request))
 		}
 		c.JSON(http.StatusOK, gin.H{"revoked_sessions": sessions, "revoked_tokens": tokens})
 	}
