@@ -1717,3 +1717,27 @@ func TestAdapterSmokeChatToolOrdering(t *testing.T) {
 		t.Fatalf("tool schema not normalized: %s", reqs[0].Body)
 	}
 }
+func TestAdapterSmokeNoAnthropicWireExtensionLeak(t *testing.T) {
+	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+	upstream := runAdapterSmoke(t,
+		gatewaytest.RouteMessages,
+		`{"model":"smoke-model","max_tokens":16,"system":[{"type":"text","text":"be terse"}],"anthropic_version":"2023-06-01","betas":["prompt-caching-2024-07-31"],"context_management":{"edits":[]},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`,
+		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+
+	reqs := upstream.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream requests = %d", len(reqs))
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("decode upstream request: %v; body: %s", err, reqs[0].Body)
+	}
+	for _, name := range []string{"system", "thinking", "output_config", "context_management", "anthropic_version", "betas"} {
+		if _, found := body[name]; found {
+			t.Fatalf("Anthropic wire field %q leaked to the Chat upstream: %s", name, reqs[0].Body)
+		}
+	}
+	if string(body["model"]) != `"upstream-model"` || len(body["messages"]) == 0 {
+		t.Fatalf("request did not reach the Chat upstream intact: %s", reqs[0].Body)
+	}
+}

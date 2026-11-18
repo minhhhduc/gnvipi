@@ -146,7 +146,8 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 
 func normalizedRequestField(name string) bool {
 	switch name {
-	case "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "temperature", "top_p", "top_k", "stop", "max_tokens", "max_completion_tokens", "seed", "n", "stream", "stream_options", "response_format", "reasoning", "reasoning_effort", "user":
+	case "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "temperature", "top_p", "top_k", "stop", "max_tokens", "max_completion_tokens", "seed", "n", "stream", "stream_options", "response_format", "reasoning", "reasoning_effort", "user",
+		"system", "thinking", "output_config", "metadata", "context_management", "anthropic_version", "betas":
 		return true
 	default:
 		return false

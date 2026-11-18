@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/adaptertest"
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
+	"github.com/minhhhduc/gnvipi/internal/gateway/inbound/anthropic"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound/openaichat"
 )
@@ -705,5 +707,44 @@ func TestBuildRequestKeepsAssistantTextWithToolCalls(t *testing.T) {
 	}
 	if len(messages) != 1 || string(messages[0].Content) != `"checking"` {
 		t.Fatalf("messages = %s", fields["messages"])
+	}
+}
+func TestBuildRequestDropsAnthropicWireExtensions(t *testing.T) {
+	fields := buildChatFields(t, &ir.Request{
+		Model:    "client-alias",
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Extensions: map[string]json.RawMessage{
+			"system":             json.RawMessage(`[{"type":"text","text":"be brief","cache_control":{"type":"ephemeral"}}]`),
+			"thinking":           json.RawMessage(`{"type":"adaptive"}`),
+			"output_config":      json.RawMessage(`{"effort":"high"}`),
+			"metadata":           json.RawMessage(`{"user_id":"u","future":true}`),
+			"context_management": json.RawMessage(`{"edits":[]}`),
+			"anthropic_version":  json.RawMessage(`"2023-06-01"`),
+			"betas":              json.RawMessage(`["prompt-caching-2024-07-31"]`),
+			"vendor_extension":   json.RawMessage(`{"keep":true}`),
+			"service_tier":       json.RawMessage(`"auto"`),
+		},
+	})
+	for _, name := range []string{"system", "thinking", "output_config", "metadata", "context_management", "anthropic_version", "betas"} {
+		if _, found := fields[name]; found {
+			t.Fatalf("%s leaked into the OpenAI Chat request", name)
+		}
+	}
+	if string(fields["vendor_extension"]) != `{"keep":true}` || string(fields["service_tier"]) != `"auto"` {
+		t.Fatalf("legitimate extensions dropped: %s", fields)
+	}
+}
+
+func TestClaudeRequestDoesNotLeakAnthropicFields(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":32,"system":[{"type":"text","text":"be brief","cache_control":{"type":"ephemeral"}}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"context_management":{"edits":[]},"messages":[{"role":"user","content":"hi"}]}`
+	decoded, err := anthropic.New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := buildChatFields(t, decoded)
+	for _, name := range []string{"system", "thinking", "output_config", "metadata", "context_management", "anthropic_version", "betas"} {
+		if _, found := fields[name]; found {
+			t.Fatalf("%s leaked into the OpenAI Chat request", name)
+		}
 	}
 }

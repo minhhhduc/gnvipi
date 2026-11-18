@@ -598,3 +598,47 @@ func TestEncodeToolResultEmptyContent(t *testing.T) {
 		t.Errorf("input[0] = %+v, want empty output string", wire.Input[0])
 	}
 }
+
+func TestBuildRequestReservesAnthropicWireExtensions(t *testing.T) {
+	input := &ir.Request{
+		Model:    "client-alias",
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Extensions: map[string]json.RawMessage{
+			"system":             json.RawMessage(`[{"type":"text","text":"be brief"}]`),
+			"thinking":           json.RawMessage(`{"type":"adaptive"}`),
+			"output_config":      json.RawMessage(`{"effort":"high"}`),
+			"anthropic_version":  json.RawMessage(`"2023-06-01"`),
+			"betas":              json.RawMessage(`["prompt-caching-2024-07-31"]`),
+			"metadata":           json.RawMessage(`{"user_id":"u"}`),
+			"context_management": json.RawMessage(`{"edits":[]}`),
+			"vendor_extension":   json.RawMessage(`{"keep":true}`),
+		},
+	}
+	request, err := openairesponses.New().BuildRequest(t.Context(), input, adapter.Target{BaseURL: "https://upstream.invalid/v1", Model: "upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := request.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"system", "thinking", "output_config", "anthropic_version", "betas"} {
+		if _, found := fields[name]; found {
+			t.Fatalf("%s leaked into the OpenAI Responses request", name)
+		}
+	}
+	for _, name := range []string{"metadata", "context_management", "vendor_extension"} {
+		if _, found := fields[name]; !found {
+			t.Fatalf("legitimate Responses field %s dropped", name)
+		}
+	}
+}
