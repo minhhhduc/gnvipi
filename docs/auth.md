@@ -132,6 +132,9 @@ lists what superuser, admin and user reach.
 
 Notes:
 
+- Every signed-in role polls stats after any mandatory password change. User
+  accounts see only their own request events on Dashboard and Usage log,
+  including historical frames; global model and traffic aggregates stay hidden.
 - An admin can read every provider key's metadata but cannot read a secret. On a
   key owned by someone else, or a shared key, an admin may only disable it; the
   name, scheme, credential and deletion stay with the owner or the key's user.
