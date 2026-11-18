@@ -7,7 +7,7 @@ import { GatewayContext, type Page } from "./lib/context";
 import type { Stats } from "./lib/types";
 import { LoginScreen, PasswordChangeScreen } from "./components/Login";
 import { Shell } from "./components/Shell";
-import { Card, Empty, PageHeader, ThemeContext, UiContext, type UiApi } from "./components/ui";
+import { ThemeContext, UiContext, type UiApi } from "./components/ui";
 import { StatsView } from "./views/Stats";
 import { UsageLogView } from "./views/UsageLog";
 import { PlaygroundView } from "./views/Playground";
@@ -54,7 +54,6 @@ export function App() {
   const statsPoller = useRef<Poller | null>(null);
   const consoleReady = authChecked && user !== null && authScreenFor(user) === "console";
   const effectivePage = user && pageAllowed(page, user.role) ? page : "stats";
-  const statsPollingAllowed = consoleReady && isOperatorRole(user?.role);
 
   const invalidateIdentityData = useCallback(() => {
     identityGeneration.current += 1;
@@ -143,7 +142,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!statsPollingAllowed) return;
+    if (!consoleReady) return;
     const poller = createPoller(async (signal) => {
       const generation = identityGeneration.current;
       try {
@@ -178,7 +177,7 @@ export function App() {
       poller.stop();
       if (statsPoller.current === poller) statsPoller.current = null;
     };
-  }, [refreshStats, statsPollingAllowed]);
+  }, [consoleReady, refreshStats]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -246,18 +245,8 @@ export function App() {
     effectivePage === "playground" ? <PlaygroundView user={user} /> :
     effectivePage === "api" ? <ApiView /> :
     effectivePage === "audit" ? <AuditView user={user} /> :
-    effectivePage === "usage" ? <UsageLogView /> :
-    !operator ? (
-      <>
-        <PageHeader title="Dashboard" sub="Usage for this gateway account" />
-        <Card>
-          <Empty
-            title="Per-user stats are not available yet"
-            body="Request attribution is still pending. Operator statistics are never shown to user accounts."
-          />
-        </Card>
-      </>
-    ) :
+    // User dashboards show scoped request logs, never global aggregate charts.
+    effectivePage === "usage" || !operator ? <UsageLogView /> :
     effectivePage === "config" ? <ConfigView user={user} /> :
     effectivePage === "chromes" ? <ChromesView /> :
     <StatsView />;

@@ -5,6 +5,12 @@ We are thrilled to announce the official release of **Universal LLM API Gateway 
 This release marks the evolution of `gnvipi` from a specialized NVIDIA Playground reverse-proxy into a comprehensive, high-performance **Universal LLM API Gateway**. The gateway acts as a local adapter hub that allows AI coding agents (Claude Code, OpenAI SDKs, Codex, OpenCode, cURL) to communicate seamlessly with any upstream provider (OpenAI-compatible, Anthropic-compatible, OpenAI Responses, NVIDIA Playground, or custom endpoints) regardless of protocol differences.
 
 ---
+## Fixes
+
+- **Admin Console (#444):** User accounts can read their own live and historical
+  request logs. Scoped stats preserve the JSON array schema without exposing
+  global traffic; polling stops on logout and waits for mandatory password changes.
+
 
 ## Highlights & Key Capabilities
 

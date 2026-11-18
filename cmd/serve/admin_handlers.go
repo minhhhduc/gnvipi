@@ -27,9 +27,9 @@ func userStatsView(data gin.H, userID string) gin.H {
 	out := make(gin.H, len(data))
 	for key, value := range data {
 		switch key {
-		case "models", "series_by_model":
+		case "series_by_model":
 			out[key] = map[string]any{}
-		case "series":
+		case "models", "series":
 			out[key] = []any{}
 		case "events":
 			events, ok := value.([]nvidia.RequestEvent)
