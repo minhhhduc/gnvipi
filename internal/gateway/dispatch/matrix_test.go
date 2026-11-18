@@ -1673,3 +1673,47 @@ func TestAdapterSmokeMessageSystemRole(t *testing.T) {
 		t.Fatalf("message-level system reminder lost: %q", reminder)
 	}
 }
+func TestAdapterSmokeChatToolOrdering(t *testing.T) {
+	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+	upstream := runAdapterSmoke(t,
+		gatewaytest.RouteMessages,
+		`{"model":"smoke-model","max_tokens":32,"tools":[{"name":"lookup","description":"look up","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"find x"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"lookup","input":{"q":"x"}}]},{"role":"user","content":[{"type":"text","text":"before"},{"type":"tool_result","tool_use_id":"c1","content":"found"},{"type":"text","text":"after"}]}]}`,
+		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+
+	reqs := upstream.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream requests = %d", len(reqs))
+	}
+	var body struct {
+		Messages []struct {
+			Role       string            `json:"role"`
+			Content    json.RawMessage   `json:"content"`
+			ToolCalls  []json.RawMessage `json:"tool_calls"`
+			ToolCallID string            `json:"tool_call_id"`
+		} `json:"messages"`
+		Tools []struct {
+			Function struct {
+				Parameters json.RawMessage `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("decode upstream request: %v; body: %s", err, reqs[0].Body)
+	}
+	roles := make([]string, 0, len(body.Messages))
+	for _, message := range body.Messages {
+		roles = append(roles, message.Role)
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,user" {
+		t.Fatalf("upstream roles = %v, want user,assistant,tool,user; body: %s", roles, reqs[0].Body)
+	}
+	if len(body.Messages[1].ToolCalls) != 1 || string(body.Messages[1].Content) != `""` {
+		t.Fatalf("assistant tool turn = %s", reqs[0].Body)
+	}
+	if body.Messages[2].ToolCallID != "c1" {
+		t.Fatalf("tool message = %s", reqs[0].Body)
+	}
+	if len(body.Tools) != 1 || !strings.Contains(string(body.Tools[0].Function.Parameters), `"properties":{}`) {
+		t.Fatalf("tool schema not normalized: %s", reqs[0].Body)
+	}
+}
