@@ -405,7 +405,7 @@ func TestReasoningMultiTurnSignaturePreservationAndStripping(t *testing.T) {
 	})
 
 	// 3. Anthropic -> OpenAIResponses: signature MUST be stripped!
-	t.Run("anthropic-to-responses-strips-signature", func(t *testing.T) {
+	t.Run("anthropic-to-responses-drops-untrusted-reasoning", func(t *testing.T) {
 		upstream := gatewaytest.New(t)
 		upstream.Script(gatewaytest.RouteResponses, gatewaytest.Step{
 			Status: http.StatusOK,
@@ -455,14 +455,23 @@ func TestReasoningMultiTurnSignaturePreservationAndStripping(t *testing.T) {
 		if err := json.Unmarshal([]byte(reqs[0].Body), &wireReq); err != nil {
 			t.Fatal(err)
 		}
-		foundReasoning := false
+		// Responses only accepts a reasoning item it issued itself (it needs the
+		// upstream item id and encrypted_content). A translated turn carries
+		// neither, and replaying a synthesized summary makes the upstream reject
+		// the request, so the item must be absent (issue #455).
 		for _, item := range wireReq.Input {
 			if item["type"] == "reasoning" {
-				foundReasoning = true
+				t.Errorf("untrusted reasoning item forwarded: %+v", wireReq.Input)
 			}
 		}
-		if !foundReasoning {
-			t.Errorf("expected reasoning item in responses input: %+v", wireReq.Input)
+		foundText := false
+		for _, item := range wireReq.Input {
+			if item["role"] == "assistant" {
+				foundText = true
+			}
+		}
+		if !foundText {
+			t.Errorf("assistant text turn lost: %+v", wireReq.Input)
 		}
 	})
 }

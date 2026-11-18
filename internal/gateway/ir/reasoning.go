@@ -31,6 +31,8 @@ func NormalizeReasoningEffort(effort string) ReasoningEffort {
 		return ReasoningEffortMedium
 	case "high", "xhigh", "max":
 		return ReasoningEffortHigh
+	case "none", "off", "disabled":
+		return ""
 	default:
 		return ReasoningEffort(effort)
 	}

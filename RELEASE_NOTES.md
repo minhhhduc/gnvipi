@@ -7,6 +7,14 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
 ---
 ## Fixes
 
+- **Cross-protocol agent histories (#454–#457):** Keep mid-turn OpenAI instructions
+  in place and attach delayed tool results to their owning calls. Normalize
+  parameterless calls and missing tool schemas; filter protocol-owned fields.
+  Drop historical reasoning that cannot be authenticated by the target protocol,
+  honor disabled thinking, and ignore whitespace-only reasoning starts. Responses
+  streams accept type-only reasoning prototypes, and long OpenAI user identifiers
+  use stable SHA-256 hashes instead of exceeding the 64-character wire limit.
+
 - **Admin Console (#444):** User accounts can read their own live and historical
   request logs. Scoped stats preserve the JSON array schema without exposing
   global traffic; polling stops on logout and waits for mandatory password changes.

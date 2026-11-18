@@ -222,7 +222,16 @@ func decodeResponsesInput(result *ir.Request, raw json.RawMessage) error {
 			}
 			switch message.Role {
 			case "system", "developer":
-				result.Instructions = append(result.Instructions, ir.Instruction{Role: ir.InstructionRole(message.Role), Content: blocks})
+				// A leading instruction is out-of-band for every protocol, so it
+				// stays in Instructions. One that arrives mid-conversation keeps
+				// its position as an in-band message: OpenAI Chat and the
+				// Responses API both model that, and hoisting it would reorder
+				// the turn the client sent (issue #454).
+				if len(result.Messages) == 0 {
+					result.Instructions = append(result.Instructions, ir.Instruction{Role: ir.InstructionRole(message.Role), Content: blocks})
+				} else {
+					result.Messages = append(result.Messages, ir.Message{Role: ir.Role(message.Role), Content: blocks})
+				}
 			case "user", "assistant":
 				result.Messages = append(result.Messages, ir.Message{Role: ir.Role(message.Role), Content: blocks})
 			default:
@@ -245,11 +254,31 @@ func decodeResponsesInput(result *ir.Request, raw json.RawMessage) error {
 			if callID == "" || call.Name == "" {
 				return invalidResponses("function_call requires call_id and name")
 			}
-			var arguments string
-			if absentResponsesJSON(call.Arguments) || json.Unmarshal(call.Arguments, &arguments) != nil {
-				return invalidResponses("function_call arguments must be a JSON string")
+			// Responses documents arguments as a JSON string, but clients also
+			// send an object or nothing at all for a parameterless call, and a
+			// replay of such a call must not fail the whole request
+			// (issue #454).
+			input := json.RawMessage(nil)
+			switch trimmed := bytes.TrimSpace(call.Arguments); {
+			case absentResponsesJSON(trimmed):
+			case len(trimmed) > 0 && trimmed[0] == '"':
+				var arguments string
+				if err := json.Unmarshal(trimmed, &arguments); err != nil {
+					return invalidResponses("function_call arguments must be a JSON string")
+				}
+				if arguments != "" {
+					if responsesJSONObject(json.RawMessage(arguments)) {
+						input = json.RawMessage(arguments)
+					} else {
+						input = trimmed
+					}
+				}
+			case responsesJSONObject(trimmed):
+				input = trimmed
+			default:
+				return invalidResponses("function_call arguments must be a JSON object or a JSON string")
 			}
-			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock(callID, call.Name, call.Arguments)))
+			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewToolUseBlock(callID, call.Name, input)))
 		case "function_call_output":
 			var output struct {
 				CallID string          `json:"call_id"`
@@ -269,7 +298,6 @@ func decodeResponsesInput(result *ir.Request, raw json.RawMessage) error {
 					Type string `json:"type"`
 					Text string `json:"text"`
 				} `json:"summary"`
-				EncryptedContent string `json:"encrypted_content"`
 			}
 			if err := json.Unmarshal(item, &reasoning); err != nil {
 				return invalidResponses("reasoning fields have invalid types")
@@ -280,7 +308,9 @@ func decodeResponsesInput(result *ir.Request, raw json.RawMessage) error {
 					summary.WriteString(part.Text)
 				}
 			}
-			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewReasoningBlock(summary.String(), reasoning.EncryptedContent)))
+			// Responses ciphertext is not an Anthropic thinking signature. Native
+			// Responses replay uses the raw same-protocol relay, not this IR path.
+			result.Messages = append(result.Messages, ir.NewMessage(ir.RoleAssistant, ir.NewReasoningBlock(summary.String(), "")))
 		case "item_reference":
 			return unsupportedResponses("item references require a stateful Responses upstream")
 		}

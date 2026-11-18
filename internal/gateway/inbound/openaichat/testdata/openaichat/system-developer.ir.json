@@ -9,6 +9,17 @@
           "text": "First developer"
         }
       ]
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Question"
+        }
+      ]
     },
     {
       "role": "system",
@@ -25,17 +36,6 @@
         {
           "type": "text",
           "text": "Third developer"
-        }
-      ]
-    }
-  ],
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "Question"
         }
       ]
     },

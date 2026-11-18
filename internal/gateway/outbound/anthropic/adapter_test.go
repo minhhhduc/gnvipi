@@ -331,3 +331,55 @@ func TestAnthropicWithProvider(t *testing.T) {
 		t.Fatal("expected configured adapter to have StructuredOutput = true")
 	}
 }
+
+// #454/#456: an Anthropic upstream has no in-band system role, and it only
+// accepts a thinking block it can verify, so translated history must fold the
+// former into system and drop the latter.
+func TestBuildRequestFoldsSystemAndDropsUnsignedThinking(t *testing.T) {
+	input := &ir.Request{
+		Model: "client-alias",
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi")),
+			ir.NewMessage(ir.RoleAssistant,
+				ir.NewReasoningBlock("unsigned plan", ""),
+				ir.NewTextBlock("ok"),
+			),
+			ir.NewMessage(ir.RoleSystem, ir.NewTextBlock("be terse")),
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("again")),
+		},
+	}
+	request, err := anthropic.New().BuildRequest(t.Context(), input, adapter.Target{BaseURL: "https://upstream.invalid", Model: "upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := request.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		System   []map[string]any `json:"system"`
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.System) != 1 || wire.System[0]["text"] != "be terse" {
+		t.Fatalf("mid-turn system message not folded into system: %s", body)
+	}
+	if len(wire.Messages) != 3 || wire.Messages[1].Role != "assistant" {
+		t.Fatalf("wire messages = %s", body)
+	}
+	for _, block := range wire.Messages[1].Content {
+		if block["type"] == "thinking" {
+			t.Fatalf("unsigned thinking forwarded: %s", body)
+		}
+	}
+}

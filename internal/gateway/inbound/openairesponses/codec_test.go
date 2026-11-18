@@ -173,8 +173,6 @@ func TestResponsesRequiredItemFields(t *testing.T) {
 		{"message-content-null", `{"role":"user","content":null}`},
 		{"part-type-missing", `{"role":"user","content":[{"text":"hello"}]}`},
 		{"part-type-null", `{"role":"user","content":[{"type":null,"text":"hello"}]}`},
-		{"call-arguments-missing", `{"type":"function_call","call_id":"call_a","name":"lookup"}`},
-		{"call-arguments-null", `{"type":"function_call","call_id":"call_a","name":"lookup","arguments":null}`},
 		{"call-output-missing", `{"type":"function_call_output","call_id":"call_a"}`},
 		{"call-output-null", `{"type":"function_call_output","call_id":"call_a","output":null}`},
 	} {

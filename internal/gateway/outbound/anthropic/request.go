@@ -126,10 +126,6 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 			system = append(system, wireTextBlock{Type: "text", Text: prompt})
 		}
 	}
-	messages, err := a.encodeMessages(request.Messages)
-	if err != nil {
-		return nil, err
-	}
 	maxTokens, err := a.maxTokens(request.Sampling.MaxOutputTokens)
 	if err != nil {
 		return nil, err
@@ -142,17 +138,25 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		return nil, err
 	}
 	var thinkingBudget int
+	thinkingEnabled := false
 	switch t := thinking.(type) {
 	case wireThinking:
 		thinkingBudget = t.BudgetTokens
+		thinkingEnabled = t.Type != "disabled"
 	case *wireThinking:
 		if t != nil {
 			thinkingBudget = t.BudgetTokens
+			thinkingEnabled = t.Type != "disabled"
 		}
 	}
 	if thinkingBudget > 0 && request.Sampling.MaxOutputTokens == nil && maxTokens <= thinkingBudget {
 		maxTokens = thinkingBudget + maxTokens
 	}
+	inlined, messages, err := a.encodeMessages(request.Messages, thinkingEnabled)
+	if err != nil {
+		return nil, err
+	}
+	system = append(system, inlined...)
 
 	fields, err := gatewayoutbound.ExtensionFields(request.Extensions, normalizedExtensionFields)
 	if err != nil {
@@ -315,25 +319,44 @@ func encodeSystem(instructions []ir.Instruction) ([]any, error) {
 	return blocks, nil
 }
 
-func (a *Adapter) encodeMessages(input []ir.Message) ([]wireMessage, error) {
+// encodeMessages converts IR messages into Anthropic turns. Anthropic Messages
+// has no in-band system role, so system/developer messages are returned
+// separately as system prompt blocks (inlined) instead of conversation turns.
+func (a *Adapter) encodeMessages(input []ir.Message, thinkingEnabled bool) (inlined []any, messages []wireMessage, err error) {
 	if len(input) == 0 {
-		return nil, invalidRequest("at least one message is required")
+		return nil, nil, invalidRequest("at least one message is required")
 	}
-	if input[0].Role != ir.RoleUser && input[0].Role != ir.RoleTool {
-		return nil, unsupported("the first message must have the user role for Anthropic Messages")
-	}
-	messages := make([]wireMessage, 0, len(input))
+	messages = make([]wireMessage, 0, len(input))
 	for _, message := range input {
-		if message.Role != ir.RoleUser && message.Role != ir.RoleAssistant && message.Role != ir.RoleTool {
-			return nil, invalidRequest(fmt.Sprintf("unsupported message role %q", message.Role))
+		switch message.Role {
+		case ir.RoleUser, ir.RoleAssistant, ir.RoleTool:
+		case ir.RoleSystem, ir.RoleDeveloper:
+			for _, block := range message.Content {
+				if block.Type != ir.BlockText {
+					return nil, nil, unsupported("Anthropic system instructions support only text blocks")
+				}
+				inlined = append(inlined, wireTextBlock{Type: "text", Text: block.Text})
+			}
+			continue
+		default:
+			return nil, nil, invalidRequest(fmt.Sprintf("unsupported message role %q", message.Role))
 		}
 		content := make([]any, 0, len(message.Content))
 		for _, block := range message.Content {
-			encoded, err := a.encodeContentBlock(message.Role, block)
+			encoded, skipped, err := a.encodeContentBlock(message.Role, block, thinkingEnabled)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
+			}
+			if skipped {
+				continue
 			}
 			content = append(content, encoded)
+		}
+		if len(content) == 0 {
+			// Every block was dropped (for example an assistant turn holding
+			// only unsigned reasoning). An empty turn is invalid on the wire,
+			// and it carries nothing Anthropic could reply to.
+			continue
 		}
 		role := string(message.Role)
 		if message.Role == ir.RoleTool {
@@ -346,72 +369,85 @@ func (a *Adapter) encodeMessages(input []ir.Message) ([]wireMessage, error) {
 			messages = append(messages, wireMessage{Role: role, Content: content})
 		}
 	}
-	for _, message := range messages {
-		if len(message.Content) == 0 {
-			return nil, invalidRequest("messages must contain at least one content block")
-		}
+	if len(messages) == 0 {
+		return nil, nil, invalidRequest("at least one user or assistant message with content is required")
 	}
-	return messages, nil
+	if messages[0].Role != string(ir.RoleUser) {
+		return nil, nil, unsupported("the first message must have the user role for Anthropic Messages")
+	}
+	return inlined, messages, nil
 }
 
-func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block) (any, error) {
+func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block, thinkingEnabled bool) (encoded any, skipped bool, err error) {
 	switch block.Type {
 	case ir.BlockText:
-		return wireTextBlock{Type: "text", Text: block.Text}, nil
+		return wireTextBlock{Type: "text", Text: block.Text}, false, nil
 	case ir.BlockImage:
 		if block.Image == nil {
-			return nil, invalidRequest("image block has no image payload")
+			return nil, false, invalidRequest("image block has no image payload")
 		}
-		return encodeImage(block.Image)
+		block, err := encodeImage(block.Image)
+		return block, false, err
 	case ir.BlockReasoning:
-		if block.Reasoning == nil {
-			return nil, invalidRequest("reasoning block has no reasoning payload")
+		// Anthropic rejects a thinking block whose signature it did not
+		// issue, and rejects preview thinking on a turn that does not enable
+		// it. A translated history (Chat reasoning_content, a Responses
+		// summary) can never satisfy either rule, so the block is dropped
+		// instead of corrupting the request (issues #456, #457).
+		if block.Reasoning == nil || block.Reasoning.Signature == "" || !thinkingEnabled {
+			return nil, true, nil
 		}
-		return wireThinkingBlock{Type: "thinking", Thinking: block.Reasoning.Content, Signature: block.Reasoning.Signature}, nil
+		return wireThinkingBlock{Type: "thinking", Thinking: block.Reasoning.Content, Signature: block.Reasoning.Signature}, false, nil
 	case ir.BlockToolUse:
 		if role != ir.RoleAssistant {
-			return nil, invalidRequest("tool_use blocks are only supported in assistant messages")
+			return nil, false, invalidRequest("tool_use blocks are only supported in assistant messages")
 		}
 		if block.ToolUse == nil || block.ToolUse.ID == "" || block.ToolUse.Name == "" {
-			return nil, invalidRequest("tool_use block requires id and name")
+			return nil, false, invalidRequest("tool_use block requires id and name")
 		}
 		input := block.ToolUse.Input
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		} else if trimmed := bytes.TrimSpace(input); len(trimmed) > 0 && trimmed[0] == '"' {
 			var unquoted string
-			if err := json.Unmarshal(trimmed, &unquoted); err == nil && json.Valid([]byte(unquoted)) {
-				input = json.RawMessage(unquoted)
+			if err := json.Unmarshal(trimmed, &unquoted); err == nil {
+				// Parameterless calls replay as arguments "" (or a JSON string
+				// wrapping it); Anthropic requires an object (issue #456).
+				if strings.TrimSpace(unquoted) == "" {
+					input = json.RawMessage("{}")
+				} else if json.Valid([]byte(unquoted)) {
+					input = json.RawMessage(unquoted)
+				}
 			}
 		}
 		if !gatewayoutbound.JSONObject(input) {
-			return nil, invalidRequest("tool_use block input must be a JSON object")
+			return nil, false, invalidRequest("tool_use block input must be a JSON object")
 		}
 		return wireToolUseBlock{
 			Type:  "tool_use",
 			ID:    block.ToolUse.ID,
 			Name:  block.ToolUse.Name,
 			Input: input,
-		}, nil
+		}, false, nil
 	case ir.BlockToolResult:
 		if role == ir.RoleAssistant {
-			return nil, invalidRequest("tool_result blocks are not supported in assistant messages")
+			return nil, false, invalidRequest("tool_result blocks are not supported in assistant messages")
 		}
 		if block.ToolResult == nil || block.ToolResult.ToolUseID == "" {
-			return nil, invalidRequest("tool_result block requires tool_use_id")
+			return nil, false, invalidRequest("tool_result block requires tool_use_id")
 		}
 		content, err := a.encodeToolResultContent(block.ToolResult.Content)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		return wireToolResultBlock{
 			Type:      "tool_result",
 			ToolUseID: block.ToolResult.ToolUseID,
 			Content:   content,
 			IsError:   block.ToolResult.IsError,
-		}, nil
+		}, false, nil
 	default:
-		return nil, unsupported(fmt.Sprintf("Anthropic content block type %q is not supported", block.Type))
+		return nil, false, unsupported(fmt.Sprintf("Anthropic content block type %q is not supported", block.Type))
 	}
 }
 
@@ -545,16 +581,5 @@ func encodeThinking(request *ir.Request) (any, error) {
 }
 
 func normalizedExtensionFields(name string) bool {
-	switch name {
-	case "model", "system", "messages", "input", "instructions",
-		"max_tokens", "max_output_tokens", "max_completion_tokens",
-		"temperature", "top_p", "top_k", "stop", "stop_sequences", "seed",
-		"stream", "stream_options", "thinking", "reasoning", "reasoning_effort",
-		"tools", "tool_choice", "response_format", "text",
-		"metadata", "user", "store", "previous_response_id", "conversation",
-		"parallel_tool_calls", "disable_parallel_tool_use", "functions", "function_call":
-		return true
-	default:
-		return false
-	}
+	return gatewayoutbound.ProtocolField(name)
 }

@@ -155,7 +155,7 @@ func TestBuildRequestRejectsMalformedOrUnsupportedIR(t *testing.T) {
 		request *ir.Request
 	}{
 		{"nil request", nil},
-		{"unsupported role", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.Role("system"), ir.NewTextBlock("hello"))}}},
+		{"unsupported role", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.Role("auditor"), ir.NewTextBlock("hello"))}}},
 		{"invalid image", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, invalidImage)}}},
 		{"invalid response format", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, ResponseFormat: &badSchema}},
 		{"tool without name", &ir.Request{Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}, Tools: []ir.Tool{{Name: ""}}}},
@@ -554,7 +554,7 @@ func TestRoundTripFunctionCallOutput(t *testing.T) {
 
 	// Assistant tool call
 	tu := decoded.Messages[1].Content[0].ToolUse
-	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `"{\"key\":\"abc\"}"` {
+	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `{"key":"abc"}` {
 		t.Errorf("round-trip tool use: %+v", tu)
 	}
 
@@ -631,12 +631,12 @@ func TestBuildRequestReservesAnthropicWireExtensions(t *testing.T) {
 	if err := json.Unmarshal(body, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"system", "thinking", "output_config", "anthropic_version", "betas"} {
+	for _, name := range []string{"system", "thinking", "output_config", "anthropic_version", "betas", "context_management"} {
 		if _, found := fields[name]; found {
 			t.Fatalf("%s leaked into the OpenAI Responses request", name)
 		}
 	}
-	for _, name := range []string{"metadata", "context_management", "vendor_extension"} {
+	for _, name := range []string{"vendor_extension"} {
 		if _, found := fields[name]; !found {
 			t.Fatalf("legitimate Responses field %s dropped", name)
 		}

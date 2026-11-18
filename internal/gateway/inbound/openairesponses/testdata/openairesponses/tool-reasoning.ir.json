@@ -7,8 +7,7 @@
         {
           "type": "reasoning",
           "reasoning": {
-            "content": "Work",
-            "signature": "cipher"
+            "content": "Work"
           }
         }
       ]
@@ -21,7 +20,9 @@
           "tool_use": {
             "id": "call_a",
             "name": "lookup",
-            "input": "{\"city\":\"Hanoi\"}"
+            "input": {
+              "city": "Hanoi"
+            }
           }
         }
       ]

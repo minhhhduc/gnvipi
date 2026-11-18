@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -124,19 +125,13 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		fields["reasoning_effort"] = string(effort)
 	}
 	if request.Metadata != nil {
-		fields["user"] = request.Metadata.UserID
+		fields["user"] = outbound.OpenAIUserID(request.Metadata.UserID)
 	}
 	return outbound.NewJSONRequest(ctx, target, "/chat/completions", fields)
 }
 
 func normalizedRequestField(name string) bool {
-	switch name {
-	case "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call", "temperature", "top_p", "top_k", "stop", "max_tokens", "max_completion_tokens", "seed", "n", "stream", "stream_options", "response_format", "reasoning", "reasoning_effort", "user",
-		"system", "thinking", "output_config", "metadata", "context_management", "anthropic_version", "betas":
-		return true
-	default:
-		return false
-	}
+	return outbound.ProtocolField(name)
 }
 
 type chatMessage struct {
@@ -202,7 +197,60 @@ func encodeMessages(request *ir.Request, instructionRole ir.InstructionRole) ([]
 			}
 		}
 	}
-	return messages, nil
+	if len(messages) == 0 {
+		return nil, invalid("at least one message with content is required")
+	}
+	return reorderToolResults(messages), nil
+}
+
+// reorderToolResults moves a tool result back next to the assistant turn that
+// issued its call. OpenAI Chat requires every "tool" message to directly
+// follow the assistant message holding the matching tool_call; the Responses
+// API has no such rule, so a valid Responses history can list results after an
+// unrelated user or a later function_call (issue #454). Results with no owning
+// call, and results already adjacent to it, keep their place.
+func reorderToolResults(messages []chatMessage) []chatMessage {
+	owner := make(map[string]int)
+	for i := range messages {
+		if messages[i].Role != string(ir.RoleAssistant) {
+			continue
+		}
+		for _, call := range messages[i].ToolCalls {
+			owner[call.ID] = i
+		}
+	}
+	displaced := make(map[int]int)
+	for i := range messages {
+		if messages[i].Role != string(ir.RoleTool) {
+			continue
+		}
+		issued, ok := owner[messages[i].ToolCallID]
+		if !ok || issued >= i {
+			continue
+		}
+		for j := issued + 1; j < i; j++ {
+			if messages[j].Role != string(ir.RoleTool) {
+				displaced[i] = issued
+				break
+			}
+		}
+	}
+	if len(displaced) == 0 {
+		return messages
+	}
+	ordered := make([]chatMessage, 0, len(messages))
+	for i := range messages {
+		if _, moved := displaced[i]; moved {
+			continue
+		}
+		ordered = append(ordered, messages[i])
+		for j := range messages {
+			if issued, moved := displaced[j]; moved && issued == i {
+				ordered = append(ordered, messages[j])
+			}
+		}
+	}
+	return ordered
 }
 
 func encodeMessage(message *ir.Message) ([]chatMessage, error) {
@@ -216,6 +264,15 @@ func encodeMessage(message *ir.Message) ([]chatMessage, error) {
 			return nil, fmt.Errorf("user message has no content")
 		}
 		return []chatMessage{{Role: string(ir.RoleUser), Content: content}}, nil
+	case ir.RoleSystem, ir.RoleDeveloper:
+		content, err := encodeVisibleContent(message.Content, false)
+		if err != nil {
+			return nil, err
+		}
+		if content == nil {
+			return nil, nil
+		}
+		return []chatMessage{{Role: string(message.Role), Content: content}}, nil
 	case ir.RoleAssistant:
 		encoded := chatMessage{Role: string(ir.RoleAssistant)}
 		visible := make([]ir.Block, 0, len(message.Content))
@@ -246,14 +303,20 @@ func encodeMessage(message *ir.Message) ([]chatMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		if content == nil && reasoning.Len() == 0 && len(encoded.ToolCalls) == 0 {
-			return nil, fmt.Errorf("assistant message has no content")
+		// Reasoning the sender could not sign (an Anthropic thinking block
+		// without a signature, or a blank one) carries no answer, so it must
+		// not keep an otherwise empty turn alive (issue #457).
+		reasoningText := strings.TrimSpace(reasoning.String())
+		if content == nil && reasoningText == "" && len(encoded.ToolCalls) == 0 {
+			return nil, nil
 		}
 		if content == nil {
 			content = ""
 		}
 		encoded.Content = content
-		encoded.ReasoningContent = reasoning.String()
+		if reasoningText != "" {
+			encoded.ReasoningContent = reasoning.String()
+		}
 		return []chatMessage{encoded}, nil
 	case ir.RoleTool:
 		if len(message.Content) == 0 {
@@ -337,6 +400,11 @@ func encodeToolArguments(input json.RawMessage) (string, error) {
 	if input[0] == '"' {
 		var text string
 		if err := json.Unmarshal(input, &text); err == nil {
+			// Parameterless calls replay as arguments "" (or a JSON string
+			// wrapping it); Chat wants an object.
+			if strings.TrimSpace(text) == "" {
+				return "{}", nil
+			}
 			return text, nil
 		}
 	}

@@ -293,12 +293,11 @@ func (s *responseStream) addBlock(index int, prototype ir.Block) error {
 			s.blocks[index] = block
 			return nil
 		}
-		if prototype.Reasoning == nil {
-			return fmt.Errorf("openairesponses: reasoning block %d has no payload", index)
-		}
 		prefix, item.Type = "rs_", "reasoning"
 		item.Summary = &[]responseStreamPart{}
-		item.EncryptedContent = prototype.Reasoning.Signature
+		if prototype.Reasoning != nil {
+			item.EncryptedContent = prototype.Reasoning.Signature
+		}
 	case ir.BlockToolUse:
 		if prototype.ToolUse == nil || prototype.ToolUse.ID == "" {
 			return fmt.Errorf("openairesponses: tool block %d has no call identity", index)
@@ -348,7 +347,7 @@ func (s *responseStream) addBlock(index int, prototype ir.Block) error {
 		if err := s.emit("response.reasoning_summary_part.added", fields); err != nil {
 			return err
 		}
-		if prototype.Reasoning.Content != "" {
+		if prototype.Reasoning != nil && prototype.Reasoning.Content != "" {
 			return s.delta(block, &ir.Delta{Type: ir.DeltaReasoning, Text: prototype.Reasoning.Content})
 		}
 	}

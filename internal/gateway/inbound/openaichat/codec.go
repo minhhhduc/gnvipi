@@ -268,7 +268,14 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		}
 		switch message.Role {
 		case "system", "developer":
-			result.Instructions = append(result.Instructions, ir.Instruction{Role: ir.InstructionRole(message.Role), Content: blocks})
+			// Leading instructions are out-of-band; an instruction the client
+			// placed between turns keeps its position, which OpenAI Chat and
+			// the Responses API both allow (issue #454).
+			if len(result.Messages) == 0 {
+				result.Instructions = append(result.Instructions, ir.Instruction{Role: ir.InstructionRole(message.Role), Content: blocks})
+			} else {
+				result.Messages = append(result.Messages, ir.NewMessage(ir.Role(message.Role), blocks...))
+			}
 		case "user", "assistant":
 			result.Messages = append(result.Messages, ir.NewMessage(ir.Role(message.Role), blocks...))
 		case "tool":

@@ -16,6 +16,14 @@ const (
 	// embeds it as a tool_result content block on a user message. Both
 	// decode to RoleTool holding one tool_result block.
 	RoleTool Role = "tool"
+	// RoleSystem is an in-band system message. OpenAI Chat and the
+	// Responses API both allow it mid-conversation; Anthropic Messages has
+	// no such role, so outbound adapters fold it into the out-of-band
+	// system prompt.
+	RoleSystem Role = "system"
+	// RoleDeveloper is the Responses API's mid-conversation developer
+	// message (the successor of RoleSystem for reasoning models).
+	RoleDeveloper Role = "developer"
 )
 
 // InstructionRole is the role of an out-of-band instruction (system prompt).
@@ -451,7 +459,7 @@ type Request struct {
 // GetReasoningEffort returns the configured reasoning effort from Request.ReasoningEffort,
 // Request.Reasoning.Effort, or mapped from budget tokens.
 func (r *Request) GetReasoningEffort() ReasoningEffort {
-	if r == nil {
+	if r == nil || r.reasoningDisabled() {
 		return ""
 	}
 	if r.ReasoningEffort != "" {
@@ -469,7 +477,7 @@ func (r *Request) GetReasoningEffort() ReasoningEffort {
 // GetBudgetTokens returns the configured thinking budget tokens from Request.BudgetTokens,
 // Request.Reasoning.MaxTokens, or mapped from effort.
 func (r *Request) GetBudgetTokens() *int {
-	if r == nil {
+	if r == nil || r.reasoningDisabled() {
 		return nil
 	}
 	if r.BudgetTokens != nil {
@@ -489,4 +497,12 @@ func (r *Request) GetBudgetTokens() *int {
 		return &b
 	}
 	return nil
+}
+
+// reasoningDisabled reports whether the sender explicitly turned reasoning
+// off. Anthropic's thinking.type "disabled" and OpenAI Chat's
+// reasoning_effort "none" both land here, and neither may be overridden by
+// a stray effort or budget carried by the same request.
+func (r *Request) reasoningDisabled() bool {
+	return r != nil && r.Reasoning != nil && r.Reasoning.Enabled != nil && !*r.Reasoning.Enabled
 }
