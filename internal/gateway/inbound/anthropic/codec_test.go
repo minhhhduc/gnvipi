@@ -37,7 +37,7 @@ func TestInvalidRequestsProduceAnthropicErrors(t *testing.T) {
 		"negative max tokens":   strings.Replace(valid, `2048`, `-1`, 1),
 		"fractional max tokens": strings.Replace(valid, `2048`, `1.5`, 1),
 		"empty messages":        strings.Replace(valid, `[{"role":"user","content":"Hello"}]`, `[]`, 1),
-		"invalid role":          strings.Replace(valid, `"user"`, `"system"`, 1),
+		"invalid role":          strings.Replace(valid, `"user"`, `"developer"`, 1),
 		"null message":          strings.Replace(valid, `{"role":"user","content":"Hello"}`, `null`, 1),
 		"null content":          strings.Replace(valid, `"Hello"`, `null`, 1),
 		"object content":        strings.Replace(valid, `"Hello"`, `{}`, 1),
@@ -744,4 +744,54 @@ func TestInboundToolCalling(t *testing.T) {
 			t.Errorf("content[2] = %+v", parsed.Content[2])
 		}
 	})
+}
+
+func TestMessageSystemRoleBecomesUserReminder(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"user","content":"hi"},{"role":"system","content":[{"type":"text","text":"be terse"}]}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[1].Role != ir.RoleUser || len(got.Messages[1].Content) != 1 || got.Messages[1].Content[0].Text != "<system-reminder>\nbe terse\n</system-reminder>" {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	if _, found := got.Extensions["messages"]; found {
+		t.Fatalf("raw messages preserved: %s", got.Extensions["messages"])
+	}
+}
+
+func TestEmptyMessageSystemRoleIsDropped(t *testing.T) {
+	for name, content := range map[string]string{
+		"empty array":  `[]`,
+		"blank text":   `[{"type":"text","text":"   "}]`,
+		"empty string": `""`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"user","content":"hi"},{"role":"system","content":` + content + `}]}`
+			got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Messages) != 1 || got.Messages[0].Role != ir.RoleUser {
+				t.Fatalf("messages = %+v", got.Messages)
+			}
+		})
+	}
+}
+
+func TestMixedUserContentEmitsToolResultsFirst(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"lookup","input":{}}]},{"role":"user","content":[{"type":"text","text":"before"},{"type":"tool_result","tool_use_id":"c1","content":"r"},{"type":"text","text":"after"}]}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 3 || got.Messages[1].Role != ir.RoleTool || got.Messages[2].Role != ir.RoleUser {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	if len(got.Messages[1].Content) != 1 || got.Messages[1].Content[0].ToolResult == nil || got.Messages[1].Content[0].ToolResult.ToolUseID != "c1" {
+		t.Fatalf("tool message = %+v", got.Messages[1])
+	}
+	if len(got.Messages[2].Content) != 2 || got.Messages[2].Content[0].Text != "before" || got.Messages[2].Content[1].Text != "after" {
+		t.Fatalf("user message = %+v", got.Messages[2])
+	}
 }
