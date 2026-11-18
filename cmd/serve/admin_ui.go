@@ -67,6 +67,13 @@ func registerAdminUI(engine *gin.Engine) {
 	engine.GET("/admin/app.css", serveAsset)
 	engine.GET("/admin/app.js", serveAsset)
 
+	const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#4f46e5"/><text x="16" y="21" text-anchor="middle" fill="#ffffff" font-family="system-ui,sans-serif" font-size="14" font-weight="800">GN</text></svg>`
+	serveFavicon := func(c *gin.Context) {
+		c.Data(http.StatusOK, "image/svg+xml", []byte(faviconSVG))
+	}
+	engine.GET("/admin/favicon.svg", serveFavicon)
+	engine.GET("/favicon.ico", serveFavicon)
+
 	for _, page := range consolePages {
 		engine.GET("/"+page, serveIndex)
 	}
