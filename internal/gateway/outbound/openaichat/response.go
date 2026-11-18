@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/gwerr"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
@@ -102,10 +103,10 @@ func (*Adapter) ParseResponse(response *http.Response) (*ir.Response, error) {
 	if err != nil {
 		return nil, malformedResponse(response, err.Error())
 	}
-	if choice.Message.ReasoningContent != nil {
+	if choice.Message.ReasoningContent != nil && strings.TrimSpace(*choice.Message.ReasoningContent) != "" {
 		content = append([]ir.Block{ir.NewReasoningBlock(*choice.Message.ReasoningContent, "")}, content...)
 	}
-	if choice.Message.Reasoning != nil && (choice.Message.ReasoningContent == nil || *choice.Message.Reasoning != *choice.Message.ReasoningContent) {
+	if choice.Message.Reasoning != nil && strings.TrimSpace(*choice.Message.Reasoning) != "" && (choice.Message.ReasoningContent == nil || *choice.Message.Reasoning != *choice.Message.ReasoningContent) {
 		content = append([]ir.Block{ir.NewReasoningBlock(*choice.Message.Reasoning, "")}, content...)
 	}
 	for i, call := range choice.Message.ToolCalls {

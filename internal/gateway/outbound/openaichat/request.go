@@ -123,21 +123,6 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 	if effort != "" {
 		fields["reasoning_effort"] = string(effort)
 	}
-	if request.Reasoning != nil {
-		reasoning := make(map[string]any, 2)
-		if request.Reasoning.Enabled != nil {
-			reasoning["enabled"] = *request.Reasoning.Enabled
-		}
-		if request.Reasoning.MaxTokens != nil {
-			if *request.Reasoning.MaxTokens < 0 {
-				return nil, invalid("OpenAI Chat reasoning max_tokens must be non-negative")
-			}
-			reasoning["max_tokens"] = *request.Reasoning.MaxTokens
-		}
-		if len(reasoning) != 0 {
-			fields["reasoning"] = reasoning
-		}
-	}
 	if request.Metadata != nil {
 		fields["user"] = request.Metadata.UserID
 	}

@@ -39,6 +39,7 @@ type codecRequest struct {
 	Metadata      json.RawMessage   `json:"metadata"`
 	Stream        bool              `json:"stream"`
 	Thinking      json.RawMessage   `json:"thinking"`
+	OutputConfig  json.RawMessage   `json:"output_config"`
 	Tools         json.RawMessage   `json:"tools"`
 	ToolChoice    json.RawMessage   `json:"tool_choice"`
 }
@@ -186,7 +187,7 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		if len(tool) > 0 {
 			out.Messages = append(out.Messages, ir.Message{Role: ir.RoleTool, Content: tool})
 		}
-		if len(other) > 0 || len(blocks) == 0 {
+		if len(other) > 0 {
 			out.Messages = append(out.Messages, ir.Message{Role: ir.Role(role), Content: other})
 		}
 	}
@@ -233,8 +234,32 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		default:
 			return nil, codecInvalid("thinking.type must be enabled, disabled or adaptive")
 		}
-		if typ == "enabled" && !codecHasUnknown(thinking, "type", "budget_tokens") || typ == "disabled" && !codecHasUnknown(thinking, "type") {
+		if typ == "enabled" && !codecHasUnknown(thinking, "type", "budget_tokens") || typ == "disabled" && !codecHasUnknown(thinking, "type") || typ == "adaptive" && !codecHasUnknown(thinking, "type") {
 			delete(fields, "thinking")
+		}
+	}
+	if len(input.OutputConfig) > 0 {
+		outputConfig, err := codecObject(input.OutputConfig, "output_config")
+		if err != nil {
+			return nil, err
+		}
+		if raw, exists := outputConfig["effort"]; exists {
+			var effort string
+			if json.Unmarshal(raw, &effort) != nil {
+				return nil, codecInvalid("output_config.effort must be low, medium, high, xhigh or max")
+			}
+			switch effort {
+			case "low", "medium", "high", "xhigh", "max":
+			default:
+				return nil, codecInvalid("output_config.effort must be low, medium, high, xhigh or max")
+			}
+			if out.Reasoning == nil {
+				out.Reasoning = &ir.ReasoningConfig{}
+			}
+			out.Reasoning.Effort = ir.NormalizeReasoningEffort(effort)
+		}
+		if !codecHasUnknown(outputConfig, "effort") {
+			delete(fields, "output_config")
 		}
 	}
 	if len(input.Tools) > 0 {
@@ -577,6 +602,8 @@ func codecContent(raw json.RawMessage, path, role string, preserve *bool) ([]ir.
 				return nil, err
 			}
 			block = ir.NewReasoningBlock(thinking, signature)
+		case "redacted_thinking":
+			continue
 		default:
 			// The original enclosing field retains unrepresented content and
 			// its position, rather than manufacturing an invalid IR block.
