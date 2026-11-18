@@ -332,7 +332,7 @@ export function ProviderEditor({
           </Section>
 
           <button class="btn btn-sm" onClick={() => setShowAdvanced(!showAdvanced)}>
-            {showAdvanced ? "Hide advanced settings" : "Advanced settings (models, headers, timeouts)"}
+            {showAdvanced ? "Hide advanced settings" : "Advanced settings (headers, timeouts)"}
           </button>
 
           {showAdvanced && (<>

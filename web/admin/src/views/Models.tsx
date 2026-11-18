@@ -767,8 +767,12 @@ function KeyEditorDialog({
         const id = (created as { id?: unknown } | null)?.id;
         keyID = typeof id === "string" ? id : undefined;
       }
-      if (keyID && rows) {
-        await api(`${base}/${encodeURIComponent(keyID)}/models`, { method: "PUT", body: keyModelsPayload(rows) });
+      const pendingAlias = modelAlias.trim();
+      const nextRows = pendingAlias && rows
+        ? toggleKeyModel(rows, { alias: pendingAlias, upstream_model: buildUpstreamModel(pendingAlias, "") }, true)
+        : rows;
+      if (keyID && nextRows) {
+        await api(`${base}/${encodeURIComponent(keyID)}/models`, { method: "PUT", body: keyModelsPayload(nextRows) });
       }
       onSaved();
     } catch (err) {
@@ -854,7 +858,7 @@ function KeyEditorDialog({
               <button class="btn btn-sm" disabled={!modelAlias.trim()} onClick={addModel}>Add model</button>
             </div>
             <span class="block text-[11px] font-normal text-dim">
-              Aliases chosen here belong to this key only.
+              Aliases chosen here belong to this key only. Models must be added here to appear in Playground and gateway routes.
             </span>
           </div>
         )}
