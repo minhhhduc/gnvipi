@@ -149,7 +149,7 @@ export function App() {
         : user.must_change_password
           ? "Change password"
           : PAGE_TITLES[effectivePage] ?? effectivePage[0].toUpperCase() + effectivePage.slice(1);
-    document.title = `${title} · Gateway Admin`;
+    document.title = `${title} · gnvipi Admin`;
   }, [authChecked, effectivePage, user]);
 
   const refreshStats = useCallback(() => {
