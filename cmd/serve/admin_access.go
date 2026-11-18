@@ -73,7 +73,7 @@ func adminAccess(addr, token string, dbAuth *authState) gin.HandlerFunc {
 			}
 		}
 		if activeToken == "" {
-			if dbAuthActive && (r.Method == http.MethodGet || r.Method == http.MethodHead) && (adminShellGetPath(path) || path == "/admin/app.js" || path == "/admin/app.css") {
+			if dbAuthActive && (r.Method == http.MethodGet || r.Method == http.MethodHead) && (adminShellGetPath(path) || path == "/admin/app.js" || path == "/admin/app.css" || path == "/admin/favicon.svg") {
 				c.Next()
 				return
 			}
