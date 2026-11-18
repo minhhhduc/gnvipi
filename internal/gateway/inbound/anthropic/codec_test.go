@@ -794,3 +794,60 @@ func TestMixedUserContentEmitsToolResultsFirst(t *testing.T) {
 		t.Fatalf("user message = %+v", got.Messages[2])
 	}
 }
+func TestThinkingAdaptiveMapsOutputConfigEffort(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":32,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Reasoning == nil || got.Reasoning.Enabled == nil || !*got.Reasoning.Enabled || got.Reasoning.Effort != ir.ReasoningEffortHigh {
+		t.Fatalf("reasoning = %+v", got.Reasoning)
+	}
+	for _, name := range []string{"thinking", "output_config"} {
+		if _, found := got.Extensions[name]; found {
+			t.Fatalf("%s preserved: %s", name, got.Extensions[name])
+		}
+	}
+}
+
+func TestThinkingEnabledKeepsBudget(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":32,"thinking":{"type":"enabled","budget_tokens":4096},"messages":[{"role":"user","content":"hi"}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Reasoning == nil || got.Reasoning.MaxTokens == nil || *got.Reasoning.MaxTokens != 4096 || got.Reasoning.Effort != "" {
+		t.Fatalf("reasoning = %+v", got.Reasoning)
+	}
+	if _, found := got.Extensions["thinking"]; found {
+		t.Fatalf("thinking preserved: %s", got.Extensions["thinking"])
+	}
+}
+
+func TestRedactedThinkingIsIgnored(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"},{"type":"text","text":"answer"}]}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[1].Role != ir.RoleAssistant || len(got.Messages[1].Content) != 1 || got.Messages[1].Content[0].Text != "answer" {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	if _, found := got.Extensions["messages"]; found {
+		t.Fatalf("raw messages preserved: %s", got.Extensions["messages"])
+	}
+}
+
+func TestRedactedThinkingOnlyMessageIsDropped(t *testing.T) {
+	body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"}]}]}`
+	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Role != ir.RoleUser {
+		t.Fatalf("messages = %+v", got.Messages)
+	}
+	if _, found := got.Extensions["messages"]; found {
+		t.Fatalf("raw messages preserved: %s", got.Extensions["messages"])
+	}
+}

@@ -1605,15 +1605,16 @@ func TestStructuredOutputLosslessMatrix(t *testing.T) {
 // runAdapterSmoke drives one decision through the real pipeline: inbound
 // adapter, IR, outbound adapter and an httptest upstream, so a fix proven at
 // the codec level is also proven on the wire.
-func runAdapterSmoke(t *testing.T, clientPath, clientPayload string, upstreamProto ir.Protocol, upstreamPath, cannedResponse string) *gatewaytest.Upstream {
+func runAdapterSmoke(t *testing.T, clientPayload string) *gatewaytest.Upstream {
 	t.Helper()
+	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
 	upstream := gatewaytest.New(t)
-	upstream.Script(upstreamPath, gatewaytest.Step{Status: http.StatusOK, Body: cannedResponse})
+	upstream.Script(gatewaytest.RouteChat, gatewaytest.Step{Status: http.StatusOK, Body: canned})
 
 	prov := provider.Provider{
 		ID:       "smoke-provider",
 		Name:     "Smoke Provider",
-		Protocol: upstreamProto,
+		Protocol: ir.ProtocolOpenAIChat,
 		BaseURL:  upstream.URL(),
 		Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret-key"},
 	}
@@ -1623,7 +1624,7 @@ func runAdapterSmoke(t *testing.T, clientPath, clientPayload string, upstreamPro
 				Kind:             routing.Custom,
 				Provider:         &prov,
 				UpstreamModel:    "upstream-model",
-				UpstreamProtocol: upstreamProto,
+				UpstreamProtocol: ir.ProtocolOpenAIChat,
 			},
 		},
 	}
@@ -1632,7 +1633,7 @@ func runAdapterSmoke(t *testing.T, clientPath, clientPayload string, upstreamPro
 	engine := gin.New()
 	engine.Use(dispatcher.Handle)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, clientPath, strings.NewReader(clientPayload))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, gatewaytest.RouteMessages, strings.NewReader(clientPayload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	engine.ServeHTTP(w, req)
@@ -1643,11 +1644,9 @@ func runAdapterSmoke(t *testing.T, clientPath, clientPayload string, upstreamPro
 }
 
 func TestAdapterSmokeMessageSystemRole(t *testing.T) {
-	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
 	upstream := runAdapterSmoke(t,
-		gatewaytest.RouteMessages,
 		`{"model":"smoke-model","max_tokens":16,"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hi"}]}`,
-		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+	)
 
 	reqs := upstream.Requests()
 	if len(reqs) != 1 {
@@ -1674,11 +1673,9 @@ func TestAdapterSmokeMessageSystemRole(t *testing.T) {
 	}
 }
 func TestAdapterSmokeChatToolOrdering(t *testing.T) {
-	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
 	upstream := runAdapterSmoke(t,
-		gatewaytest.RouteMessages,
 		`{"model":"smoke-model","max_tokens":32,"tools":[{"name":"lookup","description":"look up","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"find x"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"lookup","input":{"q":"x"}}]},{"role":"user","content":[{"type":"text","text":"before"},{"type":"tool_result","tool_use_id":"c1","content":"found"},{"type":"text","text":"after"}]}]}`,
-		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+	)
 
 	reqs := upstream.Requests()
 	if len(reqs) != 1 {
@@ -1718,11 +1715,9 @@ func TestAdapterSmokeChatToolOrdering(t *testing.T) {
 	}
 }
 func TestAdapterSmokeNoAnthropicWireExtensionLeak(t *testing.T) {
-	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
 	upstream := runAdapterSmoke(t,
-		gatewaytest.RouteMessages,
 		`{"model":"smoke-model","max_tokens":16,"system":[{"type":"text","text":"be terse"}],"anthropic_version":"2023-06-01","betas":["prompt-caching-2024-07-31"],"context_management":{"edits":[]},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`,
-		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+	)
 
 	reqs := upstream.Requests()
 	if len(reqs) != 1 {

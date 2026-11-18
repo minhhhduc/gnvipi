@@ -42,7 +42,6 @@
       }
     },
     "reasoning_effort": "high",
-    "reasoning": {"enabled": true, "max_tokens": 512},
     "user": "fixture-user",
     "vendor_integer": 900719925474099312345678901,
     "vendor_options": {

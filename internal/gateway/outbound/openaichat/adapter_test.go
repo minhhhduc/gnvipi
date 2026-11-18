@@ -748,3 +748,51 @@ func TestClaudeRequestDoesNotLeakAnthropicFields(t *testing.T) {
 		}
 	}
 }
+func TestBuildRequestMapsReasoningEffort(t *testing.T) {
+	enabled := true
+	budget := 4096
+	fields := buildChatFields(t, &ir.Request{
+		Model:     "client-alias",
+		Messages:  []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Reasoning: &ir.ReasoningConfig{Enabled: &enabled, MaxTokens: &budget},
+	})
+	if string(fields["reasoning_effort"]) != `"medium"` {
+		t.Fatalf("reasoning_effort = %s", fields["reasoning_effort"])
+	}
+	if _, found := fields["reasoning"]; found {
+		t.Fatalf("non-standard reasoning object emitted: %s", fields["reasoning"])
+	}
+	fields = buildChatFields(t, &ir.Request{
+		Model:     "client-alias",
+		Messages:  []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Reasoning: &ir.ReasoningConfig{Effort: ir.ReasoningEffortHigh},
+	})
+	if string(fields["reasoning_effort"]) != `"high"` {
+		t.Fatalf("reasoning_effort = %s", fields["reasoning_effort"])
+	}
+}
+
+func TestParseResponseSkipsEmptyReasoning(t *testing.T) {
+	cases := map[string]string{
+		"empty reasoning_content": `{"id":"chatcmpl_1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi","reasoning_content":""},"finish_reason":"stop"}]}`,
+		"blank reasoning":         `{"id":"chatcmpl_1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi","reasoning":"  "},"finish_reason":"stop"}]}`,
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := openaichat.New().ParseResponse(&http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(payload)), Header: make(http.Header)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Content) != 1 || parsed.Content[0].Text != "hi" {
+				t.Fatalf("content = %+v", parsed.Content)
+			}
+		})
+	}
+	parsed, err := openaichat.New().ParseResponse(&http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi","reasoning_content":"plan"},"finish_reason":"stop"}]}`)), Header: make(http.Header)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Content) != 2 || parsed.Content[0].Type != ir.BlockReasoning || parsed.Content[0].Reasoning == nil || parsed.Content[0].Reasoning.Content != "plan" {
+		t.Fatalf("content = %+v", parsed.Content)
+	}
+}
