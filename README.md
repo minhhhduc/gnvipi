@@ -140,8 +140,7 @@ live in PostgreSQL instead.
 | `GNVIPI_ROOT_PASSWORD` / `GNVIPI_ROOT_EMAIL` | Seed the built-in `gnvipi` root account on first start. Without the password override the default `gnvipi` is forced to change at first sign-in. |
 | `GNVIPI_PUBLIC_URL` / `GNVIPI_DOMAIN` | Public base URL (`https://gateway.example.com`) shown in Admin Console API snippets; bare hosts default to `https`. |
 | `GNVIPI_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` / `X-Forwarded-Proto`. Compose defaults to `127.0.0.1/32,::1/128` for the tunnel sidecar. |
-| `GNVIPI_CF_MAIL_WORKER_URL` | Cloudflare Email Worker `POST` endpoint for outbound mail; takes precedence over SMTP when both are set. |
-| `GNVIPI_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` | Direct SMTP delivery for the same admin notifications. Delivery is disabled when neither SMTP host nor worker URL is set. |
+| `GNVIPI_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` | Outbound SMTP delivery for admin OTP notifications. Delivery is disabled when `GNVIPI_SMTP_HOST` is unset. |
 | `GNVIPI_ADMIN_TOKEN` | Bootstrap token for the legacy admin surface. Ignored once a database account exists. |
 | `GNVIPI_GATEWAY_KEY` | Comma-separated client keys guarding `/v1/*`, `/mcp`, `/v2/search`. Optional; DB tokens are the supported path. |
 | `GNVIPI_STATS_FILE` | Stats history (NDJSON, rotated). Defaults to `stats.jsonl` in the OS user cache dir; point it at a volume in containers. |
