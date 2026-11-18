@@ -560,6 +560,12 @@ func applyProviderAuth(c *gin.Context, ctx context.Context, tx pgx.Tx, state *au
 		return true
 	}
 
+	// Creating a provider with auth.scheme "none" leaves it keyless instead of
+	// auto-creating a placeholder "default" key; operators add named keys later.
+	if target == nil && scheme == providerstore.SchemeNone {
+		return true
+	}
+
 	// No key exists yet: the v2 auth block becomes the provider's first key.
 	ownerID := ""
 	if scheme != providerstore.SchemeNone {
