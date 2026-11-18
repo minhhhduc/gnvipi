@@ -115,7 +115,8 @@ func reservedField(name string) bool {
 	case "model", "input", "instructions", "stream", "store",
 		"previous_response_id", "conversation", "background",
 		"max_output_tokens", "temperature", "top_p", "stop",
-		"reasoning", "text", "user", "tools", "tool_choice", "parallel_tool_calls":
+		"reasoning", "text", "user", "tools", "tool_choice", "parallel_tool_calls",
+		"system", "thinking", "output_config", "anthropic_version", "betas":
 		return true
 	default:
 		return false
