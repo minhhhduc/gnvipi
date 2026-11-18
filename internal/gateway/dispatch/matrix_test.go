@@ -1601,3 +1601,75 @@ func TestStructuredOutputLosslessMatrix(t *testing.T) {
 		}
 	})
 }
+
+// runAdapterSmoke drives one decision through the real pipeline: inbound
+// adapter, IR, outbound adapter and an httptest upstream, so a fix proven at
+// the codec level is also proven on the wire.
+func runAdapterSmoke(t *testing.T, clientPath, clientPayload string, upstreamProto ir.Protocol, upstreamPath, cannedResponse string) *gatewaytest.Upstream {
+	t.Helper()
+	upstream := gatewaytest.New(t)
+	upstream.Script(upstreamPath, gatewaytest.Step{Status: http.StatusOK, Body: cannedResponse})
+
+	prov := provider.Provider{
+		ID:       "smoke-provider",
+		Name:     "Smoke Provider",
+		Protocol: upstreamProto,
+		BaseURL:  upstream.URL(),
+		Auth:     provider.Auth{Scheme: provider.AuthBearer, Key: "secret-key"},
+	}
+	resolver := staticResolver{
+		routes: map[string]routing.Route{
+			"smoke-model": {
+				Kind:             routing.Custom,
+				Provider:         &prov,
+				UpstreamModel:    "upstream-model",
+				UpstreamProtocol: upstreamProto,
+			},
+		},
+	}
+	dispatcher := dispatch.New(resolver, &relay.Options{Recorder: newMatrixRecorder()})
+	dispatcher.Registry = setupMatrixRegistry()
+	engine := gin.New()
+	engine.Use(dispatcher.Handle)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, clientPath, strings.NewReader(clientPayload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	return upstream
+}
+
+func TestAdapterSmokeMessageSystemRole(t *testing.T) {
+	const canned = `{"id":"chatcmpl_smoke","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+	upstream := runAdapterSmoke(t,
+		gatewaytest.RouteMessages,
+		`{"model":"smoke-model","max_tokens":16,"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hi"}]}`,
+		ir.ProtocolOpenAIChat, gatewaytest.RouteChat, canned)
+
+	reqs := upstream.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream requests = %d", len(reqs))
+	}
+	var body struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("decode upstream request: %v; body: %s", err, reqs[0].Body)
+	}
+	if len(body.Messages) != 2 || body.Messages[0].Role != "user" || body.Messages[1].Role != "user" {
+		t.Fatalf("upstream messages = %s", reqs[0].Body)
+	}
+	var reminder string
+	if err := json.Unmarshal(body.Messages[0].Content, &reminder); err != nil {
+		t.Fatalf("decode reminder content: %v; body: %s", err, reqs[0].Body)
+	}
+	if !strings.Contains(reminder, "<system-reminder>") || !strings.Contains(reminder, "be terse") {
+		t.Fatalf("message-level system reminder lost: %q", reminder)
+	}
+}

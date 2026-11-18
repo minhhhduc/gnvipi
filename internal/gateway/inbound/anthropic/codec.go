@@ -144,6 +144,27 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 		if err != nil {
 			return nil, err
 		}
+		if role == string(ir.InstructionSystem) {
+			// Claude Code sends message-level system reminders. Wrap their text
+			// as a user turn and drop empty reminders.
+			var discard bool
+			blocks, err := codecContent(message["content"], path+".content", role, &discard)
+			if err != nil {
+				return nil, err
+			}
+			var reminders []string
+			for _, block := range blocks {
+				if text := strings.TrimSpace(block.Text); text != "" {
+					reminders = append(reminders, text)
+				}
+			}
+			if len(reminders) > 0 {
+				out.Messages = append(out.Messages, ir.Message{Role: ir.RoleUser, Content: []ir.Block{
+					ir.NewTextBlock("<system-reminder>\n" + strings.Join(reminders, "\n") + "\n</system-reminder>"),
+				}})
+			}
+			continue
+		}
 		if role != string(ir.RoleUser) && role != string(ir.RoleAssistant) {
 			return nil, codecInvalid(path + ".role must be user or assistant")
 		}
@@ -152,24 +173,21 @@ func (*Adapter) DecodeRequest(request *http.Request) (*ir.Request, error) {
 			return nil, err
 		}
 		preserveMessages = preserveMessages || codecHasUnknown(message, "role", "content")
-		// IR represents Anthropic tool results as RoleTool. Split mixed user
-		// content without reordering it.
-		current := ir.Message{Role: ir.Role(role)}
+		// OpenAI Chat requires tool messages to immediately follow the assistant
+		// message with tool_calls, so emit tool results before any other blocks.
+		var tool, other []ir.Block
 		for _, block := range blocks {
-			blockRole := ir.Role(role)
-			if block.Type == ir.BlockToolResult {
-				blockRole = ir.RoleTool
+			if role == string(ir.RoleUser) && block.Type == ir.BlockToolResult {
+				tool = append(tool, block)
+				continue
 			}
-			if current.Role != blockRole {
-				if len(current.Content) > 0 {
-					out.Messages = append(out.Messages, current)
-				}
-				current = ir.Message{Role: blockRole}
-			}
-			current.Content = append(current.Content, block)
+			other = append(other, block)
 		}
-		if len(current.Content) > 0 || len(blocks) == 0 {
-			out.Messages = append(out.Messages, current)
+		if len(tool) > 0 {
+			out.Messages = append(out.Messages, ir.Message{Role: ir.RoleTool, Content: tool})
+		}
+		if len(other) > 0 || len(blocks) == 0 {
+			out.Messages = append(out.Messages, ir.Message{Role: ir.Role(role), Content: other})
 		}
 	}
 	if !preserveMessages {
