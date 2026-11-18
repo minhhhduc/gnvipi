@@ -4,315 +4,206 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-A unified local gateway for AI coding agents (**Claude Code**, **OpenAI SDKs**,
-**Codex**, **OpenCode**, and **cURL**). It bridges 3 inbound client protocols
-(**OpenAI Chat**, **Anthropic Messages**, **OpenAI Responses**) to any upstream
-provider (**OpenAI-compatible**, **Anthropic-compatible**, **OpenAI Responses**,
-**NVIDIA Playground**, and custom endpoints), and adds an automated headless Chrome
-captcha pool for the free NVIDIA Playground models (DeepSeek-V4, Kimi, GLM,
-Nemotron, GPT-OSS, and more).
+Self-hosted gateway that gives every AI coding client one endpoint: **Claude
+Code**, **OpenAI SDKs**, **Codex**, **OpenCode**, and plain `cURL`. It accepts
+three inbound protocols (**OpenAI Chat**, **Anthropic Messages**, **OpenAI
+Responses**), translates to any upstream (**OpenAI-compatible**,
+**Anthropic-compatible**, **OpenAI Responses**, **NVIDIA Playground**, custom
+endpoints), and mints hCaptcha tokens with a headless-Chrome pool so the free
+NVIDIA Playground models (DeepSeek-V4, Kimi, GLM, Nemotron, GPT-OSS) work without
+a browser.
 
-Client API-key authentication is optional: set `-gateway-key` or
-`GNVIPI_GATEWAY_KEY` to protect `/v1/*`, `/mcp`, `/v2/search`, and SDK inference aliases. See
-[Security](#security) below before exposing the gateway beyond localhost.
+## Features
 
----
+- **Multi-protocol in, multi-protocol out** — same-protocol relay and
+  cross-protocol translation, with streaming, token counting, and tool calls.
+- **NVIDIA Playground without a browser** — Chrome captcha pool, started on
+  demand from the Admin Console (`-auto` never launches Chrome at startup).
+- **Unified model catalog** — per-provider aliases, wildcards (`openrouter/*`),
+  fallback chains, SSRF policy, and the `automode` / `cycle` virtual models.
+- **PostgreSQL-backed** — providers, API keys, users/roles, audit trail; provider
+  secrets encrypted at rest with `GNVIPI_MASTER_KEY`.
+- **Admin Console** at `/admin` — live stats, request history, provider and key
+  management, Chrome worker control.
+- **Web search MCP** — `search_web` over `/mcp` (streamable HTTP) and plain JSON
+  over `/v2/search`.
 
-## Documentation
+## Requirements
 
-| Guide | What it covers |
-|---|---|
-| [Operations](docs/operations.md) | Run flags, stats storage, Admin Console access, `cycle` failover, web search MCP, data locations, troubleshooting, Docker notes. |
-| [PostgreSQL Operations](docs/postgres-operations.md) | Database provisioning, roles and grants, migrations, logical backup, WAL/PITR, restore integrity checks, retention limits, monitoring, development workflow. |
-| [Auth & Roles](docs/auth.md) | Ownership model, root/superuser/admin/user permissions, bootstrap and recovery, provider secret handling, credential sources, master key, `scripts/windows/run.ps1 -Claude`. |
-| [Provider Configuration](docs/providers.md) | Schema v2 reference, model mappings, wildcard routing, fallback chains, SSRF policy, migration. |
-| [Client Setup](docs/clients.md) | Step-by-step setup for Claude Code, OpenAI SDKs, Codex, OpenCode, cURL, and the cross-protocol compatibility matrix. |
-| [Architecture Overview](docs/architecture/overview.md) | Hub-and-spoke pattern, normalized IR, execution paths, architectural invariants. |
-| [Adapter Developer Guide](docs/architecture/adapters.md) | Implementing, registering, and testing new inbound/outbound protocol adapters. |
-| [Roadmap](docs/architecture/universal-llm-gateway-roadmap.md) | Milestone breakdown and issue index. |
-| [Release Notes](RELEASE_NOTES.md) | v2.0 feature highlights, deprecations, and upgrade guide. |
-
----
-
-## Endpoints
-
-| Route | Format / Functionality | Description |
-|---|---|---|
-| `POST /v1/chat/completions` | OpenAI Chat Completions | Standard chat endpoint for OpenAI SDKs, OpenCode, and HTTP clients |
-| `POST /v1/messages` | Anthropic Messages | Drop-in Anthropic endpoint for Claude Code and Anthropic clients |
-| `POST /v1/responses` | OpenAI Responses | OpenAI Responses protocol endpoint for Codex and next-gen tools |
-| `POST /v1/messages/count_tokens` | Anthropic Token Counting | Accurate token counting across custom providers and local estimation |
-| `GET /v1/models` | Unified Model Catalog | Dynamic catalog listing across all custom providers and NVIDIA Playground |
-| `POST /mcp` | HTTP Streamable MCP | Model Context Protocol search tool (`search_web`) |
-| `POST /v2/search` | JSON | Same ranked search as `search_web`, plain `{"query"}` in / `{"results"}` out |
-| `/admin` | Admin Console | Web console for providers, model masks, Chrome workers, and metrics |
-| `GET /healthz` | Health Check | Gateway liveness and captcha pool status |
-
----
+`Go 1.26+` and `PostgreSQL 17` for a source build; `Docker` + Compose v2 for the
+container path. The captcha pool needs a local Chrome/Chromium — the Docker image
+ships Chromium, so container users need neither Chrome nor Go on the host.
 
 ## Quick Start
 
-### 1. Custom Providers (Zero-Browser Mode — No Chrome, No Captcha Needed)
+### 1. One-command Docker deploy (auto-migrate)
 
-For custom upstreams only (OpenAI, Anthropic, OpenRouter, DeepSeek, or local
-Ollama / vLLM), the gateway runs as a pure Go proxy without allocating any browser
-processes:
+Create `.env` with the one required value (base64, 32 bytes):
 
 ```bash
-# Any platform: listen locally on port 8080
+# Linux / macOS / Git Bash
+echo "GNVIPI_MASTER_KEY=$(openssl rand -base64 32)" > .env
+```
+
+```powershell
+# Windows PowerShell
+$k = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($k)
+"GNVIPI_MASTER_KEY=$([Convert]::ToBase64String($k))" | Set-Content .env
+```
+
+Then deploy — the helper script builds the image, runs the `migrate` service to
+completion, and starts `serve`:
+
+| Platform | Command |
+|---|---|
+| Linux | `./scripts/linux/deploy.sh` |
+| macOS | `./scripts/macos/deploy.sh` |
+| Windows | `.\scripts\windows\deploy.ps1` (or `deploy.bat`) |
+
+Options: `--no-build` / `-NoBuild` reuses existing images, `--down` / `-Down`
+stops the stack and keeps volumes. Open `http://127.0.0.1:8080/admin` (redirects
+to the dashboard at `/`) and sign in as `gnvipi` — on a fresh database the
+password is `gnvipi` and the console forces you to change it (set
+`GNVIPI_ROOT_PASSWORD` to pick your own). Add providers on the **Models** page,
+and use **Chrome** → **Start All** to launch the NVIDIA Playground pool.
+
+Expose it through Cloudflare Tunnel (the `tunnel` Compose profile runs a
+`cloudflared` sidecar sharing `serve`'s network namespace):
+
+```bash
+echo "CF_TUNNEL=<tunnel-token>" >> .env
+echo "COMPOSE_PROFILES=tunnel" >> .env
+./scripts/linux/deploy.sh --no-build
+```
+
+### 2. Local development (Go + PostgreSQL)
+
+```bash
+# Database: dev-only credentials, never reuse outside a sandbox.
+docker compose up -d --wait db
+export GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
+export GNVIPI_MASTER_KEY="$(openssl rand -base64 32)"
+
+go build -o ./bin/serve ./cmd/serve            # Windows: -o .\bin\serve.exe
+./bin/serve migrate
+./bin/serve -addr 127.0.0.1:8080      # Admin Console: http://localhost:8080/admin
+```
+
+The OS launchers wrap this and add the Chrome pool, a readiness wait, and an
+optional Claude Code session pointed at the gateway:
+
+```bash
+./scripts/linux/run.sh            # or ./scripts/macos/run.sh, .\scripts\windows\run.ps1
+./scripts/linux/run.sh --claude   # also launches Claude Code (run.ps1 -Claude)
+```
+
+Useful flags: `--no-captcha` / `-NoCaptcha` (custom providers only, no Chrome),
+`--lan` / `-Lan` (bind `:8080`), `--build`, `--proxy <url>`.
+
+For the DB-backed Claude Code flow, mint a one-time gateway token instead of
+using a static gateway key:
+
+```bash
+printf '%s\n' '<temporary-password>' | ./bin/serve admin create-superuser --username <name> --with-gateway-token
+export GNVIPI_GATEWAY_TOKEN='gw_...'
+./scripts/linux/run.sh --claude
+```
+
+The password is read from stdin only — at a terminal (or MSYS2/Git Bash mintty)
+the command refuses to run so it is never echoed. Client base URLs and full
+snippets: [docs/clients.md](docs/clients.md).
+
+### 3. Custom providers only (no Chrome, no database)
+
+```bash
 go run ./cmd/serve -addr 127.0.0.1:8080
 ```
 
-Or use the OS launcher script:
+Providers are then read from `-models-file` (default
+`internal/models/playground_models.json`; seed an empty one with
+`scripts/linux/init.sh`, `scripts/macos/init.sh`, or `scripts\windows\init.ps1`);
+with `GNVIPI_DATABASE_URL` set, providers, keys, masks, and the search template
+live in PostgreSQL instead.
 
-- **Windows (PowerShell):** `.\scripts\windows\run.ps1 -NoCaptcha`
-- **Linux (Bash):** `./scripts/linux/run.sh --no-captcha`
-- **macOS (Bash):** `./scripts/macos/run.sh --no-captcha`
+## Configuration
 
-Add your providers via the Admin Console at `http://localhost:8080/models`: create the provider (name, base URL, protocol), then open it and add keys — Auth key (bearer) and/or API key (`x-api-key`)
-or directly in `-models-file` (default: `internal/models/playground_models.json`, file mode only — with `GNVIPI_DATABASE_URL` set, providers, masks, deletions and the search template live in PostgreSQL).
+`serve` reads flags and environment variables; the same names feed
+`docker-compose.yml` through `.env`.
 
-### 2. NVIDIA Playground (With Headless Chrome Captcha Solvers)
+| Variable | Purpose |
+|---|---|
+| `GNVIPI_MASTER_KEY` | **Required in database mode.** Base64 32-byte key that encrypts stored provider secrets. Rotation: `GNVIPI_MASTER_KEY_VERSION`, `GNVIPI_MASTER_KEY_PREVIOUS`. |
+| `GNVIPI_DATABASE_URL` | PostgreSQL DSN. Unset → file mode (no accounts, no audit trail). |
+| `GNVIPI_MIGRATION_DATABASE_URL` | DDL role used by `serve migrate` / `-auto-migrate`. **Required when `GNVIPI_ENV=production`**; development falls back to `GNVIPI_DATABASE_URL`. |
+| `GNVIPI_ENV` | `development` (default) or `production`. `production` requires `GNVIPI_DATABASE_URL` and rejects `-auto-migrate`. |
+| `GNVIPI_ROOT_PASSWORD` / `GNVIPI_ROOT_EMAIL` | Seed the built-in `gnvipi` root account on first start. Without the password override the default `gnvipi` is forced to change at first sign-in. |
+| `GNVIPI_PUBLIC_URL` / `GNVIPI_DOMAIN` | Public base URL (`https://gateway.example.com`) shown in Admin Console API snippets; bare hosts default to `https`. |
+| `GNVIPI_TRUSTED_PROXIES` | Comma-separated IPs/CIDRs trusted for `X-Forwarded-For` / `X-Forwarded-Proto`. Compose defaults to `127.0.0.1/32,::1/128` for the tunnel sidecar. |
+| `GNVIPI_CF_MAIL_WORKER_URL` | Cloudflare Email Worker `POST` endpoint for outbound mail; takes precedence over SMTP when both are set. |
+| `GNVIPI_SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` | Direct SMTP delivery for the same admin notifications. Delivery is disabled when neither SMTP host nor worker URL is set. |
+| `GNVIPI_ADMIN_TOKEN` | Bootstrap token for the legacy admin surface. Ignored once a database account exists. |
+| `GNVIPI_GATEWAY_KEY` | Comma-separated client keys guarding `/v1/*`, `/mcp`, `/v2/search`. Optional; DB tokens are the supported path. |
+| `GNVIPI_STATS_FILE` | Stats history (NDJSON, rotated). Defaults to `stats.jsonl` in the OS user cache dir; point it at a volume in containers. |
+| `GNVIPI_DB_MAX_CONNS` / `GNVIPI_DB_MIN_CONNS` / `GNVIPI_DB_CONNECT_TIMEOUT` | Connection-pool sizing. |
+| `CF_TUNNEL` | Cloudflare Tunnel token consumed by the `tunnel` Compose profile. |
+| `COMPOSE_PROFILES` | `tunnel` enables the `cloudflared` sidecar. |
+| `GNVIPI_PORT` / `GNVIPI_DB_PORT` / `GNVIPI_DB_USER` / `GNVIPI_DB_PASSWORD` / `GNVIPI_DB_NAME` | Compose-only host ports and dev database credentials. |
 
-To serve free models from the NVIDIA Playground (e.g.
-`deepseek-ai/deepseek-v4-flash-0731`, `moonshotai/kimi-k3`):
+Run flags (port, body limits, pooling, `-deny-private-upstreams`, …) and data
+locations are in [docs/operations.md](docs/operations.md).
 
-1. Start the gateway with the OS launcher:
-   - **Windows:**
-     ```powershell
-     .\scripts\windows\run.ps1          # Starts gateway with Chrome pool ready for activation
-     .\scripts\windows\run.ps1 -Claude  # Starts gateway and launches Claude Code pointed at it
-     ```
-   - **Linux:**
-     ```bash
-     ./scripts/linux/run.sh             # Starts gateway with Chrome pool ready for activation
-     ./scripts/linux/run.sh --claude    # Starts gateway and launches Claude Code pointed at it
-     ```
-   - **macOS:**
-     ```bash
-     ./scripts/macos/run.sh             # Starts gateway with Chrome pool ready for activation
-     ./scripts/macos/run.sh --claude    # Starts gateway and launches Claude Code pointed at it
-     ```
-   *(Or run directly: `go run ./cmd/serve -addr 127.0.0.1:8080`.)*
-2. Open `http://localhost:8080/chromes` and click **Turn On / Start All**.
-   *Startup is always idle and never launches Chrome automatically until activated.*
+## Endpoints
 
-### 3. Database-Backed Local Setup (PostgreSQL)
-
-With PostgreSQL configured (`GNVIPI_DATABASE_URL` + `GNVIPI_MASTER_KEY`), `serve`
-automatically seeds the built-in `gnvipi` (`root`) account on first startup with
-temporary password `gnvipi` (override with `GNVIPI_ROOT_PASSWORD`), and prompts
-you to set a real password on first login at `http://localhost:8080/admin`.
-
-**Windows (PowerShell):**
-
-```powershell
-# Local-development credentials only; do not reuse them in production.
-docker compose up -d --wait db
-$env:GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
-$env:GNVIPI_MASTER_KEY='<base64-32-byte-key>'
-New-Item -ItemType Directory -Force .\bin | Out-Null
-go build -o .\bin\serve.exe ./cmd/serve
-.\bin\serve.exe migrate
-# Optional: create a superuser + one-time gateway token for scripts/windows/run.ps1 -Claude
-'<temporary-password>' | .\bin\serve.exe admin create-superuser --username <superuser> --with-gateway-token
-$env:GNVIPI_GATEWAY_TOKEN='gw_...'
-.\scripts\windows\run.ps1 -Claude
-```
-
-**Linux / macOS (Bash):**
-
-```bash
-# Local-development credentials only; do not reuse them in production.
-docker compose up -d --wait db
-export GNVIPI_DATABASE_URL='postgres://gnvipi_dev:gnvipi_dev_only@localhost:5432/gnvipi?sslmode=disable'
-export GNVIPI_MASTER_KEY='<base64-32-byte-key>'
-mkdir -p ./bin
-go build -o ./bin/serve ./cmd/serve
-./bin/serve migrate
-# Optional: create a superuser + one-time gateway token for --claude
-printf '%s\n' '<temporary-password>' | ./bin/serve admin create-superuser --username <superuser> --with-gateway-token
-export GNVIPI_GATEWAY_TOKEN='gw_...'
-./scripts/linux/run.sh --claude   # or ./scripts/macos/run.sh --claude
-```
-
-`serve admin create-superuser` and `serve admin reset-password <user>` refuse a
-terminal stdin so the password is never echoed; pipe the password in on stdin
-instead of typing it interactively. In MSYS2/Git Bash (mintty) a pty is a named
-pipe that cannot be told apart from a real pipeline, so piping is refused there
-as well; run the command from cmd.exe or PowerShell on Windows, or a standard
-terminal on Linux/macOS.
-
-The bootstrap command prints the gateway token once. `run.ps1 -Claude` /
-`run.sh --claude` forwards it to Claude Code as `ANTHROPIC_AUTH_TOKEN` without
-printing the token.
-
----
-
-## Client Configuration
-
-DB-backed clients use the generated `gw_...` token. The `local-gateway`
-values in the remaining rows are legacy/manual `-gateway-key` placeholders;
-`run.ps1 -Claude` rejects that literal.
-
-Point your client at the gateway root or `/v1`, depending on the SDK:
-
-| Client Application / SDK | Base URL | Auth Token / Key |
+| Route | Protocol | Function |
 |---|---|---|
-| **Claude Code** | `http://localhost:8080` (no `/v1` suffix) | generated `gw_...` token (DB-backed) or configured `-gateway-key` (legacy) |
-| **OpenAI Python SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
-| **OpenAI Node / TypeScript SDK** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
-| **Codex / OpenAI Responses** | `http://localhost:8080/v1` | `local-gateway` (or configured `-gateway-key`) |
-| **OpenCode** | `http://localhost:8080/v1` (OpenAI) or `http://localhost:8080` (Anthropic) | `local-gateway` (or configured `-gateway-key`) |
-| **cURL / HTTP Clients** | `http://localhost:8080` | `Bearer local-gateway` |
+| `POST /v1/chat/completions` | OpenAI Chat Completions | Chat for OpenAI SDKs, OpenCode, HTTP clients |
+| `POST /v1/messages` | Anthropic Messages | Drop-in endpoint for Claude Code and Anthropic clients |
+| `POST /v1/responses` | OpenAI Responses | Codex and next-gen tools |
+| `POST /v1/messages/count_tokens` | Anthropic Token Counting | Upstream or locally estimated counting |
+| `GET /v1/models` | Unified catalog | Models across custom providers and NVIDIA Playground |
+| `POST` / `GET /mcp` | HTTP Streamable MCP | `search_web` tool |
+| `POST /v2/search` | JSON | `{"query"}` in / `{"results"}` out |
+| `/` (via `/admin`) | Admin Console | Stats, providers, keys, Chrome workers |
+| `GET /healthz` | JSON | Liveness and captcha-pool status |
 
-### Claude Code
+## Documentation
 
-For the DB-backed flow, set the generated token in the environment or in
-`~/.claude/settings.json` (replace `$your_model` with a configured alias, or use
-the built-in `automode` or `cycle` aliases):
-
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:8080",
-    "ANTHROPIC_AUTH_TOKEN": "$GNVIPI_GATEWAY_TOKEN",
-    "ANTHROPIC_API_KEY": "",
-    "ANTHROPIC_MODEL": "$your_model",
-    "ANTHROPIC_SMALL_FAST_MODEL": "$your_model",
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_AUTO_MODE_MODEL": "$your_model"
-  }
-}
-```
-
-- **`automode`**: routes to the **Auto model** selected on the **Config** page (per account).
-- **`cycle`**: rotates across enabled models on each request.
-
-### OpenAI Python SDK
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="local-gateway",  # or your GNVIPI_GATEWAY_KEY
-)
-
-response = client.chat.completions.create(
-    model="openrouter/anthropic/claude-3.7-sonnet",
-    messages=[{"role": "user", "content": "Explain quantum computing in one sentence."}],
-)
-print(response.choices[0].message.content)
-```
-
-### cURL
-
-```bash
-curl -sS -N http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer local-gateway" \
-  -d '{
-    "model": "z-ai/glm-5.2",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": true
-  }'
-```
-
-Node/TypeScript, Codex CLI, OpenCode, and the full compatibility matrix are in
-[docs/clients.md](docs/clients.md).
-
----
-
-## Provider Configuration
-
-Providers are declared with the typed v2 schema, either in the configured models
-file (`-models-file`, file mode) or from the Admin UI at `/models`, which writes
-to PostgreSQL when a database is configured. From the UI:
-give the provider an **ID** and **base URL**, pick the **wire protocol**
-(`openai-chat`, `anthropic-messages`, or `openai-responses`), map model aliases
-(upstream IDs or wildcards such as `openrouter/*`), add the **API key**, then
-**Save & Test Connection**.
-
-```json
-{
-  "schema_version": 2,
-  "providers_v2": [
-    {
-      "id": "openrouter",
-      "name": "OpenRouter",
-      "base_url": "https://openrouter.ai/api/v1",
-      "protocol": "openai-chat",
-      "enabled": true,
-      "auth": { "scheme": "bearer", "key_env": "OPENROUTER_API_KEY" },
-      "models": [{ "alias": "openrouter/*", "upstream_model": "*" }],
-      "max_concurrency": 8,
-      "queue_timeout": "5s"
-    }
-  ]
-}
-```
-
-The complete schema — fallback chains, header policies, timeouts, TLS profiles,
-SSRF policy, and legacy migration — is in [docs/providers.md](docs/providers.md).
-
----
+| Guide | Contents |
+|---|---|
+| [docs/operations.md](docs/operations.md) | Run flags, stats storage, Admin Console, `cycle` failover, search MCP, data locations, troubleshooting. |
+| [docs/postgres-operations.md](docs/postgres-operations.md) | Roles and grants, migrations, backup/PITR, monitoring, retention. |
+| [docs/auth.md](docs/auth.md) | Ownership model, root/superuser/admin/user permissions, bootstrap and recovery, secret handling. |
+| [docs/providers.md](docs/providers.md) | Provider schema v2, model mappings, wildcards, fallback chains, SSRF policy, migration. |
+| [docs/clients.md](docs/clients.md) | Client setup and the cross-protocol compatibility matrix. |
+| [docs/architecture/overview.md](docs/architecture/overview.md) | Hub-and-spoke design, normalized IR, execution paths, invariants. |
+| [docs/architecture/adapters.md](docs/architecture/adapters.md) | Writing and testing protocol adapters. |
+| [docs/development/testing.md](docs/development/testing.md) | Test layout, CI, and conventions. |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | v2.0 highlights, deprecations, upgrade guide. |
 
 ## Security
 
 > [!WARNING]
-> The default `-addr` is `127.0.0.1:8080`, so the gateway listens on **loopback
-> only**. With no `-gateway-key` configured, `/v1/*`, `/mcp` and `/v2/search` accept
-> **unauthenticated** requests from anything that can reach the port; placeholder
-> values such as `local-gateway` do not secure it.
->
-> Binding to a wildcard address (`-addr :8080`, `docker run -p 8080:8080`) exposes
-> it on **all interfaces**. `/v1/*`, `/mcp` and `/v2/search` then stay open until you set
-> `-gateway-key`, and `/admin` answers **HTTP 403** until you set `-admin-token` or
-> `GNVIPI_ADMIN_TOKEN`. For any non-loopback deployment, set both and prefer a
-> firewall or an authenticated reverse proxy over direct exposure.
+> `serve` binds `127.0.0.1:8080` (loopback only) by default, but that is the
+> only default protection. In **file mode** (no `GNVIPI_DATABASE_URL`) with no
+> `-gateway-key` / `GNVIPI_GATEWAY_KEY`, `/v1/*`, `/mcp`, and `/v2/search accept
+> **unauthenticated** requests from anything that can reach the port, so a
+> wildcard bind (`-addr :8080`, `-p 8080:8080`) or a tunnel exposes them.
+> **Database mode** fails closed and requires a database-issued `gw_...` token or
+> a configured static key. Placeholders such as `local-gateway` never secure
+> anything. `/admin` is account-gated in database mode; in file mode a
+> non-loopback bind answers **HTTP 403** until `-admin-token` /
+> `GNVIPI_ADMIN_TOKEN` is set. For any non-loopback deployment, set client auth
+> and put a firewall or an authenticated reverse proxy in front.
 
-Configured provider, gateway, and admin credentials are scrubbed from diagnostic
-dumps, error responses, and new statistics records; upstream dial targets are
-checked against cloud-metadata and link-local addresses at configuration save time
-and again at dial time. Details: [docs/clients.md](docs/clients.md) for client
-authentication, [docs/providers.md](docs/providers.md) for upstream URL policy,
-[docs/operations.md](docs/operations.md) for admin sessions and flags.
-
----
-
-## Admin Console — `/admin`
-
-The built-in console covers the whole runtime: live stats and request history,
-model toggles and provider editing, `automode` / `cycle` configuration, and
-on-demand Chrome worker pools. Visit `http://localhost:8080/admin` (sign in first
-if `-admin-token` is set). Per-tab detail and session rules are in
+Provider, gateway, and admin credentials are scrubbed from diagnostics and error
+responses, and upstream dial targets are checked against cloud-metadata and
+link-local addresses both at save time and at dial time. Details:
+[docs/clients.md](docs/clients.md), [docs/providers.md](docs/providers.md),
 [docs/operations.md](docs/operations.md).
 
----
+## Contributing & License
 
-## Docker Deployment
-
-```bash
-docker build -t gnvipi:local .
-docker run --rm -p 127.0.0.1:8080:8080 --shm-size=2g \
-  --mount type=volume,source=gnvipi-data,target=/data \
-  -e GNVIPI_STATS_FILE=/data/stats.jsonl \
-  gnvipi:local -models-file /data/playground_models.json
-```
-
-The image includes Chromium, so Docker users need neither Chrome nor Go on the
-host. The named `gnvipi-data` volume survives container removal. Port-publishing
-and `-admin-token` rules are in [docs/operations.md](docs/operations.md).
-
----
-
-## Development & Verification
-
-```bash
-go test -race ./...          # unit, integration, and E2E matrix tests
-golangci-lint run ./...      # linter
-```
-
-Conventions and test layout: [docs/development/conventions.md](docs/development/conventions.md)
-and [docs/development/testing.md](docs/development/testing.md).
+Run `go build ./...` and `go vet ./...` before opening a pull request; test and
+commit conventions are in [docs/development/conventions.md](docs/development/conventions.md)
+and [CONTRIBUTING.md](CONTRIBUTING.md). Released under the [MIT License](./LICENSE).
