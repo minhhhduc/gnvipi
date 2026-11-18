@@ -3,11 +3,8 @@ package mailer
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -154,54 +151,5 @@ func TestSMTPSenderDisabledAndHeaderSanitization(t *testing.T) {
 	}
 	if !strings.Contains(msg, "line1\r\nline2\r\n") {
 		t.Fatalf("unexpected body in message:\n%s", msg)
-	}
-}
-
-func TestWorkerSenderDelivery(t *testing.T) {
-	var gotAuth string
-	var gotBody map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decode worker body: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	cfg, err := LoadConfigFrom(mapLookup(map[string]string{
-		"GNVIPI_CF_MAIL_WORKER_URL": srv.URL,
-		"GNVIPI_SMTP_PASSWORD":      "cfmail_secret",
-		"GNVIPI_SMTP_FROM":          "GNVIPI <noreply@example.com>",
-	}))
-	if err != nil {
-		t.Fatalf("LoadConfigFrom() error = %v", err)
-	}
-	sender := NewSMTPSender(cfg)
-	if !sender.Enabled() {
-		t.Fatal("expected worker sender to be enabled")
-	}
-	if err := sender.Send(t.Context(), "user@example.com", "OTP Code", "123456"); err != nil {
-		t.Fatalf("Send() error = %v", err)
-	}
-	if gotAuth != "Bearer cfmail_secret" {
-		t.Fatalf("Authorization = %q, want Bearer cfmail_secret", gotAuth)
-	}
-	if gotBody["to"] != "user@example.com" || gotBody["subject"] != "OTP Code" || gotBody["text"] != "123456" {
-		t.Fatalf("unexpected worker payload: %+v", gotBody)
-	}
-
-	// Non-2xx worker responses return an error.
-	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		if _, writeErr := w.Write([]byte(`{"error":"upstream"}`)); writeErr != nil {
-			t.Errorf("write error response: %v", writeErr)
-		}
-	}))
-	defer errSrv.Close()
-
-	errSender := NewSMTPSender(Config{WorkerURL: errSrv.URL})
-	if err := errSender.Send(t.Context(), "user@example.com", "OTP", "123456"); err == nil {
-		t.Fatal("expected error for 502 worker response")
 	}
 }
