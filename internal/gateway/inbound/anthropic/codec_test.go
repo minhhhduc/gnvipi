@@ -778,7 +778,6 @@ func TestEmptyMessageSystemRoleIsDropped(t *testing.T) {
 		})
 	}
 }
-
 func TestMixedUserContentEmitsToolResultsFirst(t *testing.T) {
 	body := `{"model":"client-alias","max_tokens":16,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"lookup","input":{}}]},{"role":"user","content":[{"type":"text","text":"before"},{"type":"tool_result","tool_use_id":"c1","content":"r"},{"type":"text","text":"after"}]}]}`
 	got, err := New().DecodeRequest(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(body)))

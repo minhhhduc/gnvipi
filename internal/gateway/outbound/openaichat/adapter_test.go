@@ -597,3 +597,113 @@ func TestBuildRequestCoalesceAssistantMultipartContent(t *testing.T) {
 		}
 	}
 }
+
+func buildChatFields(t *testing.T, input *ir.Request) map[string]json.RawMessage {
+	t.Helper()
+	request, err := openaichat.New().BuildRequest(t.Context(), input, adapter.Target{BaseURL: "https://upstream.invalid/v1/chat/completions", Model: "upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := request.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	return fields
+}
+
+func TestBuildRequestNormalizesObjectSchemas(t *testing.T) {
+	fields := buildChatFields(t, &ir.Request{
+		Model:    "client-alias",
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi"))},
+		Tools: []ir.Tool{
+			{Name: "bare", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "nested", Schema: json.RawMessage(`{"type":"object","properties":{"inner":{"type":"object"}}}`)},
+		},
+	})
+	var tools []struct {
+		Function struct {
+			Name       string          `json:"name"`
+			Parameters json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(fields["tools"], &tools); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("tools = %s", fields["tools"])
+	}
+	var bare map[string]json.RawMessage
+	if err := json.Unmarshal(tools[0].Function.Parameters, &bare); err != nil {
+		t.Fatal(err)
+	}
+	if string(bare["properties"]) != "{}" {
+		t.Fatalf("bare parameters = %s", tools[0].Function.Parameters)
+	}
+	var nested struct {
+		Properties map[string]struct {
+			Type       string         `json:"type"`
+			Properties map[string]any `json:"properties"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tools[1].Function.Parameters, &nested); err != nil {
+		t.Fatal(err)
+	}
+	if inner, ok := nested.Properties["inner"]; !ok || inner.Type != "object" || inner.Properties == nil {
+		t.Fatalf("nested parameters = %s", tools[1].Function.Parameters)
+	}
+}
+
+func TestBuildRequestToolOnlyAssistantHasEmptyContent(t *testing.T) {
+	fields := buildChatFields(t, &ir.Request{
+		Model: "client-alias",
+		Messages: []ir.Message{
+			{Role: ir.RoleAssistant, Content: []ir.Block{ir.NewToolUseBlock("c1", "lookup", json.RawMessage(`{"q":"x"}`))}},
+			{Role: ir.RoleTool, Content: []ir.Block{ir.NewToolResultBlock("c1", []ir.Block{ir.NewTextBlock("ok")}, false)}},
+		},
+	})
+	var messages []struct {
+		Role      string            `json:"role"`
+		Content   json.RawMessage   `json:"content"`
+		ToolCalls []json.RawMessage `json:"tool_calls"`
+	}
+	if err := json.Unmarshal(fields["messages"], &messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Role != "assistant" || len(messages[0].ToolCalls) != 1 {
+		t.Fatalf("messages = %s", fields["messages"])
+	}
+	if string(messages[0].Content) != `""` {
+		t.Fatalf("assistant content = %s", messages[0].Content)
+	}
+}
+
+func TestBuildRequestKeepsAssistantTextWithToolCalls(t *testing.T) {
+	fields := buildChatFields(t, &ir.Request{
+		Model: "client-alias",
+		Messages: []ir.Message{{
+			Role: ir.RoleAssistant,
+			Content: []ir.Block{
+				ir.NewTextBlock("checking"),
+				ir.NewToolUseBlock("c1", "lookup", nil),
+			},
+		}},
+	})
+	var messages []struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(fields["messages"], &messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || string(messages[0].Content) != `"checking"` {
+		t.Fatalf("messages = %s", fields["messages"])
+	}
+}
