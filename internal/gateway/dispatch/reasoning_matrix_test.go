@@ -907,3 +907,42 @@ func TestReasoningStreamingCrossProtocolMatrix(t *testing.T) {
 		}
 	})
 }
+
+func TestAdapterSmokeAnthropicEffortMapping(t *testing.T) {
+	upstream := runAdapterSmoke(t,
+		`{"model":"smoke-model","max_tokens":64,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"solve"},{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"},{"type":"text","text":"answer"}]},{"role":"user","content":"continue"}]}`,
+	)
+
+	reqs := upstream.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream requests = %d", len(reqs))
+	}
+	var body struct {
+		ReasoningEffort string          `json:"reasoning_effort"`
+		Reasoning       json.RawMessage `json:"reasoning"`
+		Thinking        json.RawMessage `json:"thinking"`
+		OutputConfig    json.RawMessage `json:"output_config"`
+		Messages        []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
+		t.Fatalf("decode upstream request: %v; body: %s", err, reqs[0].Body)
+	}
+	if body.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high; body: %s", body.ReasoningEffort, reqs[0].Body)
+	}
+	for name, raw := range map[string]json.RawMessage{"reasoning": body.Reasoning, "thinking": body.Thinking, "output_config": body.OutputConfig} {
+		if len(raw) != 0 {
+			t.Fatalf("%s forwarded to the Chat upstream: %s", name, reqs[0].Body)
+		}
+	}
+	if len(body.Messages) != 3 || body.Messages[1].Role != "assistant" {
+		t.Fatalf("redacted assistant turn mangled: %s", reqs[0].Body)
+	}
+	var answer string
+	if err := json.Unmarshal(body.Messages[1].Content, &answer); err != nil || answer != "answer" {
+		t.Fatalf("assistant content = %s, want answer; body: %s", body.Messages[1].Content, reqs[0].Body)
+	}
+}
