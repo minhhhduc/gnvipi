@@ -39,7 +39,7 @@ func TestAdminStatsUserResponse(t *testing.T) {
 		t.Helper()
 		res := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(res)
-		c.Request = httptest.NewRequest(http.MethodGet, "/admin/api/stats", nil)
+		c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/admin/api/stats", http.NoBody)
 		c.Set(adminIdentityKey, &adminIdentity{UserID: "alice", Role: role})
 		handleAdminStats(c)
 		if res.Code != http.StatusOK {
