@@ -23,13 +23,6 @@ import { AuditView } from "./views/Audit";
 const STATS_POLL_INTERVAL_MS = 2000;
 const STATS_POLL_TIMEOUT_MS = 15000;
 
-/** Display labels where the URL value is not the page title. */
-const PAGE_TITLES: Partial<Record<Page, string>> = {
-  stats: "Dashboard",
-  usage: "Usage log",
-  chromes: "Chrome",
-};
-
 const LEGACY_ADMIN_USER: AdminUser = {
   id: "legacy-admin",
   username: "legacy-admin",
@@ -142,15 +135,8 @@ export function App() {
   }, [syncFromUrl]);
 
   useEffect(() => {
-    const title = !authChecked
-      ? "Loading"
-      : !user
-        ? "Sign in"
-        : user.must_change_password
-          ? "Change password"
-          : PAGE_TITLES[effectivePage] ?? effectivePage[0].toUpperCase() + effectivePage.slice(1);
-    document.title = `${title} · gnvipi`;
-  }, [authChecked, effectivePage, user]);
+    document.title = "gnvipi";
+  }, []);
 
   const refreshStats = useCallback(() => {
     statsPoller.current?.refresh();
