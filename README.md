@@ -186,7 +186,7 @@ locations are in [docs/operations.md](docs/operations.md).
 > [!WARNING]
 > `serve` binds `127.0.0.1:8080` (loopback only) by default, but that is the
 > only default protection. In **file mode** (no `GNVIPI_DATABASE_URL`) with no
-> `-gateway-key` / `GNVIPI_GATEWAY_KEY`, `/v1/*`, `/mcp`, and `/v2/search accept
+> `-gateway-key` / `GNVIPI_GATEWAY_KEY`, `/v1/*`, `/mcp`, and `/v2/search` accept
 > **unauthenticated** requests from anything that can reach the port, so a
 > wildcard bind (`-addr :8080`, `-p 8080:8080`) or a tunnel exposes them.
 > **Database mode** fails closed and requires a database-issued `gw_...` token or
