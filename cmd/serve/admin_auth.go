@@ -138,7 +138,7 @@ func handleAdminLogout(state *authState) gin.HandlerFunc {
 				return
 			}
 		}
-		adminClearCredentials(c)
+		adminClearCredentials(c, state.requestIsHTTPS(c.Request))
 		c.Status(http.StatusNoContent)
 	}
 }
@@ -150,7 +150,7 @@ func handleAdminSession(state *authState) gin.HandlerFunc {
 		if err != nil {
 			// The account disappeared between validation and this read: the
 			// session is no longer usable, so stop pretending it is.
-			adminClearCredentials(c)
+			adminClearCredentials(c, state.requestIsHTTPS(c.Request))
 			adminAPIError(c, http.StatusUnauthorized, "authentication_required", "sign in to the admin console")
 			return
 		}
@@ -214,8 +214,7 @@ func adminPasswordPolicyError(err error) bool {
 }
 
 // adminClearCredentials expires the session and CSRF cookies in one response.
-func adminClearCredentials(c *gin.Context) {
-	secure := adminTLSRequest(c.Request)
+func adminClearCredentials(c *gin.Context, secure bool) {
 	http.SetCookie(c.Writer, auth.ClearSessionCookie(secure))
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     auth.CSRFCookieName,

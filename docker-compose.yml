@@ -94,7 +94,9 @@ services:
     depends_on:
       serve:
         condition: service_started
-    command: tunnel --no-autoupdate run --token ${CF_TUNNEL:-}
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL:-}
+    command: tunnel --no-autoupdate run
 
 volumes:
   gnvipi_db:
