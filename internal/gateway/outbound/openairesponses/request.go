@@ -87,11 +87,7 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	// stop sequences are translated away rather than sent as an unknown key
 	// the upstream rejects (issue #455).
 	if request.Reasoning != nil || request.ReasoningEffort != "" || request.BudgetTokens != nil {
-		reasoning, err := encodeReasoning(request)
-		if err != nil {
-			return nil, err
-		}
-		if reasoning != nil {
+		if reasoning := encodeReasoning(request); reasoning != nil {
 			fields["reasoning"] = reasoning
 		}
 	}
@@ -391,34 +387,34 @@ func encodeImage(image *ir.Image) (map[string]any, error) {
 	}
 }
 
-func encodeReasoning(request *ir.Request) (map[string]any, error) {
+func encodeReasoning(request *ir.Request) map[string]any {
 	if request == nil {
-		return nil, nil
+		return nil
 	}
 	reasoning := request.Reasoning
 	if reasoning == nil && request.ReasoningEffort == "" && request.BudgetTokens == nil {
-		return nil, nil
+		return nil
 	}
 	if reasoning != nil && reasoning.Enabled != nil && !*reasoning.Enabled {
-		return nil, nil
+		return nil
 	}
 	effort := request.GetReasoningEffort()
 	if effort == "" {
 		if reasoning != nil && reasoning.Enabled != nil && *reasoning.Enabled {
 			effort = ir.ReasoningEffortMedium
 		} else {
-			return nil, nil
+			return nil
 		}
 	}
 	switch effort {
 	case ir.ReasoningEffortLow, ir.ReasoningEffortMedium, ir.ReasoningEffortHigh:
-		return map[string]any{"effort": string(effort)}, nil
+		return map[string]any{"effort": string(effort)}
 	default:
 		// Vendors ship effort names the Responses API does not know
 		// ("xhigh", "max", vendor-specific tiers). Normalization covers the
 		// documented synonyms; anything left is sent as the closest level
 		// instead of failing an otherwise valid request (issue #455).
-		return map[string]any{"effort": string(ir.ReasoningEffortMedium)}, nil
+		return map[string]any{"effort": string(ir.ReasoningEffortMedium)}
 	}
 }
 
