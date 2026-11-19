@@ -328,7 +328,7 @@ func TestAnthropicUserIdentityFitsOpenAIWireLimit(t *testing.T) {
 			if err := json.Unmarshal(body["user"], &got[i]); err != nil {
 				t.Fatal(err)
 			}
-			if len(got[i]) == 0 || len(got[i]) > 64 {
+			if got[i] == "" || len(got[i]) > 64 {
 				t.Fatalf("upstream user length = %d, allowed 1..64", len(got[i]))
 			}
 		}
