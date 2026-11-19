@@ -65,7 +65,7 @@ func ApplyHeaders(dst, src *http.Request, p *provider.Provider) error {
 	}
 	for name, values := range incoming {
 		canonical := http.CanonicalHeaderKey(name)
-		if provider.ForbiddenForwardHeader(canonical) || nominated[canonical] || !headerAllowed(canonical, p.ForwardHeaders) {
+		if provider.ForbiddenForwardHeader(canonical) || nominated[canonical] || !headerAllowed(canonical, p.ForwardHeaders) || !protocolHeader(canonical, p.Protocol) {
 			continue
 		}
 		for _, value := range values {
@@ -90,6 +90,23 @@ func ApplyHeaders(dst, src *http.Request, p *provider.Provider) error {
 	dst.Header = out
 	PropagateRequestID(dst)
 	return nil
+}
+
+// protocolHeader reports whether a family-specific header may reach the target
+// protocol. Anthropic-Version and Anthropic-Beta name Anthropic features, and
+// Openai-Beta names an OpenAI feature; forwarding either to the other family
+// leaves the upstream with a flag it cannot interpret. The gateway sets the
+// Anthropic protocol default itself, so dropping a client's value loses
+// nothing that a Messages target needs.
+func protocolHeader(name string, protocol ir.Protocol) bool {
+	switch name {
+	case "Anthropic-Version", "Anthropic-Beta":
+		return protocol == ir.ProtocolAnthropicMessages
+	case "Openai-Beta":
+		return protocol != ir.ProtocolAnthropicMessages
+	default:
+		return true
+	}
 }
 
 func headerAllowed(name string, extras []string) bool {

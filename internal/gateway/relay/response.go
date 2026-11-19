@@ -23,7 +23,7 @@ import (
 const diagnosticBodyLimit = 1 << 20
 const statCaptureLimit = 256 << 10
 
-func copyResponseHeaders(dst, src http.Header, requestID string) {
+func copyResponseHeaders(dst, src http.Header, rc *core.RequestContext) {
 	nominated := make(map[string]bool)
 	for name, values := range src {
 		if strings.EqualFold(name, "Connection") {
@@ -36,7 +36,7 @@ func copyResponseHeaders(dst, src http.Header, requestID string) {
 	}
 	for name, values := range src {
 		canonical := http.CanonicalHeaderKey(name)
-		if provider.ForbiddenForwardHeader(canonical) || nominated[canonical] || canonical == core.RequestIDHeader {
+		if provider.ForbiddenForwardHeader(canonical) || nominated[canonical] || !responseHeader(canonical, rc.InboundProtocol) {
 			continue
 		}
 		for _, value := range values {
@@ -44,9 +44,27 @@ func copyResponseHeaders(dst, src http.Header, requestID string) {
 		}
 	}
 	dst.Del("Content-Length")
-	dst.Set(core.RequestIDHeader, requestID)
+	dst.Set(core.RequestIDHeader, rc.ID)
 	if dst.Get("Content-Type") == "" {
 		dst.Set("Content-Type", "application/json")
+	}
+}
+
+// responseHeader reports whether an upstream response header may reach the
+// client. The gateway owns trace identity: its own X-Request-Id replaces either
+// upstream spelling. A rate-limit header is only meaningful to a client that
+// speaks the family which emitted it, so a translated response exposes the
+// target's limits to its own clients and never mixes the two vocabularies.
+func responseHeader(name string, inbound ir.Protocol) bool {
+	switch {
+	case name == core.RequestIDHeader, name == "Request-Id":
+		return false
+	case strings.HasPrefix(name, "X-Ratelimit-"), strings.HasPrefix(name, "Openai-Ratelimit-"):
+		return inbound != ir.ProtocolAnthropicMessages
+	case strings.HasPrefix(name, "Anthropic-Ratelimit-"):
+		return inbound == ir.ProtocolAnthropicMessages
+	default:
+		return true
 	}
 }
 
@@ -56,7 +74,7 @@ func isEventStream(contentType string) bool {
 }
 
 func (h *Relay) copyResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rc *core.RequestContext) (ir.Usage, error) {
-	copyResponseHeaders(w.Header(), resp.Header, rc.ID)
+	copyResponseHeaders(w.Header(), resp.Header, rc)
 	streamed := isEventStream(resp.Header.Get("Content-Type"))
 	diagnostic := resp.StatusCode < 200 || resp.StatusCode >= 300
 	var statusErr error

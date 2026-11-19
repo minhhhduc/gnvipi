@@ -92,11 +92,11 @@ func TestApplyHeadersRejectsUnsafeConfiguration(t *testing.T) {
 
 func TestMigratedProviderHeadersPreserveLegacyModes(t *testing.T) {
 	for _, tc := range []struct {
-		name, base, agent, auth string
-		messages                bool
+		name, base, agent, auth, version string
+		messages                         bool
 	}{
-		{"chat", "https://example.com/v1", "client", "Authorization", false},
-		{"messages", "https://example.com", "curl/8.4.0", "X-Api-Key", true},
+		{"chat", "https://example.com/v1", "client", "Authorization", "", false},
+		{"messages", "https://example.com", "curl/8.4.0", "X-Api-Key", "client-version", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			list, err := provider.FromLegacy([]provider.LegacyProvider{{Name: tc.name, BaseURL: tc.base, Model: "model", APIKey: "key", MessagesOnly: tc.messages}})
@@ -113,8 +113,48 @@ func TestMigratedProviderHeadersPreserveLegacyModes(t *testing.T) {
 			if tc.auth == "Authorization" {
 				wantAuth = "Bearer key"
 			}
-			if dst.Header.Get("User-Agent") != tc.agent || dst.Header.Get(tc.auth) != wantAuth || dst.Header.Get("Anthropic-Version") != "client-version" {
+			if dst.Header.Get("User-Agent") != tc.agent || dst.Header.Get(tc.auth) != wantAuth || dst.Header.Get("Anthropic-Version") != tc.version {
 				t.Fatalf("migrated headers=%v", dst.Header)
+			}
+		})
+	}
+}
+
+// A translated request keeps the client's experimental flags only inside their
+// own protocol family; the other family would receive a feature name it cannot
+// interpret.
+func TestApplyHeadersDropsOtherFamilyProtocolHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		protocol ir.Protocol
+		header   string
+		kept     bool
+	}{
+		{"messages-keeps-version", ir.ProtocolAnthropicMessages, "Anthropic-Version", true},
+		{"messages-keeps-beta", ir.ProtocolAnthropicMessages, "Anthropic-Beta", true},
+		{"messages-drops-openai-beta", ir.ProtocolAnthropicMessages, "Openai-Beta", false},
+		{"chat-drops-version", ir.ProtocolOpenAIChat, "Anthropic-Version", false},
+		{"chat-drops-beta", ir.ProtocolOpenAIChat, "Anthropic-Beta", false},
+		{"chat-keeps-openai-beta", ir.ProtocolOpenAIChat, "Openai-Beta", true},
+		{"responses-keeps-openai-beta", ir.ProtocolOpenAIResponses, "Openai-Beta", true},
+		{"responses-drops-version", ir.ProtocolOpenAIResponses, "Anthropic-Version", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src, dst := headerTestRequest(t), headerTestRequest(t)
+			src.Header.Set(tc.header, "client-value")
+			p := &provider.Provider{Protocol: tc.protocol, Auth: provider.Auth{Scheme: provider.AuthBearer, Key: "provider-secret"}}
+			if err := ApplyHeaders(dst, src, p); err != nil {
+				t.Fatal(err)
+			}
+			got := dst.Header.Get(tc.header)
+			if tc.kept && got != "client-value" {
+				t.Fatalf("%s=%q, want the client value", tc.header, got)
+			}
+			if !tc.kept && got != "" {
+				t.Fatalf("%s=%q leaked into the %s family", tc.header, got, tc.protocol)
+			}
+			if tc.protocol == ir.ProtocolAnthropicMessages && dst.Header.Get("Anthropic-Version") == "" {
+				t.Fatal("a Messages target lost its protocol version")
 			}
 		})
 	}

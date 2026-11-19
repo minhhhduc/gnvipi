@@ -117,7 +117,7 @@ func newMockUpstream(handler func(w http.ResponseWriter, r *http.Request, body [
 }
 
 // TestClientCompat_ClaudeCode_Messages verifies real Claude Code requests:
-// - prompt-caching-2024-07-31 beta header is forwarded
+// - the Anthropic beta header does not cross into the Chat upstream
 // - system blocks with ephemeral cache control are parsed
 // - tool definitions with complex JSON schemas are mapped
 // - tool_use and tool_result turns are converted
@@ -218,8 +218,8 @@ func TestClientCompat_ClaudeCode_Messages(t *testing.T) {
 		t.Fatal("upstream did not receive any request")
 	}
 
-	if got := captured.Header.Get("Anthropic-Beta"); got != "prompt-caching-2024-07-31" {
-		t.Errorf("upstream Anthropic-Beta = %q, want prompt-caching-2024-07-31", got)
+	if got := captured.Header.Get("Anthropic-Beta"); got != "" {
+		t.Errorf("upstream Anthropic-Beta = %q, want it dropped for a Chat target", got)
 	}
 	if got := captured.Header.Get("X-Custom-Client-Trace"); got != "" {
 		t.Errorf("upstream X-Custom-Client-Trace was not dropped: %q", got)
