@@ -37,7 +37,7 @@ func runCrossProtocol(t *testing.T, protocol ir.Protocol, inboundPath, clientPay
 
 // crossProtocolExchange drives one translated request and returns the client
 // status, its response body and every request body the upstream received.
-func crossProtocolExchange(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string) (int, string, []string) {
+func crossProtocolExchange(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string) (status int, body string, upstreamBodies []string) {
 	t.Helper()
 	var route, canned string
 	switch protocol {
