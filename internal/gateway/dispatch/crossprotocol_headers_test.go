@@ -19,7 +19,7 @@ import (
 
 // crossProtocolTransport drives one translated request and returns the client
 // response and the headers the upstream received.
-func crossProtocolTransport(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string, clientHeaders map[string]string, upstreamStep gatewaytest.Step) (*httptest.ResponseRecorder, http.Header) {
+func crossProtocolTransport(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string, clientHeaders map[string]string, upstreamStep *gatewaytest.Step) (*httptest.ResponseRecorder, http.Header) {
 	t.Helper()
 	var route string
 	switch protocol {
@@ -31,7 +31,7 @@ func crossProtocolTransport(t *testing.T, protocol ir.Protocol, inboundPath, cli
 		route = gatewaytest.RouteChat
 	}
 	upstream := gatewaytest.New(t)
-	upstream.Script(route, upstreamStep)
+	upstream.Script(route, *upstreamStep)
 
 	prov := provider.Provider{
 		ID:       "issue-provider",
@@ -81,7 +81,7 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 				"Authorization":     "Bearer client-secret",
 				"X-Api-Key":         "client-secret",
 			},
-			gatewaytest.Step{Body: `{"id":"chatcmpl_1","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`})
+			&gatewaytest.Step{Body: `{"id":"chatcmpl_1","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`})
 
 		if got := sent.Get("Authorization"); got != "Bearer provider-secret" {
 			t.Fatalf("Authorization = %q, want the provider credential", got)
@@ -114,7 +114,7 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 				"Anthropic-Beta": "tools-2024-01-01",
 				"OpenAI-Beta":    "responses=experimental",
 			},
-			gatewaytest.Step{Body: `{"id":"msg_1","type":"message","role":"assistant","model":"upstream-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`})
+			&gatewaytest.Step{Body: `{"id":"msg_1","type":"message","role":"assistant","model":"upstream-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`})
 
 		if got := sent.Get("X-Api-Key"); got != "provider-secret" {
 			t.Fatalf("X-Api-Key = %q, want the provider credential", got)
@@ -149,7 +149,7 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 				"Authorization":     "Bearer client-secret",
 				"X-Api-Key":         "client-secret",
 			},
-			gatewaytest.Step{Body: `{"id":"resp_1","object":"response","model":"upstream-model","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`})
+			&gatewaytest.Step{Body: `{"id":"resp_1","object":"response","model":"upstream-model","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`})
 
 		if got := sent.Get("Authorization"); got != "Bearer provider-secret" {
 			t.Fatalf("Authorization = %q, want the provider credential", got)
@@ -185,7 +185,7 @@ func TestCrossProtocolResponseHeaders(t *testing.T) {
 	t.Run("chat-client-keeps-chat-vocabulary", func(t *testing.T) {
 		w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteChat,
 			`{"model":"issue-model","messages":[{"role":"user","content":"hi"}]}`, nil,
-			gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
+			&gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
 
 		if got := w.Header().Get("X-Ratelimit-Limit-Requests"); got != "99" {
 			t.Fatalf("same-family rate limit lost: %q", got)
@@ -203,7 +203,7 @@ func TestCrossProtocolResponseHeaders(t *testing.T) {
 	t.Run("messages-client-keeps-anthropic-vocabulary", func(t *testing.T) {
 		w, _ := crossProtocolTransport(t, ir.ProtocolAnthropicMessages, gatewaytest.RouteMessages,
 			`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`, nil,
-			gatewaytest.Step{Headers: upstreamHeaders, Body: messagesBody})
+			&gatewaytest.Step{Headers: upstreamHeaders, Body: messagesBody})
 
 		if got := w.Header().Get("Anthropic-Ratelimit-Requests"); got != "77" {
 			t.Fatalf("same-family rate limit lost: %q", got)
@@ -224,7 +224,7 @@ func TestCrossProtocolResponseHeaders(t *testing.T) {
 		w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteMessages,
 			`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`,
 			map[string]string{"Anthropic-Version": "2023-06-01"},
-			gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
+			&gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
 
 		for _, name := range []string{"X-Ratelimit-Limit-Requests", "Anthropic-Ratelimit-Requests", "Request-Id"} {
 			if got := w.Header().Get(name); got != "" {
