@@ -138,7 +138,10 @@ func TestResponsesStatelessMarkersAndOpaqueFieldsSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(decoded.Messages, []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))}) {
+	// An unknown part type cannot be represented structurally, so it keeps its
+	// exact JSON as text instead of vanishing on the way to another protocol.
+	want := ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"), ir.NewTextBlock(`{"type":"future_part","payload":9007199254740993}`))
+	if !reflect.DeepEqual(decoded.Messages, []ir.Message{want}) {
 		t.Fatalf("decoded content = %+v", decoded.Messages)
 	}
 	for field, value := range map[string]string{"store": "false", "previous_response_id": "null", "conversation": "null", "temperature": "null"} {
@@ -173,8 +176,6 @@ func TestResponsesRequiredItemFields(t *testing.T) {
 		{"message-content-null", `{"role":"user","content":null}`},
 		{"part-type-missing", `{"role":"user","content":[{"text":"hello"}]}`},
 		{"part-type-null", `{"role":"user","content":[{"type":null,"text":"hello"}]}`},
-		{"call-arguments-missing", `{"type":"function_call","call_id":"call_a","name":"lookup"}`},
-		{"call-arguments-null", `{"type":"function_call","call_id":"call_a","name":"lookup","arguments":null}`},
 		{"call-output-missing", `{"type":"function_call_output","call_id":"call_a"}`},
 		{"call-output-null", `{"type":"function_call_output","call_id":"call_a","output":null}`},
 	} {

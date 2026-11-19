@@ -7,6 +7,12 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
 ---
 ## Fixes
 
+- **Responses to Chat histories (#454):** Keep mid-turn instructions in place and
+  attach delayed tool results to their owning calls. Normalize parameterless
+  `function_call` arguments, carry structured tool output as text, and filter
+  Responses-owned fields out of the outbound Chat request. A Chat upstream can
+  now stream reasoning items without a native Responses payload.
+
 - **Admin Console (#444):** User accounts can read their own live and historical
   request logs. Scoped stats preserve the JSON array schema without exposing
   global traffic; polling stops on logout and waits for mandatory password changes.

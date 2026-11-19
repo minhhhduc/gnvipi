@@ -176,3 +176,31 @@ func ExtensionFields(extensions map[string]json.RawMessage, isReserved func(name
 	}
 	return fields, nil
 }
+
+// ProtocolField reports whether name is a request field the three supported
+// protocols define themselves. Extensions carry wire composites the adapters
+// could not normalize; letting a protocol-owned name through would ship a
+// field the target protocol does not accept (a Responses field on
+// /chat/completions, a Chat field on /responses, and so on). Every outbound
+// adapter filters extensions through this predicate so the excluded set stays
+// identical across translations.
+func ProtocolField(name string) bool {
+	switch name {
+	case "model",
+		"messages", "input", "instructions", "system", "developer",
+		"max_tokens", "max_completion_tokens", "max_output_tokens",
+		"temperature", "top_p", "top_k", "stop", "stop_sequences",
+		"seed", "n", "logprobs", "top_logprobs", "logit_bias",
+		"frequency_penalty", "presence_penalty",
+		"stream", "stream_options", "response_format", "text",
+		"reasoning", "reasoning_effort", "thinking", "output_config",
+		"context_management", "betas", "anthropic_version",
+		"tools", "tool_choice", "parallel_tool_calls",
+		"disable_parallel_tool_use", "functions", "function_call",
+		"metadata", "user", "store", "previous_response_id",
+		"conversation", "background", "truncation", "include", "prompt":
+		return true
+	default:
+		return false
+	}
+}
