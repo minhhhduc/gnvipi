@@ -75,12 +75,13 @@ A translated request is authenticated with the destination provider's own creden
 | --- | --- | --- |
 | `Authorization: Bearer <key>` | provider key | not sent |
 | `x-api-key: <key>` | not sent | provider key |
+| `Content-Type` | `application/json` | `application/json` |
 | `anthropic-version` | dropped | client value, else `2023-06-01` |
 | `anthropic-beta` | dropped | forwarded |
 | `OpenAI-Beta` | forwarded | dropped |
-| `OpenAI-Organization`, `OpenAI-Project` | provider configuration only; forwarded when a provider opts them into `forward_headers` | dropped |
+| `OpenAI-Organization`, `OpenAI-Project` | client value dropped; provider `headers` passes through, and `forward_headers` reaches only a Chat/Responses target | client value dropped |
 | `X-Request-Id` (response) | gateway identity; an upstream `X-Request-Id` or `request-id` is replaced | same |
-| `x-ratelimit-*`, `anthropic-ratelimit-*` (response) | forwarded only to a client of the family that emitted them, and read for logging | same |
+| `x-ratelimit-*`, `anthropic-ratelimit-*` (response) | forwarded only to a client of the family that emitted them; the two vocabularies are never mixed | same |
 
 ---
 

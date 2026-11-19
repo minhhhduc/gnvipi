@@ -89,6 +89,9 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 		if got := sent.Get("X-Api-Key"); got != "" {
 			t.Fatalf("client API key reached the Chat upstream: %q", got)
 		}
+		if got := sent.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("upstream Content-Type = %q, want application/json", got)
+		}
 		for _, name := range []string{"Anthropic-Version", "Anthropic-Beta"} {
 			if got := sent.Get(name); got != "" {
 				t.Fatalf("%s leaked into the Chat family: %q", name, got)
@@ -119,6 +122,9 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 		if got := sent.Get("Authorization"); got != "" {
 			t.Fatalf("client Authorization reached the Messages upstream: %q", got)
 		}
+		if got := sent.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("upstream Content-Type = %q, want application/json", got)
+		}
 		if got := sent.Get("OpenAI-Beta"); got != "" {
 			t.Fatalf("OpenAI-Beta leaked into the Messages family: %q", got)
 		}
@@ -132,52 +138,105 @@ func TestCrossProtocolRequestHeaders(t *testing.T) {
 			t.Fatal("client response has no X-Request-Id")
 		}
 	})
-}
 
-// A translated response exposes the gateway trace id instead of either upstream
-// spelling, and keeps rate-limit headers only for a client of the family that
-// emitted them.
-func TestCrossProtocolResponseHeaders(t *testing.T) {
-	step := gatewaytest.Step{
-		Headers: map[string]string{
-			"Request-Id":                   "upstream-anthropic-trace",
-			"X-Request-Id":                 "upstream-openai-trace",
-			"X-Ratelimit-Limit-Requests":   "99",
-			"Anthropic-Ratelimit-Requests": "77",
-		},
-		Body: `{"id":"chatcmpl_1","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
-	}
-	w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteMessages,
-		`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`,
-		map[string]string{"Anthropic-Version": "2023-06-01"}, step)
+	t.Run("chat-to-responses", func(t *testing.T) {
+		_, sent := crossProtocolTransport(t, ir.ProtocolOpenAIResponses, gatewaytest.RouteChat,
+			`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`,
+			map[string]string{
+				"Anthropic-Version": "2023-06-01",
+				"Anthropic-Beta":    "interleaved-thinking-2025-05-14",
+				"OpenAI-Beta":       "responses=experimental",
+				"Authorization":     "Bearer client-secret",
+				"X-Api-Key":         "client-secret",
+			},
+			gatewaytest.Step{Body: `{"id":"resp_1","object":"response","model":"upstream-model","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`})
 
-	for _, name := range []string{"Request-Id", "Anthropic-Ratelimit-Requests", "X-Ratelimit-Limit-Requests"} {
-		if got := w.Header().Get(name); got != "" {
-			t.Fatalf("%s leaked to a Messages client: %q", name, got)
+		if got := sent.Get("Authorization"); got != "Bearer provider-secret" {
+			t.Fatalf("Authorization = %q, want the provider credential", got)
 		}
-	}
-	if got := w.Header().Get(core.RequestIDHeader); got == "" || got == "upstream-openai-trace" || got == "upstream-anthropic-trace" {
-		t.Fatalf("X-Request-Id = %q, want the gateway identity", got)
-	}
+		if got := sent.Get("X-Api-Key"); got != "" {
+			t.Fatalf("client API key reached the Responses upstream: %q", got)
+		}
+		if got := sent.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("upstream Content-Type = %q, want application/json", got)
+		}
+		for _, name := range []string{"Anthropic-Version", "Anthropic-Beta"} {
+			if got := sent.Get(name); got != "" {
+				t.Fatalf("%s leaked into the Responses family: %q", name, got)
+			}
+		}
+		if got := sent.Get("OpenAI-Beta"); got != "responses=experimental" {
+			t.Fatalf("OpenAI-Beta = %q, want the same-family value", got)
+		}
+	})
 }
 
-// A Chat upstream's own rate-limit vocabulary reaches a Chat client unchanged.
-func TestCrossProtocolResponseHeadersSameFamily(t *testing.T) {
-	step := gatewaytest.Step{
-		Headers: map[string]string{"X-Ratelimit-Limit-Requests": "99", "Anthropic-Ratelimit-Requests": "77", "Request-Id": "upstream-trace"},
-		Body:    `{"id":"chatcmpl_1","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+// An upstream response may only expose its own family's rate-limit vocabulary,
+// and never its own trace identity: the gateway stamps X-Request-Id itself, so
+// an upstream X-Request-Id or Anthropic request-id must not survive the relay.
+func TestCrossProtocolResponseHeaders(t *testing.T) {
+	upstreamHeaders := map[string]string{
+		"Request-Id":                   "upstream-anthropic-trace",
+		"X-Request-Id":                 "upstream-openai-trace",
+		"X-Ratelimit-Limit-Requests":   "99",
+		"Anthropic-Ratelimit-Requests": "77",
 	}
-	w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteChat,
-		`{"model":"issue-model","messages":[{"role":"user","content":"hi"}]}`,
-		nil, step)
 
-	if got := w.Header().Get("X-Ratelimit-Limit-Requests"); got != "99" {
-		t.Fatalf("same-family rate limit lost: %q", got)
-	}
-	if got := w.Header().Get("Anthropic-Ratelimit-Requests"); got != "" {
-		t.Fatalf("other-family rate limit leaked: %q", got)
-	}
-	if got := w.Header().Get("Request-Id"); got != "" {
-		t.Fatalf("upstream trace id leaked: %q", got)
-	}
+	t.Run("chat-client-keeps-chat-vocabulary", func(t *testing.T) {
+		w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteChat,
+			`{"model":"issue-model","messages":[{"role":"user","content":"hi"}]}`, nil,
+			gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
+
+		if got := w.Header().Get("X-Ratelimit-Limit-Requests"); got != "99" {
+			t.Fatalf("same-family rate limit lost: %q", got)
+		}
+		for _, name := range []string{"Anthropic-Ratelimit-Requests", "Request-Id"} {
+			if got := w.Header().Get(name); got != "" {
+				t.Fatalf("%s reached a Chat client: %q", name, got)
+			}
+		}
+		if got := w.Header().Get(core.RequestIDHeader); got == "" || got == "upstream-openai-trace" {
+			t.Fatalf("X-Request-Id = %q, want the gateway identity", got)
+		}
+	})
+
+	t.Run("messages-client-keeps-anthropic-vocabulary", func(t *testing.T) {
+		w, _ := crossProtocolTransport(t, ir.ProtocolAnthropicMessages, gatewaytest.RouteMessages,
+			`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`, nil,
+			gatewaytest.Step{Headers: upstreamHeaders, Body: messagesBody})
+
+		if got := w.Header().Get("Anthropic-Ratelimit-Requests"); got != "77" {
+			t.Fatalf("same-family rate limit lost: %q", got)
+		}
+		for _, name := range []string{"X-Ratelimit-Limit-Requests", "Request-Id"} {
+			if got := w.Header().Get(name); got != "" {
+				t.Fatalf("%s reached a Messages client: %q", name, got)
+			}
+		}
+		if got := w.Header().Get(core.RequestIDHeader); got == "" || got == "upstream-openai-trace" {
+			t.Fatalf("X-Request-Id = %q, want the gateway identity", got)
+		}
+	})
+
+	// A translated response is re-encoded, so no upstream header survives at
+	// all; the client sees the gateway trace id and nothing of the other family.
+	t.Run("translated-response-drops-upstream-headers", func(t *testing.T) {
+		w, _ := crossProtocolTransport(t, ir.ProtocolOpenAIChat, gatewaytest.RouteMessages,
+			`{"model":"issue-model","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`,
+			map[string]string{"Anthropic-Version": "2023-06-01"},
+			gatewaytest.Step{Headers: upstreamHeaders, Body: chatCompletionBody})
+
+		for _, name := range []string{"X-Ratelimit-Limit-Requests", "Anthropic-Ratelimit-Requests", "Request-Id"} {
+			if got := w.Header().Get(name); got != "" {
+				t.Fatalf("%s leaked from a Chat upstream to a Messages client: %q", name, got)
+			}
+		}
+		if got := w.Header().Get(core.RequestIDHeader); got == "" || got == "upstream-openai-trace" {
+			t.Fatalf("X-Request-Id = %q, want the gateway identity", got)
+		}
+	})
 }
+
+const chatCompletionBody = `{"id":"chatcmpl_1","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+
+const messagesBody = `{"id":"msg_1","type":"message","role":"assistant","model":"upstream-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`
