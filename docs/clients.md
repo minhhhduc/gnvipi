@@ -67,6 +67,22 @@ The gateway authentication middleware (`gatewayAuth`) enforces strict validation
 4. **Credential Isolation (Zero-Leakage):** Upon successful authentication, client credentials (`Authorization` and `x-api-key`) are **stripped from the request context**. The upstream provider receives only the provider-specific credentials configured in the gateway catalog (or none if unauthenticated), never the client's gateway access key.
 5. **Constant-Time Verification:** All comparisons use SHA-256 digests in constant time (`subtle.ConstantTimeCompare`) to prevent timing side-channel attacks and hide key rotation orders.
 
+### Cross-Protocol Header Mapping
+
+A translated request is authenticated with the destination provider's own credential; client credentials never reach any upstream. Versioned headers stay inside their protocol family, because the other family would receive a feature name it cannot interpret:
+
+| Header | Chat / Responses target | Messages target |
+| --- | --- | --- |
+| `Authorization: Bearer <key>` | provider key | not sent |
+| `x-api-key: <key>` | not sent | provider key |
+| `Content-Type` | `application/json` | `application/json` |
+| `anthropic-version` | dropped | client value, else `2023-06-01` |
+| `anthropic-beta` | dropped | forwarded |
+| `OpenAI-Beta` | forwarded | dropped |
+| `OpenAI-Organization`, `OpenAI-Project` | client value dropped; provider `headers` passes through, and `forward_headers` reaches only a Chat/Responses target | client value dropped |
+| `X-Request-Id` (response) | gateway identity; an upstream `X-Request-Id` or `request-id` is replaced | same |
+| `x-ratelimit-*`, `anthropic-ratelimit-*` (response) | forwarded only to a client of the family that emitted them; the two vocabularies are never mixed | same |
+
 ---
 
 ## Client Configuration Guides

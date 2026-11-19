@@ -17,6 +17,12 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
   Responses upstream, replays parameterless calls as `{}`, supplies the required
   tool parameter schema and effort level, and drops reasoning the upstream could
   not have issued.
+- **Cross-protocol headers:** A translated request carries the destination
+  provider's credential and no client credential, `anthropic-version` and
+  `anthropic-beta` stay out of Chat/Responses requests, `OpenAI-Beta`,
+  `Openai-Organization` and `Openai-Project` stay out of Messages requests, and
+  an upstream rate-limit or trace header is never handed to a client of the
+  other protocol family.
 
 - **Admin Console (#444):** User accounts can read their own live and historical
   request logs. Scoped stats preserve the JSON array schema without exposing
