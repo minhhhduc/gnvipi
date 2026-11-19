@@ -21,6 +21,10 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
 - **Admin Console (#444):** User accounts can read their own live and historical
   request logs. Scoped stats preserve the JSON array schema without exposing
   global traffic; polling stops on logout and waits for mandatory password changes.
+- **Chat to Messages (#456):** Anthropic upstreams no longer receive
+  `thinking` blocks the gateway cannot sign, parameterless tool calls reach them
+  as `{}`, in-band system/developer turns are folded into the system prompt, and
+  Chat-only request keys stay out of the translated payload.
 
 
 ## Highlights & Key Capabilities
