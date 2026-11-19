@@ -3,6 +3,8 @@ package openairesponses_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/minhhhduc/gnvipi/internal/gateway/adapter"
@@ -144,6 +147,52 @@ func TestProviderEndpointSemantics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildRequestFitsUpstreamUserLimit(t *testing.T) {
+	// Claude Code sends metadata.user_id as a 150+ character session identity;
+	// Responses rejects user above 64 characters.
+	long := "user_" + strings.Repeat("a", 64) + "_account_" + strings.Repeat("b", 37) + "_session_" + strings.Repeat("c", 36)
+	other := long[:len(long)-1] + "d"
+	digest := sha256.Sum256([]byte(long))
+
+	if got := buildUserField(t, long); got != hex.EncodeToString(digest[:]) {
+		t.Errorf("long user id = %q, want its sha256 hex digest", got)
+	}
+	if buildUserField(t, long) == buildUserField(t, other) {
+		t.Error("distinct long user ids collapsed to one upstream value")
+	}
+	if got := buildUserField(t, "u-1"); got != "u-1" {
+		t.Errorf("short user id = %q, want it forwarded unchanged", got)
+	}
+}
+
+func buildUserField(t *testing.T, userID string) string {
+	t.Helper()
+	request := &ir.Request{
+		Messages: []ir.Message{ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hello"))},
+		Metadata: &ir.Metadata{UserID: userID},
+	}
+	httpReq, err := openairesponses.New().BuildRequest(t.Context(), request, adapter.Target{BaseURL: "https://provider.invalid", Model: "upstream"})
+	if err != nil {
+		t.Fatalf("BuildRequest(%d chars) error: %v", len(userID), err)
+	}
+	defer func() {
+		if err := httpReq.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	bodyBytes, err := io.ReadAll(httpReq.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var wire struct {
+		User string `json:"user"`
+	}
+	if err := json.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	return wire.User
 }
 
 func TestBuildRequestRejectsMalformedOrUnsupportedIR(t *testing.T) {
