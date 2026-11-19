@@ -16,6 +16,14 @@ const (
 	// embeds it as a tool_result content block on a user message. Both
 	// decode to RoleTool holding one tool_result block.
 	RoleTool Role = "tool"
+	// RoleSystem is an in-band system message. OpenAI Chat and the
+	// Responses API both allow it mid-conversation; Anthropic Messages has
+	// no such role, so outbound adapters fold it into the out-of-band
+	// system prompt.
+	RoleSystem Role = "system"
+	// RoleDeveloper is the Responses API's mid-conversation developer
+	// message (the successor of RoleSystem for reasoning models).
+	RoleDeveloper Role = "developer"
 )
 
 // InstructionRole is the role of an out-of-band instruction (system prompt).

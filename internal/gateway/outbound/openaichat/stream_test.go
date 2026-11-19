@@ -2,15 +2,19 @@ package openaichat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	inboundresponses "github.com/minhhhduc/gnvipi/internal/gateway/inbound/openairesponses"
 	"github.com/minhhhduc/gnvipi/internal/gateway/ir"
 	"github.com/minhhhduc/gnvipi/internal/gateway/outbound/openaichat"
+	"github.com/minhhhduc/gnvipi/internal/gateway/sse"
 )
 
 func TestStreamContextCancellation(t *testing.T) {
@@ -287,5 +291,54 @@ func TestStreamInvalidJSONArgumentsPreservedVerbatim(t *testing.T) {
 	want := "{invalid: json, unclosed"
 	if accumulated != want {
 		t.Fatalf("accumulated invalid arguments = %q, want %q", accumulated, want)
+	}
+}
+
+func TestChatReasoningStreamToResponses(t *testing.T) {
+	raw := "data: " + `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"reasoning_content":"plan"}}]}` + "\n\n" +
+		"data: " + `{"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	stream, err := openaichat.New().ParseStream(t.Context(), &http.Response{
+		StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close() //nolint:errcheck // test stream cleanup
+	w := httptest.NewRecorder()
+	writer, err := sse.NewWriter(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (inboundresponses.StreamEncoder{}).EncodeStream(t.Context(), stream, writer); err != nil {
+		t.Fatal(err)
+	}
+	reader := sse.NewReader(strings.NewReader(w.Body.String()))
+	for {
+		event, err := reader.Next(t.Context())
+		if err != nil {
+			t.Fatalf("missing completed response: %v; wire: %s", err, w.Body.String())
+		}
+		if event.Type != "response.completed" {
+			continue
+		}
+		var result struct {
+			Response struct {
+				Output []struct {
+					Type    string                  `json:"type"`
+					Summary []struct{ Text string } `json:"summary"`
+					Content []struct{ Text string } `json:"content"`
+				} `json:"output"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(event.Data), &result); err != nil {
+			t.Fatal(err)
+		}
+		output := result.Response.Output
+		if len(output) != 2 || output[0].Type != "reasoning" || len(output[0].Summary) != 1 || output[0].Summary[0].Text != "plan" ||
+			output[1].Type != "message" || len(output[1].Content) != 1 || output[1].Content[0].Text != "ok" {
+			t.Fatalf("lost reasoning or answer: %s", event.Data)
+		}
+		return
 	}
 }

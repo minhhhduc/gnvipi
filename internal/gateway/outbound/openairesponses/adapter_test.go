@@ -554,7 +554,7 @@ func TestRoundTripFunctionCallOutput(t *testing.T) {
 
 	// Assistant tool call
 	tu := decoded.Messages[1].Content[0].ToolUse
-	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `"{\"key\":\"abc\"}"` {
+	if tu == nil || tu.ID != "call_xyz" || tu.Name != "lookup" || string(tu.Input) != `{"key":"abc"}` {
 		t.Errorf("round-trip tool use: %+v", tu)
 	}
 

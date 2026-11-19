@@ -293,12 +293,16 @@ func (s *responseStream) addBlock(index int, prototype ir.Block) error {
 			s.blocks[index] = block
 			return nil
 		}
-		if prototype.Reasoning == nil {
-			return fmt.Errorf("openairesponses: reasoning block %d has no payload", index)
-		}
 		prefix, item.Type = "rs_", "reasoning"
 		item.Summary = &[]responseStreamPart{}
-		item.EncryptedContent = prototype.Reasoning.Signature
+		// A translated upstream such as OpenAI Chat announces a reasoning
+		// block before it carries a payload. The native item id and encrypted
+		// signature are optional there, and no Chat client can produce one, so
+		// an empty block start is valid rather than a hard failure
+		// (issue #454).
+		if prototype.Reasoning != nil {
+			item.EncryptedContent = prototype.Reasoning.Signature
+		}
 	case ir.BlockToolUse:
 		if prototype.ToolUse == nil || prototype.ToolUse.ID == "" {
 			return fmt.Errorf("openairesponses: tool block %d has no call identity", index)
@@ -348,7 +352,7 @@ func (s *responseStream) addBlock(index int, prototype ir.Block) error {
 		if err := s.emit("response.reasoning_summary_part.added", fields); err != nil {
 			return err
 		}
-		if prototype.Reasoning.Content != "" {
+		if prototype.Reasoning != nil && prototype.Reasoning.Content != "" {
 			return s.delta(block, &ir.Delta{Type: ir.DeltaReasoning, Text: prototype.Reasoning.Content})
 		}
 	}

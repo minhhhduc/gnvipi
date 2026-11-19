@@ -21,7 +21,9 @@
           "tool_use": {
             "id": "call_a",
             "name": "lookup",
-            "input": "{\"city\":\"Hanoi\"}"
+            "input": {
+              "city": "Hanoi"
+            }
           }
         }
       ]
