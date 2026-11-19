@@ -12,6 +12,11 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
   `function_call` arguments, carry structured tool output as text, and filter
   Responses-owned fields out of the outbound Chat request. A Chat upstream can
   now stream reasoning items without a native Responses payload.
+- **Chat to Responses (#455):** Translated history no longer ships inbound wire
+  fields (including `stop`, which the Responses API has no equivalent for) to a
+  Responses upstream, replays parameterless calls as `{}`, supplies the required
+  tool parameter schema and effort level, and drops reasoning the upstream could
+  not have issued.
 
 - **Admin Console (#444):** User accounts can read their own live and historical
   request logs. Scoped stats preserve the JSON array schema without exposing

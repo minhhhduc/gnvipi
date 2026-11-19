@@ -83,15 +83,11 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 	if request.Sampling.TopP != nil {
 		fields["top_p"] = *request.Sampling.TopP
 	}
-	if len(request.Sampling.Stop) != 0 {
-		fields["stop"] = request.Sampling.Stop
-	}
+	// The Responses API has no stop-sequence parameter, so a Chat client's
+	// stop sequences are translated away rather than sent as an unknown key
+	// the upstream rejects (issue #455).
 	if request.Reasoning != nil || request.ReasoningEffort != "" || request.BudgetTokens != nil {
-		reasoning, err := encodeReasoning(request)
-		if err != nil {
-			return nil, err
-		}
-		if reasoning != nil {
+		if reasoning := encodeReasoning(request); reasoning != nil {
 			fields["reasoning"] = reasoning
 		}
 	}
@@ -111,16 +107,7 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 }
 
 func reservedField(name string) bool {
-	switch name {
-	case "model", "input", "instructions", "stream", "store",
-		"previous_response_id", "conversation", "background",
-		"max_output_tokens", "temperature", "top_p", "stop",
-		"reasoning", "text", "user", "tools", "tool_choice", "parallel_tool_calls",
-		"system", "thinking", "output_config", "anthropic_version", "betas":
-		return true
-	default:
-		return false
-	}
+	return gatewayoutbound.ProtocolField(name)
 }
 
 func encodeInstructions(instructions []ir.Instruction) (instruction *string, items []any, err error) {
@@ -209,17 +196,14 @@ func encodeMessageItems(message *ir.Message) ([]any, error) {
 			}
 			content = append(content, image)
 		case ir.BlockReasoning:
-			flushContent()
-			contentStr := ""
-			if block.Reasoning != nil {
-				contentStr = block.Reasoning.Content
-			}
-			items = append(items, map[string]any{
-				"type": "reasoning",
-				"summary": []map[string]any{
-					{"type": "summary_text", "text": contentStr},
-				},
-			})
+			// A translated history never carries a Responses-native reasoning
+			// item: the payload needs the upstream-issued item id and its
+			// encrypted_content, neither of which another protocol can produce.
+			// Emitting a synthesized summary instead makes the upstream reject
+			// the whole request (issue #455), so the block is dropped. Reasoning
+			// the request asks for still flows through the top-level reasoning
+			// field.
+			continue
 		case ir.BlockToolUse:
 			if message.Role != ir.RoleAssistant {
 				return nil, invalid(fmt.Sprintf("content[%d] tool_use requires assistant role", index))
@@ -259,6 +243,11 @@ func encodeToolUse(block *ir.Block) (map[string]any, error) {
 			if trimmed[0] == '"' {
 				if err := json.Unmarshal(trimmed, &arguments); err != nil {
 					return nil, invalid("function_call arguments string is invalid")
+				}
+				// A parameterless call replays as arguments ""; Responses
+				// requires a JSON object string (issue #455).
+				if strings.TrimSpace(arguments) == "" {
+					arguments = "{}"
 				}
 			} else {
 				arguments = string(trimmed)
@@ -333,12 +322,19 @@ func encodeTools(tools []ir.Tool) ([]any, error) {
 		if tool.Description != "" {
 			item["description"] = tool.Description
 		}
-		if len(tool.Schema) > 0 {
-			if !gatewayoutbound.JSONObject(tool.Schema) {
-				return nil, invalid(fmt.Sprintf("tools[%d] schema must be a JSON object", index))
-			}
-			item["parameters"] = tool.Schema
+		if len(tool.Schema) > 0 && !gatewayoutbound.JSONObject(tool.Schema) {
+			return nil, invalid(fmt.Sprintf("tools[%d] schema must be a JSON object", index))
 		}
+		// Responses requires a parameter schema, and strict validators reject an
+		// object schema without a properties member; a Chat declaration may omit
+		// either (issue #455).
+		schema := tool.Schema
+		if len(bytes.TrimSpace(schema)) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		} else {
+			schema = gatewayoutbound.NormalizeToolSchema(schema)
+		}
+		item["parameters"] = schema
 		result = append(result, item)
 	}
 	return result, nil
@@ -391,30 +387,34 @@ func encodeImage(image *ir.Image) (map[string]any, error) {
 	}
 }
 
-func encodeReasoning(request *ir.Request) (map[string]any, error) {
+func encodeReasoning(request *ir.Request) map[string]any {
 	if request == nil {
-		return nil, nil
+		return nil
 	}
 	reasoning := request.Reasoning
 	if reasoning == nil && request.ReasoningEffort == "" && request.BudgetTokens == nil {
-		return nil, nil
+		return nil
 	}
 	if reasoning != nil && reasoning.Enabled != nil && !*reasoning.Enabled {
-		return nil, nil
+		return nil
 	}
 	effort := request.GetReasoningEffort()
 	if effort == "" {
 		if reasoning != nil && reasoning.Enabled != nil && *reasoning.Enabled {
 			effort = ir.ReasoningEffortMedium
 		} else {
-			return nil, nil
+			return nil
 		}
 	}
 	switch effort {
 	case ir.ReasoningEffortLow, ir.ReasoningEffortMedium, ir.ReasoningEffortHigh:
-		return map[string]any{"effort": string(effort)}, nil
+		return map[string]any{"effort": string(effort)}
 	default:
-		return nil, invalid(fmt.Sprintf("unsupported reasoning effort %q", effort))
+		// Vendors ship effort names the Responses API does not know
+		// ("xhigh", "max", vendor-specific tiers). Normalization covers the
+		// documented synonyms; anything left is sent as the closest level
+		// instead of failing an otherwise valid request (issue #455).
+		return map[string]any{"effort": string(ir.ReasoningEffortMedium)}
 	}
 }
 

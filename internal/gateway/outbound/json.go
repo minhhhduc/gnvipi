@@ -204,3 +204,36 @@ func ProtocolField(name string) bool {
 		return false
 	}
 }
+
+// NormalizeToolSchema adds the empty properties object strict OpenAI-compatible
+// validators require on object schemas.
+func NormalizeToolSchema(raw json.RawMessage) json.RawMessage {
+	var schema any
+	if json.Unmarshal(raw, &schema) != nil {
+		return raw
+	}
+	ensureObjectProperties(schema)
+	normalized, err := json.Marshal(schema)
+	if err != nil {
+		return raw
+	}
+	return normalized
+}
+
+func ensureObjectProperties(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		if v["type"] == "object" {
+			if _, ok := v["properties"]; !ok {
+				v["properties"] = map[string]any{}
+			}
+		}
+		for _, child := range v {
+			ensureObjectProperties(child)
+		}
+	case []any:
+		for _, child := range v {
+			ensureObjectProperties(child)
+		}
+	}
+}

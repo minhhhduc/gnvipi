@@ -48,7 +48,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 				fn["description"] = t.Description
 			}
 			if len(t.Schema) != 0 {
-				fn["parameters"] = normalizeToolSchema(t.Schema)
+				fn["parameters"] = outbound.NormalizeToolSchema(t.Schema)
 			}
 			tools = append(tools, map[string]any{
 				"type":     "function",
@@ -459,38 +459,5 @@ func encodeResponseFormat(format *ir.ResponseFormat) (any, error) {
 		}}, nil
 	default:
 		return nil, invalid(fmt.Sprintf("OpenAI Chat response format %q is unsupported", format.Type))
-	}
-}
-
-// normalizeToolSchema adds the empty properties object strict OpenAI-compatible
-// validators require on object schemas.
-func normalizeToolSchema(raw json.RawMessage) json.RawMessage {
-	var schema any
-	if json.Unmarshal(raw, &schema) != nil {
-		return raw
-	}
-	ensureObjectProperties(schema)
-	normalized, err := json.Marshal(schema)
-	if err != nil {
-		return raw
-	}
-	return normalized
-}
-
-func ensureObjectProperties(value any) {
-	switch v := value.(type) {
-	case map[string]any:
-		if v["type"] == "object" {
-			if _, ok := v["properties"]; !ok {
-				v["properties"] = map[string]any{}
-			}
-		}
-		for _, child := range v {
-			ensureObjectProperties(child)
-		}
-	case []any:
-		for _, child := range v {
-			ensureObjectProperties(child)
-		}
 	}
 }

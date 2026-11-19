@@ -29,7 +29,6 @@
     "max_output_tokens": 42,
     "temperature": 0.2,
     "top_p": 0.9,
-    "stop": ["STOP"],
     "reasoning": {"effort": "high"},
     "text": {
       "format": {

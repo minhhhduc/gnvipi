@@ -631,12 +631,12 @@ func TestBuildRequestReservesAnthropicWireExtensions(t *testing.T) {
 	if err := json.Unmarshal(body, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"system", "thinking", "output_config", "anthropic_version", "betas"} {
+	for _, name := range []string{"system", "thinking", "output_config", "anthropic_version", "betas", "context_management"} {
 		if _, found := fields[name]; found {
 			t.Fatalf("%s leaked into the OpenAI Responses request", name)
 		}
 	}
-	for _, name := range []string{"metadata", "context_management", "vendor_extension"} {
+	for _, name := range []string{"vendor_extension"} {
 		if _, found := fields[name]; !found {
 			t.Fatalf("legitimate Responses field %s dropped", name)
 		}

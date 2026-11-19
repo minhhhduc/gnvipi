@@ -31,6 +31,11 @@ func NormalizeReasoningEffort(effort string) ReasoningEffort {
 		return ReasoningEffortMedium
 	case "high", "xhigh", "max":
 		return ReasoningEffortHigh
+	case "none", "off", "disabled":
+		// Chat clients turn reasoning off by name; an empty effort keeps the
+		// translated request from asking a Responses upstream to reason
+		// (issue #455).
+		return ""
 	default:
 		return ReasoningEffort(effort)
 	}
