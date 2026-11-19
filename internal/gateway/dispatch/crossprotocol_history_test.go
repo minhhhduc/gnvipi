@@ -150,3 +150,74 @@ func TestCrossProtocolResponsesFieldsAndToolOutputsToChat(t *testing.T) {
 		t.Fatalf("unmapped tool output part was dropped: %s", messages[5].Content)
 	}
 }
+
+// #455: a Chat body must not carry its own wire keys into the Responses API.
+func TestCrossProtocolChatFieldsDoNotLeakIntoResponses(t *testing.T) {
+	body := runCrossProtocol(t, ir.ProtocolOpenAIResponses, "/v1/chat/completions",
+		`{"model":"issue-model","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"stream_options":{"include_usage":true},"response_format":{"type":"json_object"},"logit_bias":{},"frequency_penalty":0.5}`)
+
+	for _, name := range []string{"messages", "max_tokens", "stream_options", "response_format", "logit_bias", "frequency_penalty"} {
+		if _, found := body[name]; found {
+			t.Errorf("Chat field %q leaked into the Responses request", name)
+		}
+	}
+	if string(body["max_output_tokens"]) != "64" {
+		t.Errorf("max_tokens not translated: %s", body["max_output_tokens"])
+	}
+	if !strings.Contains(string(body["text"]), `"format"`) || !strings.Contains(string(body["text"]), `"json_object"`) {
+		t.Errorf("response_format not translated into text.format: %s", body["text"])
+	}
+}
+
+// #455: a Chat history that another protocol already accepted must not produce
+// a Responses payload the upstream rejects.
+func TestCrossProtocolChatHistoryToResponses(t *testing.T) {
+	t.Run("history-and-tools", func(t *testing.T) {
+		body := runCrossProtocol(t, ir.ProtocolOpenAIResponses, "/v1/chat/completions",
+			`{"model":"issue-model","reasoning_effort":"none","stop":["END"],"messages":[`+
+				`{"role":"user","content":"find"},`+
+				`{"role":"assistant","content":"looking","reasoning_content":"plan","tool_calls":[`+
+				`{"id":"c1","type":"function","function":{"name":"lookup","arguments":""}}]},`+
+				`{"role":"tool","tool_call_id":"c1","content":"found"},`+
+				`{"role":"user","content":"thanks"}],`+
+				`"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`)
+
+		for _, name := range []string{"messages", "stop", "reasoning", "reasoning_effort"} {
+			if _, found := body[name]; found {
+				t.Fatalf("Chat field %q leaked into the Responses request: %s", name, body[name])
+			}
+		}
+		var input []struct {
+			Type      string          `json:"type"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal(body["input"], &input); err != nil {
+			t.Fatalf("decode input: %v; body: %s", err, body["input"])
+		}
+		for _, item := range input {
+			if item.Type == "reasoning" {
+				t.Fatalf("translated history synthesized a reasoning item: %s", body["input"])
+			}
+			if item.Type == "function_call" && string(item.Arguments) != `"{}"` {
+				t.Fatalf("parameterless call arguments = %s, want a JSON object string", item.Arguments)
+			}
+		}
+		var tools []struct {
+			Parameters json.RawMessage `json:"parameters"`
+		}
+		if err := json.Unmarshal(body["tools"], &tools); err != nil || len(tools) != 1 {
+			t.Fatalf("decode tools: %v; body: %s", err, body["tools"])
+		}
+		if !strings.Contains(string(tools[0].Parameters), `"properties"`) {
+			t.Fatalf("object schema without properties reached the upstream: %s", tools[0].Parameters)
+		}
+	})
+
+	t.Run("vendor-effort", func(t *testing.T) {
+		body := runCrossProtocol(t, ir.ProtocolOpenAIResponses, "/v1/chat/completions",
+			`{"model":"issue-model","reasoning_effort":"xhigh","messages":[{"role":"user","content":"hi"}]}`)
+		if got := string(body["reasoning"]); got != `{"effort":"high"}` {
+			t.Fatalf("reasoning = %s, want the documented high effort", got)
+		}
+	})
+}
