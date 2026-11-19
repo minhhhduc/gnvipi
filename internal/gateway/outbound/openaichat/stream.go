@@ -276,8 +276,10 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 				s.currentBlockIndex = idx
 				s.currentBlockType = ir.BlockReasoning
 				s.openBlock = true
-				s.pending = append(s.pending, ir.NewBlockStart(idx, ir.Block{Type: ir.BlockReasoning, Index: idx}))
-				s.pending = append(s.pending, ir.NewReasoningDelta(idx, reasoningText))
+				s.pending = append(s.pending,
+					ir.NewBlockStart(idx, ir.Block{Type: ir.BlockReasoning, Index: idx}),
+					ir.NewReasoningDelta(idx, reasoningText),
+				)
 			}
 		}
 
