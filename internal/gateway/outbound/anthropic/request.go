@@ -138,21 +138,18 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		return nil, err
 	}
 	var thinkingBudget int
-	thinkingEnabled := false
 	switch t := thinking.(type) {
 	case wireThinking:
 		thinkingBudget = t.BudgetTokens
-		thinkingEnabled = t.Type != "disabled"
 	case *wireThinking:
 		if t != nil {
 			thinkingBudget = t.BudgetTokens
-			thinkingEnabled = t.Type != "disabled"
 		}
 	}
 	if thinkingBudget > 0 && request.Sampling.MaxOutputTokens == nil && maxTokens <= thinkingBudget {
 		maxTokens = thinkingBudget + maxTokens
 	}
-	inlined, messages, err := a.encodeMessages(request.Messages, thinkingEnabled)
+	inlined, messages, err := a.encodeMessages(request.Messages)
 	if err != nil {
 		return nil, err
 	}
@@ -244,12 +241,6 @@ type wireImageSource struct {
 	URL       string `json:"url,omitempty"`
 }
 
-type wireThinkingBlock struct {
-	Type      string `json:"type"`
-	Thinking  string `json:"thinking"`
-	Signature string `json:"signature,omitempty"`
-}
-
 type wireTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -322,7 +313,7 @@ func encodeSystem(instructions []ir.Instruction) ([]any, error) {
 // encodeMessages converts IR messages into Anthropic turns. Anthropic Messages
 // has no in-band system role, so system/developer messages are returned
 // separately as system prompt blocks (inlined) instead of conversation turns.
-func (a *Adapter) encodeMessages(input []ir.Message, thinkingEnabled bool) (inlined []any, messages []wireMessage, err error) {
+func (a *Adapter) encodeMessages(input []ir.Message) (inlined []any, messages []wireMessage, err error) {
 	if len(input) == 0 {
 		return nil, nil, invalidRequest("at least one message is required")
 	}
@@ -343,7 +334,7 @@ func (a *Adapter) encodeMessages(input []ir.Message, thinkingEnabled bool) (inli
 		}
 		content := make([]any, 0, len(message.Content))
 		for _, block := range message.Content {
-			encoded, skipped, err := a.encodeContentBlock(message.Role, block, thinkingEnabled)
+			encoded, skipped, err := a.encodeContentBlock(message.Role, block)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -378,7 +369,7 @@ func (a *Adapter) encodeMessages(input []ir.Message, thinkingEnabled bool) (inli
 	return inlined, messages, nil
 }
 
-func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block, thinkingEnabled bool) (encoded any, skipped bool, err error) {
+func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block) (encoded any, skipped bool, err error) {
 	switch block.Type {
 	case ir.BlockText:
 		return wireTextBlock{Type: "text", Text: block.Text}, false, nil
@@ -389,15 +380,15 @@ func (a *Adapter) encodeContentBlock(role ir.Role, block ir.Block, thinkingEnabl
 		block, err := encodeImage(block.Image)
 		return block, false, err
 	case ir.BlockReasoning:
-		// Anthropic rejects a thinking block whose signature it did not
-		// issue, and rejects preview thinking on a turn that does not enable
-		// it. A translated history (Chat reasoning_content, a Responses
-		// summary) can never satisfy either rule, so the block is dropped
-		// instead of corrupting the request (issue #456).
-		if block.Reasoning == nil || block.Reasoning.Signature == "" || !thinkingEnabled {
-			return nil, true, nil
-		}
-		return wireThinkingBlock{Type: "thinking", Thinking: block.Reasoning.Content, Signature: block.Reasoning.Signature}, false, nil
+		// Anthropic verifies a thinking block's signature and rejects one it
+		// did not issue, so only a block minted by the same upstream could be
+		// replayed. This encoder only runs for cross-protocol translation
+		// (same-protocol Anthropic traffic is relayed untouched), which means
+		// a signature here is whatever the foreign source produced: a
+		// Responses encrypted_content, or a client-supplied value. Neither is
+		// verifiable, and unsigned thinking is rejected as well, so the block
+		// is dropped instead of corrupting the request (issues #456, #461).
+		return nil, true, nil
 	case ir.BlockToolUse:
 		if role != ir.RoleAssistant {
 			return nil, false, invalidRequest("tool_use blocks are only supported in assistant messages")

@@ -383,3 +383,56 @@ func TestBuildRequestFoldsSystemAndDropsUnsignedThinking(t *testing.T) {
 		}
 	}
 }
+
+// #461: a Responses history carries the upstream's encrypted_content in
+// ReasoningBlock.Signature. Anthropic only accepts signatures it issued, so
+// the translated request must not forward one even when the turn enables
+// thinking.
+func TestBuildRequestDropsForeignSignedThinking(t *testing.T) {
+	input := &ir.Request{
+		Model:           "client-alias",
+		ReasoningEffort: ir.ReasoningEffortHigh,
+		Messages: []ir.Message{
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("hi")),
+			ir.NewMessage(ir.RoleAssistant,
+				ir.NewReasoningBlock("plan", "gAAAAAB-foreign-encrypted-content"),
+				ir.NewTextBlock("ok"),
+			),
+			ir.NewMessage(ir.RoleUser, ir.NewTextBlock("again")),
+		},
+	}
+	request, err := anthropic.New().BuildRequest(t.Context(), input, adapter.Target{BaseURL: "https://upstream.invalid", Model: "upstream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := request.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Thinking map[string]any `json:"thinking"`
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Thinking["type"] != "enabled" {
+		t.Fatalf("thinking not enabled on the wire: %s", body)
+	}
+	if len(wire.Messages) != 3 || wire.Messages[1].Role != "assistant" {
+		t.Fatalf("wire messages = %s", body)
+	}
+	for _, block := range wire.Messages[1].Content {
+		if block["type"] == "thinking" {
+			t.Fatalf("foreign thinking signature forwarded: %s", body)
+		}
+	}
+}
