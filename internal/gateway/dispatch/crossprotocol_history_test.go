@@ -21,6 +21,24 @@ import (
 // upstream received.
 func runCrossProtocol(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string) map[string]json.RawMessage {
 	t.Helper()
+	status, response, bodies := crossProtocolExchange(t, protocol, inboundPath, clientPayload)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", status, response)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("upstream requests = %d", len(bodies))
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(bodies[0]), &body); err != nil {
+		t.Fatalf("decode upstream request: %v; body: %s", err, bodies[0])
+	}
+	return body
+}
+
+// crossProtocolExchange drives one translated request and returns the client
+// status, its response body and every request body the upstream received.
+func crossProtocolExchange(t *testing.T, protocol ir.Protocol, inboundPath, clientPayload string) (int, string, []string) {
+	t.Helper()
 	var route, canned string
 	switch protocol {
 	case ir.ProtocolOpenAIResponses:
@@ -54,18 +72,73 @@ func runCrossProtocol(t *testing.T, protocol ir.Protocol, inboundPath, clientPay
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	engine.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	bodies := make([]string, 0, len(upstream.Requests()))
+	for _, forwarded := range upstream.Requests() {
+		bodies = append(bodies, forwarded.Body)
 	}
-	reqs := upstream.Requests()
-	if len(reqs) != 1 {
-		t.Fatalf("upstream requests = %d", len(reqs))
+	return w.Code, w.Body.String(), bodies
+}
+
+// #456: a Chat history replayed to Messages must not ship thinking blocks or
+// Chat-only wire keys, and a parameterless call must still be a JSON object.
+func TestCrossProtocolChatHistoryToMessages(t *testing.T) {
+	body := runCrossProtocol(t, ir.ProtocolAnthropicMessages, "/v1/chat/completions",
+		`{"model":"issue-model","max_completion_tokens":64,"response_format":{"type":"json_object"},"stream_options":{"include_usage":true},"messages":[`+
+			`{"role":"developer","content":"be terse"},`+
+			`{"role":"user","content":"find"},`+
+			`{"role":"assistant","content":"looking","reasoning_content":"plan","tool_calls":[`+
+			`{"id":"c1","type":"function","function":{"name":"lookup","arguments":""}}]},`+
+			`{"role":"tool","tool_call_id":"c1","content":"found"},`+
+			`{"role":"system","content":"stay terse"},`+
+			`{"role":"user","content":"thanks"}]}`)
+
+	for _, name := range []string{"response_format", "stream_options", "max_completion_tokens"} {
+		if _, leaked := body[name]; leaked {
+			t.Fatalf("Chat field %q leaked into the Messages request: %s", name, body[name])
+		}
 	}
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(reqs[0].Body), &body); err != nil {
-		t.Fatalf("decode upstream request: %v; body: %s", err, reqs[0].Body)
+	if string(body["max_tokens"]) != "64" {
+		t.Fatalf("max_completion_tokens not translated: %s", body["max_tokens"])
 	}
-	return body
+	for _, text := range []string{"be terse", "stay terse"} {
+		if !strings.Contains(string(body["system"]), text) {
+			t.Fatalf("instruction %q missing from the system prompt: %s", text, body["system"])
+		}
+	}
+	var messages []struct {
+		Role    string            `json:"role"`
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(body["messages"], &messages); err != nil {
+		t.Fatalf("decode messages: %v; body: %s", err, body["messages"])
+	}
+	if len(messages) != 3 || messages[0].Role != "user" || messages[1].Role != "assistant" || messages[2].Role != "user" {
+		t.Fatalf("upstream messages = %s", body["messages"])
+	}
+	for _, block := range messages[1].Content {
+		if strings.Contains(string(block), `"thinking"`) {
+			t.Fatalf("unsigned Chat reasoning reached Anthropic as thinking: %s", block)
+		}
+		if strings.Contains(string(block), `"tool_use"`) && !strings.Contains(string(block), `"input":{}`) {
+			t.Fatalf("parameterless tool call lost its object input: %s", block)
+		}
+	}
+	if !strings.Contains(string(messages[1].Content[0]), "looking") {
+		t.Fatalf("assistant answer lost: %s", body["messages"])
+	}
+}
+
+// #456: a Chat request that carries only instructions has no Messages turn to
+// translate, and must fail as a client error rather than a server fault.
+func TestCrossProtocolChatInstructionsOnlyToMessages(t *testing.T) {
+	status, response, bodies := crossProtocolExchange(t, ir.ProtocolAnthropicMessages, "/v1/chat/completions",
+		`{"model":"issue-model","messages":[{"role":"system","content":"be terse"}]}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, body: %s", status, response)
+	}
+	if len(bodies) != 0 {
+		t.Fatalf("invalid request still reached the upstream: %v", bodies)
+	}
 }
 
 // #454: a Responses history replayed as Chat must keep its order, its
