@@ -94,15 +94,16 @@ func ApplyHeaders(dst, src *http.Request, p *provider.Provider) error {
 
 // protocolHeader reports whether a family-specific header may reach the target
 // protocol. Anthropic-Version and Anthropic-Beta name Anthropic features, and
-// Openai-Beta names an OpenAI feature; forwarding either to the other family
-// leaves the upstream with a flag it cannot interpret. The gateway sets the
-// Anthropic protocol default itself, so dropping a client's value loses
-// nothing that a Messages target needs.
+// Openai-Beta, Openai-Organization and Openai-Project name OpenAI account
+// features; forwarding either family to the other leaves the upstream with a
+// flag it cannot interpret. The gateway sets the Anthropic protocol default
+// itself, so dropping a client's value loses nothing that a Messages target
+// needs.
 func protocolHeader(name string, protocol ir.Protocol) bool {
 	switch name {
 	case "Anthropic-Version", "Anthropic-Beta":
 		return protocol == ir.ProtocolAnthropicMessages
-	case "Openai-Beta":
+	case "Openai-Beta", "Openai-Organization", "Openai-Project":
 		return protocol != ir.ProtocolAnthropicMessages
 	default:
 		return true

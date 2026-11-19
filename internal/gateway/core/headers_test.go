@@ -129,20 +129,30 @@ func TestApplyHeadersDropsOtherFamilyProtocolHeaders(t *testing.T) {
 		protocol ir.Protocol
 		header   string
 		kept     bool
+		forward  bool
 	}{
-		{"messages-keeps-version", ir.ProtocolAnthropicMessages, "Anthropic-Version", true},
-		{"messages-keeps-beta", ir.ProtocolAnthropicMessages, "Anthropic-Beta", true},
-		{"messages-drops-openai-beta", ir.ProtocolAnthropicMessages, "Openai-Beta", false},
-		{"chat-drops-version", ir.ProtocolOpenAIChat, "Anthropic-Version", false},
-		{"chat-drops-beta", ir.ProtocolOpenAIChat, "Anthropic-Beta", false},
-		{"chat-keeps-openai-beta", ir.ProtocolOpenAIChat, "Openai-Beta", true},
-		{"responses-keeps-openai-beta", ir.ProtocolOpenAIResponses, "Openai-Beta", true},
-		{"responses-drops-version", ir.ProtocolOpenAIResponses, "Anthropic-Version", false},
+		{"messages-keeps-version", ir.ProtocolAnthropicMessages, "Anthropic-Version", true, false},
+		{"messages-keeps-beta", ir.ProtocolAnthropicMessages, "Anthropic-Beta", true, false},
+		{"messages-drops-openai-beta", ir.ProtocolAnthropicMessages, "Openai-Beta", false, false},
+		{"chat-drops-version", ir.ProtocolOpenAIChat, "Anthropic-Version", false, false},
+		{"chat-drops-beta", ir.ProtocolOpenAIChat, "Anthropic-Beta", false, false},
+		{"chat-keeps-openai-beta", ir.ProtocolOpenAIChat, "Openai-Beta", true, false},
+		{"responses-keeps-openai-beta", ir.ProtocolOpenAIResponses, "Openai-Beta", true, false},
+		{"responses-drops-version", ir.ProtocolOpenAIResponses, "Anthropic-Version", false, false},
+		// A provider that opts these account headers in must still not hand
+		// them to a Messages target.
+		{"messages-drops-organization", ir.ProtocolAnthropicMessages, "Openai-Organization", false, true},
+		{"messages-drops-project", ir.ProtocolAnthropicMessages, "Openai-Project", false, true},
+		{"chat-keeps-organization", ir.ProtocolOpenAIChat, "Openai-Organization", true, true},
+		{"responses-keeps-project", ir.ProtocolOpenAIResponses, "Openai-Project", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src, dst := headerTestRequest(t), headerTestRequest(t)
 			src.Header.Set(tc.header, "client-value")
 			p := &provider.Provider{Protocol: tc.protocol, Auth: provider.Auth{Scheme: provider.AuthBearer, Key: "provider-secret"}}
+			if tc.forward {
+				p.ForwardHeaders = []string{tc.header}
+			}
 			if err := ApplyHeaders(dst, src, p); err != nil {
 				t.Fatal(err)
 			}
