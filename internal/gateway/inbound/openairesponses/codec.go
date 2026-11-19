@@ -331,7 +331,7 @@ func decodeResponsesContent(raw json.RawMessage) ([]ir.Block, error) {
 		// exactly what it received. Responses only documents a string or a
 		// content-part array, so carry any other JSON value as text instead of
 		// rejecting the whole turn (issue #454).
-		return []ir.Block{ir.NewTextBlock(string(bytes.TrimSpace(raw)))}, nil
+		return []ir.Block{ir.NewTextBlock(string(bytes.TrimSpace(raw)))}, nil //nolint:nilerr // non-array JSON is carried as text, not rejected (issue #454)
 	}
 	blocks := make([]ir.Block, 0, len(parts))
 	for _, part := range parts {
