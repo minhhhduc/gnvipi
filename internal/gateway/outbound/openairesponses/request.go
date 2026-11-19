@@ -99,7 +99,11 @@ func (*Adapter) BuildRequest(ctx context.Context, request *ir.Request, target ad
 		fields["text"] = map[string]any{"format": format}
 	}
 	if request.Metadata != nil {
-		fields["user"] = request.Metadata.UserID
+		// Responses caps user at 64 characters exactly like Chat: a Messages
+		// client's opaque metadata.user_id (Claude Code sends ~150) would be
+		// rejected upstream. Hash instead of truncating so two sessions of the
+		// same account stay distinguishable.
+		fields["user"] = gatewayoutbound.OpenAIUserID(request.Metadata.UserID)
 	}
 	fields["stream"] = request.Stream
 	fields["store"] = false
