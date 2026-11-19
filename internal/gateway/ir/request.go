@@ -459,7 +459,7 @@ type Request struct {
 // GetReasoningEffort returns the configured reasoning effort from Request.ReasoningEffort,
 // Request.Reasoning.Effort, or mapped from budget tokens.
 func (r *Request) GetReasoningEffort() ReasoningEffort {
-	if r == nil {
+	if r == nil || r.reasoningDisabled() {
 		return ""
 	}
 	if r.ReasoningEffort != "" {
@@ -477,7 +477,7 @@ func (r *Request) GetReasoningEffort() ReasoningEffort {
 // GetBudgetTokens returns the configured thinking budget tokens from Request.BudgetTokens,
 // Request.Reasoning.MaxTokens, or mapped from effort.
 func (r *Request) GetBudgetTokens() *int {
-	if r == nil {
+	if r == nil || r.reasoningDisabled() {
 		return nil
 	}
 	if r.BudgetTokens != nil {
@@ -497,4 +497,12 @@ func (r *Request) GetBudgetTokens() *int {
 		return &b
 	}
 	return nil
+}
+
+// reasoningDisabled reports whether the sender explicitly turned reasoning
+// off. Anthropic's thinking.type "disabled" lands here, and the disabled state
+// must not be overridden by a stray effort or budget carried by the same
+// request.
+func (r *Request) reasoningDisabled() bool {
+	return r != nil && r.Reasoning != nil && r.Reasoning.Enabled != nil && !*r.Reasoning.Enabled
 }

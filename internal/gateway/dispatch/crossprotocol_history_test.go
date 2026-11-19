@@ -294,3 +294,83 @@ func TestCrossProtocolChatHistoryToResponses(t *testing.T) {
 		}
 	})
 }
+
+// #457: an explicitly disabled thinking config must not reach the Chat body.
+func TestCrossProtocolAnthropicThinking(t *testing.T) {
+	payload := `{"model":"issue-model","max_tokens":64,"thinking":{"type":"disabled"},"output_config":{"effort":"high"},` +
+		`"messages":[{"role":"user","content":"hi"},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"secret plan"},{"type":"text","text":"ok"}]},` +
+		`{"role":"user","content":"again"}]}`
+
+	chat := runCrossProtocol(t, ir.ProtocolOpenAIChat, "/v1/messages", payload)
+	for _, name := range []string{"thinking", "output_config", "reasoning_effort"} {
+		if _, found := chat[name]; found {
+			t.Errorf("disabled thinking still reached the Chat upstream as %q", name)
+		}
+	}
+}
+
+func TestAnthropicUserIdentityFitsOpenAIWireLimit(t *testing.T) {
+	{
+		prefix := strings.Repeat("a", 64)
+		users := []string{prefix, prefix + strings.Repeat("b", 86), prefix + strings.Repeat("c", 86), prefix + strings.Repeat("b", 86)}
+		got := make([]string, len(users))
+		for i, user := range users {
+			payload, err := json.Marshal(map[string]any{
+				"model": "issue-model", "max_tokens": 64,
+				"messages": []map[string]string{{"role": "user", "content": "hi"}},
+				"metadata": map[string]string{"user_id": user},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := runCrossProtocol(t, ir.ProtocolOpenAIChat, "/v1/messages", string(payload))
+			if err := json.Unmarshal(body["user"], &got[i]); err != nil {
+				t.Fatal(err)
+			}
+			if got[i] == "" || len(got[i]) > 64 {
+				t.Fatalf("upstream user length = %d, allowed 1..64", len(got[i]))
+			}
+		}
+		if got[0] != prefix || got[1] == got[2] || got[1] != got[3] {
+			t.Fatalf("identity changed, collided, or was unstable: %q", got)
+		}
+	}
+}
+
+// #457: an adaptive thinking config without an explicit effort, and a turn that
+// holds nothing but unsigned thinking, must both produce a valid Chat request.
+func TestCrossProtocolAnthropicThinkingEdges(t *testing.T) {
+	body := runCrossProtocol(t, ir.ProtocolOpenAIChat, "/v1/messages",
+		`{"model":"issue-model","max_tokens":64,"thinking":{"type":"adaptive"},`+
+			`"messages":[{"role":"user","content":"hi"},`+
+			`{"role":"assistant","content":[{"type":"thinking","thinking":""},{"type":"thinking","thinking":"unsigned plan"}]},`+
+			`{"role":"user","content":"again"}]}`)
+
+	if _, leaked := body["thinking"]; leaked {
+		t.Fatalf("adaptive thinking config leaked into the Chat request: %s", body["thinking"])
+	}
+	if effort, found := body["reasoning_effort"]; found {
+		var value string
+		if err := json.Unmarshal(effort, &value); err != nil {
+			t.Fatalf("reasoning_effort: %v", err)
+		}
+		switch value {
+		case "low", "medium", "high":
+		default:
+			t.Fatalf("unsupported Chat reasoning_effort %q", value)
+		}
+	}
+	var messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(body["messages"], &messages); err != nil {
+		t.Fatalf("decode messages: %v; body: %s", err, body["messages"])
+	}
+	for _, message := range messages {
+		if message.Role == "assistant" {
+			t.Fatalf("a turn holding only unsigned thinking survived translation: %s", body["messages"])
+		}
+	}
+}

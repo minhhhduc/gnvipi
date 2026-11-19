@@ -342,3 +342,53 @@ func TestChatReasoningStreamToResponses(t *testing.T) {
 		return
 	}
 }
+
+// #457: a separator-only reasoning delta must not open a thinking block that
+// holds nothing the client can replay.
+func TestStreamDropsWhitespaceOnlyReasoning(t *testing.T) {
+	out := openaichat.New()
+	raw := "data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \"}}]}\n\n" +
+		"data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"plan\"}}]}\n\n" +
+		"data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(raw))}
+
+	stream, err := out.ParseStream(t.Context(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var events []ir.StreamEvent
+	for {
+		ev, err := stream.Next(t.Context())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, ev)
+	}
+
+	var starts int
+	var deltas []string
+	for _, ev := range events {
+		if ev.Type == ir.EventBlockStart && ev.Block.Type == ir.BlockReasoning {
+			starts++
+		}
+		if ev.Type == ir.EventBlockDelta && ev.Delta.Text != "" {
+			deltas = append(deltas, ev.Delta.Text)
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("reasoning block starts = %d, want 1: %+v", starts, events)
+	}
+	if strings.Join(deltas, "|") != "plan|hi" {
+		t.Fatalf("deltas = %v, want [plan hi]", deltas)
+	}
+}

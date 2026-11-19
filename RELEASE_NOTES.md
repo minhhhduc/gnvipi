@@ -25,6 +25,11 @@ This release marks the evolution of `gnvipi` from a specialized NVIDIA Playgroun
   `thinking` blocks the gateway cannot sign, parameterless tool calls reach them
   as `{}`, in-band system/developer turns are folded into the system prompt, and
   Chat-only request keys stay out of the translated payload.
+- **Message to Completion thinking edges (#457):** Replayed assistant turns
+  holding only unsigned thinking no longer fail encoding, an explicitly
+  disabled thinking config drops the effort and budget, whitespace-only
+  reasoning deltas open no thinking block, and Anthropic user identities are
+  folded to fit OpenAI's 64-character `user` limit.
 
 
 ## Highlights & Key Capabilities
