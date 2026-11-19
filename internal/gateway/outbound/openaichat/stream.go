@@ -260,7 +260,13 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 			reasoningText = *choice.Delta.Reasoning
 		}
 		if reasoningText != "" {
-			if !s.openBlock || s.currentBlockType != ir.BlockReasoning {
+			if s.openBlock && s.currentBlockType == ir.BlockReasoning {
+				s.pending = append(s.pending, ir.NewReasoningDelta(s.currentBlockIndex, reasoningText))
+			} else if strings.TrimSpace(reasoningText) != "" {
+				// Whitespace alone opens no thinking block: some upstreams emit
+				// a separator delta, and a thinking block that holds nothing
+				// else is an empty block the client cannot replay
+				// (issue #457).
 				if s.openBlock {
 					s.pending = append(s.pending, ir.NewBlockStop(s.currentBlockIndex))
 					s.openBlock = false
@@ -271,8 +277,8 @@ func (s *chatStream) handleSSEEvent(event sse.Event) error {
 				s.currentBlockType = ir.BlockReasoning
 				s.openBlock = true
 				s.pending = append(s.pending, ir.NewBlockStart(idx, ir.Block{Type: ir.BlockReasoning, Index: idx}))
+				s.pending = append(s.pending, ir.NewReasoningDelta(idx, reasoningText))
 			}
-			s.pending = append(s.pending, ir.NewReasoningDelta(s.currentBlockIndex, reasoningText))
 		}
 
 		if choice.Delta.Content != nil && *choice.Delta.Content != "" {

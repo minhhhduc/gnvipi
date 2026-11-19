@@ -3,6 +3,8 @@ package outbound
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,6 +161,16 @@ func retryAfter(value string) time.Duration {
 func JSONObject(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
 	return len(raw) >= 2 && raw[0] == '{' && raw[len(raw)-1] == '}' && json.Valid(raw)
+}
+
+// OpenAIUserID preserves valid IDs and hashes longer opaque identities to fit
+// the Chat and Responses user limit without truncation collisions.
+func OpenAIUserID(id string) string {
+	if len(id) <= 64 {
+		return id
+	}
+	digest := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(digest[:])
 }
 
 // ExtensionFields copies unreserved extension fields into a newly allocated

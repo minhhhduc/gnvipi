@@ -125,7 +125,7 @@ func (a *Adapter) BuildRequest(ctx context.Context, request *ir.Request, target 
 		fields["reasoning_effort"] = string(effort)
 	}
 	if request.Metadata != nil {
-		fields["user"] = request.Metadata.UserID
+		fields["user"] = outbound.OpenAIUserID(request.Metadata.UserID)
 	}
 	return outbound.NewJSONRequest(ctx, target, "/chat/completions", fields)
 }
@@ -303,14 +303,19 @@ func encodeMessage(message *ir.Message) ([]chatMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		if content == nil && reasoning.Len() == 0 && len(encoded.ToolCalls) == 0 {
-			return nil, fmt.Errorf("assistant message has no content")
+		// A turn that holds nothing but reasoning has no answer to reply to, so
+		// it is skipped instead of failing the request; blank or unsigned
+		// thinking is the usual cause in a translated history (issue #457).
+		if content == nil && len(encoded.ToolCalls) == 0 {
+			return nil, nil
 		}
 		if content == nil {
 			content = ""
 		}
 		encoded.Content = content
-		encoded.ReasoningContent = reasoning.String()
+		if reasoningText := reasoning.String(); strings.TrimSpace(reasoningText) != "" {
+			encoded.ReasoningContent = reasoningText
+		}
 		return []chatMessage{encoded}, nil
 	case ir.RoleTool:
 		if len(message.Content) == 0 {
